@@ -4354,6 +4354,8 @@ function wireTermKeys() {
       else kbToast("Dictation isn't available here", "err");
       return;
     }
+    if (b.dataset.k === "fminus") { setTermFontSize(termFontSize() - 1); return; }
+    if (b.dataset.k === "fplus")  { setTermFontSize(termFontSize() + 1); return; }
     if (b.dataset.k === "copy") {
       const sel = t.term.getSelection();
       if (!sel) { kbToast("Nothing selected — long-press to select first", "err"); return; }
@@ -4383,6 +4385,20 @@ function wireTermKeys() {
 // because the phone use case is full attention) or HALF (in-flow, share with
 // the doc). The choice is remembered; ⤢ in the header flips it. On desktop
 // the class is never set and the panel behaves exactly as before.
+// Terminal text size: user-adjustable, remembered, one size for all terminals.
+function termFontSize() {
+  const n = parseInt((() => { try { return localStorage.getItem("kbTermFont"); }
+                             catch (e) { return null; } })(), 10);
+  return Number.isFinite(n) && n >= 9 && n <= 24 ? n : 13;
+}
+function setTermFontSize(n) {
+  n = Math.min(24, Math.max(9, n));
+  try { localStorage.setItem("kbTermFont", String(n)); } catch (e) { /* private mode */ }
+  for (const t of terms) t.term.options.fontSize = n;
+  fitTerm(activeTerm);
+  kbToast("Terminal text: " + n + "px");
+}
+
 function setTermMax(on) {
   document.body.classList.toggle("term-max", on);
   // The keyboard-pinning in wireViewport() sets an inline height on the fixed
@@ -4557,11 +4573,12 @@ function newTerminal(cmd, sid, savedName) {
   const el = document.createElement("div");
   el.className = "term-content";
   $("#terminal").appendChild(el);
-  // 16px on touch, and not one pixel less: iOS zooms the whole page when any
-  // focusable element under 16px receives focus — xterm's hidden textarea
-  // qualifies, and that zoom is the "terminal scrolls somewhere weird" bug.
+  // Render size is the user's choice (A−/A+ in the keybar, persisted). The
+  // iOS no-focus-zoom constraint (16px minimum on the FOCUSED element) is
+  // satisfied in CSS instead, by pinning xterm's hidden textarea to 16px —
+  // the glyphs on screen are free to be any size.
   const term = new Terminal({
-    fontSize: window.matchMedia("(pointer: coarse)").matches ? 16 : 13,
+    fontSize: termFontSize(),
     fontFamily: TERM_FONT, theme: TERM_THEME,
                               scrollback: 5000,
                               // let Mac users Option+drag to select inside a

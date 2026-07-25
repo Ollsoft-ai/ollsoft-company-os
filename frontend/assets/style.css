@@ -853,6 +853,10 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .sr-item { padding: .55rem .6rem; }
   /* swipes belong to our scrollback handler, not to browser pan gestures */
   #terminal { touch-action: none; }
+  /* iOS zooms the page when a focused element's font is under 16px. What it
+     inspects is xterm's hidden textarea, not the rendered glyphs — pin the
+     textarea and the render size stays the user's choice (A−/A+). */
+  .xterm-helper-textarea { font-size: 16px !important; }
   /* No drag handle on touch at all: the panel snaps between half and full
      (the ⤢ button / body.term-max), so a grip would be dead UI. This replaces
      the earlier in-flow grab handle — free-drag on a phone fought scrolling,
