@@ -59,14 +59,24 @@ jobs:
             "SELECT count(*) FROM kb.blocks WHERE file_path LIKE 'projects/acme/%'")
           [ "$rows" = "0" ] || { echo "::error::RLS leaked $rows rows to carol"; exit 1; }
 
+      # Parts of tests/cli deliberately bypass the app — direct psql, chmod, and
+      # symlink attempts — to prove the KERNEL enforces access rather than
+      # application code. That only means anything when run as a real demo user,
+      # so the venv lives somewhere world-readable and pytest runs as alice.
       - name: Test dependencies
         run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade -q pip
-          .venv/bin/pip install -q -r requirements-dev.txt
+          sudo python3 -m venv /opt/kb-testvenv
+          sudo /opt/kb-testvenv/bin/python -m pip install --upgrade -q pip
+          sudo /opt/kb-testvenv/bin/python -m pip install -q -r requirements-dev.txt
+          sudo chmod -R a+rX /opt/kb-testvenv
 
-      - name: CLI test suite
-        run: .venv/bin/python -m pytest tests/cli -q --maxfail=5
+      - name: CLI test suite (as the demo owner)
+        run: |
+          # alice must be able to reach the checkout to import conftest
+          chmod a+x "$HOME" "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE" || true
+          sudo chmod -R a+rX "$GITHUB_WORKSPACE"
+          sudo -u alice env HOME=/home/alice \
+            /opt/kb-testvenv/bin/python -m pytest tests/cli -q --maxfail=5
 
       - name: Diagnostics on failure
         if: failure()
