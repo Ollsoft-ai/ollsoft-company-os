@@ -33,15 +33,25 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 say() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 
+# Read what the installer chose. Needed before the --undo branch, which also
+# talks to Postgres. Platform admins are members of the configured admin group:
+# the test suite drives /admin/* as alice, so she must be one.
+ADMIN_GROUP=sudo
+PGDB=kb
+if [ -f /etc/kb/kb.env ]; then
+  ADMIN_GROUP="$(. /etc/kb/kb.env; echo "${KB_ADMIN_GROUP:-sudo}")"
+  PGDB="$(. /etc/kb/kb.env; echo "${KB_PG_DB:-kb}")"
+fi
+
 # ---------------------------------------------------------------------------
 if [ "$UNDO" -eq 1 ]; then
   say "removing demo content"
   for u in "${DEMO_USERS[@]}"; do
     id "$u" &>/dev/null || continue
     pkill -KILL -u "$u" 2>/dev/null || true
-    runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$u'" | grep -q 1 && {
-      runuser -u postgres -- psql -qc "DROP OWNED BY \"$u\" CASCADE;" >/dev/null
-      runuser -u postgres -- psql -qc "DROP ROLE IF EXISTS \"$u\";" >/dev/null
+    runuser -u postgres -- psql -d "$PGDB" -tAc "SELECT 1 FROM pg_roles WHERE rolname='$u'" | grep -q 1 && {
+      runuser -u postgres -- psql -d "$PGDB" -qc "DROP OWNED BY \"$u\" CASCADE;" >/dev/null
+      runuser -u postgres -- psql -d "$PGDB" -qc "DROP ROLE IF EXISTS \"$u\";" >/dev/null
     }
     userdel -r "$u" 2>/dev/null || true
     echo "  removed $u"
@@ -75,10 +85,6 @@ umask 077
 groupadd -f "proj-$PROJECT"
 usermod -aG "proj-$PROJECT" kbindexer
 
-# Platform admins are members of the configured admin group. The suite drives
-# /admin/* as alice, so she must be one — read the group the installer chose.
-ADMIN_GROUP=sudo
-[ -f /etc/kb/kb.env ] && ADMIN_GROUP="$(. /etc/kb/kb.env; echo "${KB_ADMIN_GROUP:-sudo}")"
 
 declare -A PW
 
@@ -96,7 +102,7 @@ add_user() {
   printf '%s %s\n' "$u" "$pw" >> "$CREDS"
   for g in "$@"; do usermod -aG "$g" "$u"; done
   install -d -m 700 -o "$u" -g "$u" "$REPO/users/$u"
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q <<SQL
+  runuser -u postgres -- psql -d "$PGDB" -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='$u') THEN CREATE ROLE "$u" LOGIN; END IF;
 END \$\$;
@@ -244,7 +250,7 @@ done
 
 # The readings table the randoms dashboard renders, shared with carol so the
 # "artifact + grant reaches a specific colleague" path has something to show.
-runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 -q <<'SQL'
+runuser -u postgres -- psql -d "$PGDB" -v ON_ERROR_STOP=1 -q <<'SQL'
 CREATE TABLE IF NOT EXISTS u_alice.readings (
     id bigserial PRIMARY KEY,
     value int NOT NULL,
