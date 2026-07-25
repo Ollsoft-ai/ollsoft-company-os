@@ -1,0 +1,454 @@
+"""Dictation in the browser: the button, the key, and where the words land.
+
+The network is stubbed, not the browser: chromium gets a fake microphone (so
+getUserMedia resolves without a prompt and MediaRecorder produces real webm), and
+`page.route` answers /stt with a canned transcript. That exercises the whole
+client path — capture, keybinding, focus routing, insertion — without spending a
+cent or depending on ElevenLabs being reachable.
+
+Every test that writes into a document gets its OWN document and its OWN phrase.
+Sharing either makes "did the text arrive?" unanswerable, because a previous
+test's insertion is still sitting there.
+"""
+import json
+import os
+from pathlib import Path
+import re
+import uuid
+
+import httpx
+import pytest
+
+from conftest import BASE, CREDS, login
+
+SPOKEN = "the sync daemon owns the merge"
+HOLD_MS = 800          # comfortably past dictation.js's 450 ms hold threshold
+
+
+@pytest.fixture(scope="module")
+def mic_browser(browser):
+    """A SECOND chromium, launched from the shared session browser's own
+    browser_type so it rides the same Playwright connection. This module needs the
+    fake audio device (`--use-fake-device-for-media-stream`), which the shared
+    browser doesn't have — and opening a nested `sync_playwright()` inside the
+    session fixture's live context raises "Sync API inside the asyncio loop"."""
+    b = browser.browser_type.launch(headless=True, args=[
+        "--no-sandbox",
+        "--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks",
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+    ])
+    yield b
+    b.close()
+
+
+@pytest.fixture(scope="module")
+def api():
+    c = httpx.Client(base_url=BASE, timeout=30)
+    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    yield c
+
+
+@pytest.fixture(scope="module")
+def ctx(mic_browser):
+    """Microphone permission pre-granted: a real prompt would steal focus and the
+    keyup, which is exactly the failure dictation.js's warm-up avoids in prod."""
+    c = mic_browser.new_context(permissions=["microphone"])
+    yield c
+    c.close()
+
+
+@pytest.fixture
+def page(ctx):
+    p = ctx.new_page()
+    _serve_dev(p)
+    p.goto(BASE + "/login")
+    p.fill('input[name="username"]', "alice")
+    p.fill('input[name="password"]', CREDS["alice"])
+    p.click('button[type="submit"]')
+    p.wait_for_url(BASE + "/")
+    p.wait_for_selector('[data-testid="tree"] .tree-item', timeout=15000)
+    stub(p, {"ok": True, "text": SPOKEN})
+    yield p
+    p.close()
+
+
+@pytest.fixture
+def doc(api):
+    """A fresh, empty document per test."""
+    path = f"company/kbtest_dict_{os.getpid()}_{uuid.uuid4().hex[:8]}.md"
+    api.post("/api/file", json={"path": path})
+    api.post("/api/artifact/write", json={"path": path, "content": "# scratch\n\nbaseline\n"})
+    yield path
+    api.post("/api/fs/delete", json={"path": path})
+
+
+
+# ── running against the dev bundle ───────────────────────────────────────────
+# The hub serves static assets from /opt, which only a root `deploy.sh` updates.
+# With KB_DEV_BUNDLE=1 these tests serve frontend/static straight from the source
+# tree instead, so the client can be iterated on without root. Self-contained on
+# purpose: it must not depend on a conftest helper that may or may not be there.
+# Serve the frontend from this checkout instead of the deployed copy, so an
+# edit can be tested without redeploying. Derived from the repo layout —
+# never a hardcoded home directory, which only exists on one machine.
+DEV = os.environ.get(
+    "KB_DEV_BUNDLE_DIR",
+    str(Path(__file__).resolve().parents[2] / "frontend" / "static"),
+)
+_MIME = {"js": "application/javascript", "css": "text/css", "html": "text/html",
+         "svg": "image/svg+xml", "woff2": "font/woff2", "map": "application/json"}
+
+
+def _serve_dev(page):
+    if not os.environ.get("KB_DEV_BUNDLE"):
+        return
+
+    def send(route, path):
+        try:
+            body = open(path, "rb").read()
+        except OSError:
+            route.continue_()
+            return
+        route.fulfill(status=200, body=body,
+                      content_type=_MIME.get(path.rsplit(".", 1)[-1], "application/octet-stream"),
+                      headers={"cache-control": "no-store"})
+
+    def static(route):
+        rel = route.request.url.split(BASE, 1)[-1].split("?")[0]
+        send(route, DEV + rel[len("/static"):])
+
+    def document(route):
+        # Every app URL — "/" and every deep link — is served the same app.html.
+        rel = route.request.url.split(BASE, 1)[-1].split("?")[0]
+        # /static is excluded here as well as handled below: Playwright matches
+        # routes most-recently-added first, so this catch-all would otherwise
+        # shadow the static one and serve app.html in place of app.js.
+        if rel.startswith(("/static", "/login", "/logout", "/api", "/stt",
+                           "/fs", "/admin", "/ws", "/pty", "/egress")):
+            route.continue_()
+            return
+        send(route, DEV + "/app.html")
+
+    page.route(lambda url: str(url).startswith(BASE), document)
+    page.route(re.compile(re.escape(BASE) + r"/static/.*"), static)
+
+
+def stub(page, payload, status=200):
+    page.route("**/stt*", lambda r: r.fulfill(
+        status=status, content_type="application/json", body=json.dumps(payload)))
+
+
+def dictate(page, hold_ms=HOLD_MS):
+    """Hold F9 long enough to read as a hold rather than a tap, then let go."""
+    page.keyboard.down("F9")
+    page.wait_for_timeout(hold_ms)
+    page.keyboard.up("F9")
+
+
+def recording(page):
+    page.wait_for_selector('[data-testid="ptt"]', state="visible", timeout=6000)
+
+
+def not_recording(page):
+    # state="hidden" is the point: `[data-testid="ptt"][hidden]` can never be
+    # "visible", so waiting on that selector the default way never resolves.
+    page.wait_for_selector('[data-testid="ptt"]', state="hidden", timeout=15000)
+
+
+def show_terminal(page):
+    """Ctrl+` TOGGLES, and terminals survive a reload — so a restored session may
+    already have the panel up, in which case pressing the key would hide it."""
+    if page.locator("#terminal-panel").is_hidden():
+        page.keyboard.press("Control+`")
+    page.wait_for_selector("#terminal-panel", state="visible", timeout=10000)
+    page.wait_for_function("() => window.__kbterm && window.__kbterm.buffer", timeout=10000)
+    page.wait_for_timeout(1500)          # let the shell paint its prompt
+    page.click("#terminal .xterm-screen")
+
+
+def leave_terminal(page):
+    """Ctrl+P and ? are deliberately NOT term:true — inside a terminal they belong
+    to readline, and the app-level binding correctly does not fire. Terminals
+    survive a reload, so a restored session can leave one focused; these tests
+    have to step out of it first."""
+    if page.locator("#terminal-panel").is_visible():
+        page.keyboard.press("Control+`")
+        page.wait_for_selector("#terminal-panel", state="hidden", timeout=6000)
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.wait_for_timeout(150)
+
+
+def term_dump(page):
+    return page.evaluate("""() => { const b = window.__kbterm.buffer.active; let s = '';
+      for (let i = 0; i < b.length; i++) s += b.getLine(i).translateToString(true) + '\\n';
+      return s; }""")
+
+
+def prompt_count(page):
+    """How many shell prompts are on screen. Unchanged across a dictation is the
+    cleanest possible proof that nothing was executed."""
+    return page.evaluate("""() => { const b = window.__kbterm.buffer.active; let n = 0;
+      for (let i = 0; i < b.length; i++)
+        if (/\\$ /.test(b.getLine(i).translateToString(true))) n++;
+      return n; }""")
+
+
+def open_doc(page, path):
+    page.goto(BASE + "/" + path)
+    page.wait_for_selector(".cm-editor", timeout=10000)
+    page.wait_for_function("() => window.__kbview && window.__kbsynced", timeout=12000)
+    page.click(".cm-content")
+    page.wait_for_timeout(200)
+
+
+def doc_text(page):
+    return page.evaluate("window.__kbview.state.doc.toString()")
+
+
+# ---- the affordance ---------------------------------------------------------
+
+def test_mic_button_present(page):
+    b = page.locator('[data-testid="mic-btn"]')
+    assert b.count() == 1
+    assert b.is_visible()
+    assert b.get_attribute("aria-pressed") == "false"
+
+
+def test_indicator_shows_while_recording(page):
+    page.keyboard.down("F9")
+    recording(page)
+    assert page.locator('[data-testid="mic-btn"]').get_attribute("aria-pressed") == "true"
+    assert "Listening" in page.locator("#ptt-status").inner_text()
+    page.wait_for_timeout(HOLD_MS)      # make it a hold, so releasing ends it
+    page.keyboard.up("F9")
+    not_recording(page)
+
+
+def test_hold_and_release_stops(page):
+    dictate(page)
+    not_recording(page)
+
+
+def test_tap_latches_and_second_tap_finishes(page):
+    """A quick tap must NOT stop on keyup — it latches, and the next press ends
+    it. This is the gesture that makes dictating a long paragraph bearable."""
+    page.keyboard.press("F9")               # down+up inside the hold threshold
+    recording(page)
+    page.wait_for_timeout(900)              # well past it; a hold would have ended
+    assert page.locator('[data-testid="ptt"]').is_visible(), "a tap should have latched"
+    page.keyboard.press("F9")               # second press finishes
+    not_recording(page)
+
+
+def test_autorepeat_does_not_toggle(page):
+    """Holding a key emits keydown ~30x/s. If each one were treated as a press,
+    recording would flicker on and off — hence the e.repeat guard."""
+    page.keyboard.down("F9")
+    recording(page)
+    for _ in range(12):
+        page.keyboard.down("F9")            # simulated auto-repeat
+        page.wait_for_timeout(100)
+    assert page.locator('[data-testid="ptt"]').is_visible(), "auto-repeat stopped it"
+    page.keyboard.up("F9")                  # >1s held, so this reads as a release
+    not_recording(page)
+
+
+def test_blur_stops_a_stranded_recording(page):
+    """Alt-Tab mid-hold means the keyup never arrives. Without the blur guard the
+    recording would run all the way to the 90-second cap."""
+    page.keyboard.down("F9")
+    recording(page)
+    page.evaluate("window.dispatchEvent(new Event('blur'))")
+    not_recording(page)
+    page.keyboard.up("F9")
+
+
+def test_alt_k_alias_survives_releasing_the_modifier_first(page):
+    """Alt released before K delivers a keyup with altKey already false. Matching
+    the keyup on the physical code rather than re-testing the combo is what keeps
+    that from stranding the recording."""
+    page.keyboard.down("Alt")
+    page.keyboard.down("K")
+    recording(page)
+    page.wait_for_timeout(HOLD_MS)
+    page.keyboard.up("Alt")                 # modifier first, on purpose
+    page.keyboard.up("K")
+    not_recording(page)
+
+
+# ---- where the words go -----------------------------------------------------
+
+def test_text_lands_in_the_editor(page, doc):
+    open_doc(page, doc)
+    dictate(page)
+    page.wait_for_function("t => window.__kbview.state.doc.toString().includes(t)",
+                           arg=SPOKEN, timeout=15000)
+
+
+def test_editor_insertion_is_one_undo_step(page, doc):
+    """userEvent 'input.paste' rather than 'input.type': adjacent input.type
+    transactions merge into one undo step, so a dictation followed by typing would
+    collapse together and a single Ctrl+Z would eat both."""
+    phrase = "zebras calibrate the quiet ledger"
+    stub(page, {"ok": True, "text": phrase})
+    open_doc(page, doc)
+    before = doc_text(page)
+    assert phrase not in before
+    dictate(page)
+    page.wait_for_function("t => window.__kbview.state.doc.toString().includes(t)",
+                           arg=phrase, timeout=15000)
+    page.keyboard.press("Control+z")
+    page.wait_for_function("b => window.__kbview.state.doc.toString() === b",
+                           arg=before, timeout=8000)
+
+
+def test_text_lands_in_the_terminal_without_a_newline(page):
+    """Dictating a command must never run it: a mis-transcription has no undo."""
+    show_terminal(page)
+    dictate(page)
+    page.wait_for_function(
+        "t => { const b = window.__kbterm.buffer.active;"
+        "  return b.getLine(b.cursorY).translateToString(true).includes(t); }",
+        arg=SPOKEN, timeout=15000)
+    # The prompt has not advanced: the text sits on the command line, un-executed,
+    # waiting for the human to press Return.
+    line = page.evaluate(
+        "(() => { const b = window.__kbterm.buffer.active;"
+        "  return b.getLine(b.cursorY).translateToString(true); })()")
+    assert SPOKEN in line
+
+
+def test_control_characters_are_stripped_from_a_transcript(page):
+    r"""The transcript is third-party text on its way to a shell. An ESC must
+    never survive: a hallucinated "\x1b[201~" would otherwise terminate xterm's
+    bracketed paste and hand the remainder to the shell as typed input.
+
+    dictation.js strips C0 controls before insertion and term.paste() rewrites any
+    that got through to U+241B. This asserts the first layer, because that is the
+    one that has to hold."""
+    stub(page, {"ok": True, "text": "ls\u001b[201~; echo pwned"})
+    show_terminal(page)
+    dictate(page)
+    page.wait_for_timeout(3000)
+    dump = page.evaluate("""() => {
+      const b = window.__kbterm.buffer.active; let s = '';
+      for (let i = 0; i < b.length; i++) s += b.getLine(i).translateToString(true) + '\\n';
+      return s; }""")
+    assert "\u001b" not in dump, "an ESC reached the terminal"
+    assert "␛" not in dump, "nothing should even have reached term.paste()'s fallback"
+    assert "[201~" in dump, "the sanitized text should still arrive, just inert"
+    # Nothing executed: "pwned" may appear inside the un-run command line, never
+    # alone on a line, which is what command output would look like.
+    assert not any(ln.strip() == "pwned" for ln in dump.splitlines()), "the escape broke out"
+
+
+def test_a_carriage_return_in_a_transcript_does_not_press_enter(page):
+    r"""The subtlest way a dictated command could run itself. xterm's paste path
+    folds \r\n to \r and passes a LONE \r straight through, and \r in a PTY *is*
+    Enter — so an un-sanitized transcript containing one would submit the command
+    line. sanitize() folds every CR to \n first.
+
+    With bracketed paste on (bash/readline, and most TUIs) the newline arrives as
+    a literal character and the command line simply spans two rows; with it off,
+    insertDictation collapses newlines to spaces. Either way nothing runs, which is
+    what this asserts — the prompt count is the invariant, not the cursor row,
+    because a multi-row command line moves the cursor without executing.
+    """
+    stub(page, {"ok": True, "text": "echo dictated\rwhoami"})
+    show_terminal(page)
+    prompts_before = prompt_count(page)
+    dictate(page)
+    page.wait_for_function(
+        "() => { const b = window.__kbterm.buffer.active;"
+        "  for (let i = 0; i < b.length; i++)"
+        "    if (b.getLine(i).translateToString(true).includes('dictated')) return true;"
+        "  return false; }", timeout=15000)
+    page.wait_for_timeout(2000)
+    dump = term_dump(page)
+    assert prompt_count(page) == prompts_before, \
+        f"a new prompt appeared, so something executed:\n{dump}"
+    # `echo dictated` never ran, so "dictated" never appears as output on its own
+    # line; and `whoami` never ran either.
+    assert not any(ln.strip() == "dictated" for ln in dump.splitlines()), dump
+    assert "\u001b" not in dump
+
+
+def test_text_lands_in_the_command_palette(page):
+    """The palette is a modal, and wireShortcuts() deliberately gives up the
+    keyboard while a modal is open. Dictation is the one exception, because the
+    palette is a text field and speaking into it is half the point."""
+    leave_terminal(page)
+    page.keyboard.press("Control+p")
+    inp = page.locator('[data-testid="palette-input"]')
+    inp.wait_for(timeout=6000)
+    # Wait for the palette to actually OWN the focus. Dictation resolves its
+    # target when recording starts, so dictating a moment too early sends the
+    # words to whatever was focused before — a real race, not a flake.
+    page.wait_for_function(
+        "() => document.activeElement && "
+        "document.activeElement.classList.contains('palette-input')", timeout=6000)
+    dictate(page)
+    for _ in range(60):
+        if SPOKEN in (inp.input_value() or ""):
+            break
+        page.wait_for_timeout(250)
+    assert SPOKEN in inp.input_value()
+
+
+# ---- failure is visible, never silent ---------------------------------------
+
+def test_server_503_shows_a_toast_and_inserts_nothing(page, doc):
+    stub(page, {"error": "dictation is not set up on this server"}, status=503)
+    open_doc(page, doc)
+    before = doc_text(page)
+    dictate(page)
+    page.wait_for_selector('[data-testid="toast"]', timeout=15000)
+    assert "not set up" in page.locator('[data-testid="toast"]').first.inner_text()
+    assert doc_text(page) == before
+
+
+def test_empty_transcript_says_so(page, doc):
+    stub(page, {"ok": True, "text": ""})
+    open_doc(page, doc)
+    dictate(page)
+    page.wait_for_selector('[data-testid="toast"]', timeout=15000)
+    assert "Nothing was said" in page.locator('[data-testid="toast"]').first.inner_text()
+
+
+def test_too_short_is_discarded_before_upload(page, doc):
+    """A latch immediately stopped produces almost no audio; the client must not
+    upload it at all — that request would be billed for nothing."""
+    calls = []
+    page.route("**/stt*", lambda r: (calls.append(1), r.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"ok": True, "text": SPOKEN}))))
+    open_doc(page, doc)
+    page.keyboard.press("F9")     # latch
+    page.keyboard.press("F9")     # stop immediately: under the 300 ms floor
+    page.wait_for_timeout(3000)
+    assert calls == [], "a sub-300ms recording should never be uploaded"
+
+
+# ---- documentation cannot drift from behaviour ------------------------------
+
+def test_shortcut_sheet_lists_dictation(page):
+    """The sheet renders from the same BINDINGS table the dispatcher reads, so this
+    asserts the key and its documentation cannot disagree."""
+    leave_terminal(page)
+    page.keyboard.press("?")
+    page.wait_for_selector(".modal-overlay", timeout=6000)
+    body = page.locator(".modal-overlay").inner_text()
+    # Group headings are uppercased by CSS and inner_text() returns rendered text.
+    assert "dictation" in body.lower()
+    assert "F9" in body and "Alt+K" in body
+
+
+def test_dictation_is_in_the_command_palette(page):
+    page.keyboard.press("Control+Shift+p")
+    inp = page.locator('[data-testid="palette-input"]')
+    inp.wait_for(timeout=6000)
+    inp.fill(">dicta")   # ">" is what selects command mode
+    page.wait_for_timeout(500)
+    listing = page.locator('[data-testid="palette-list"]').inner_text().lower()
+    assert "dictate" in listing

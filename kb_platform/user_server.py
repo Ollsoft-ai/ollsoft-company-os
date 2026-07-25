@@ -559,7 +559,9 @@ def _subseq_score(q: str, hay: str) -> int:
 
 
 async def search(request: web.Request) -> web.Response:
-    q = request.query.get("q", "").strip()
+    # NUL bytes are legal in a query string but not in a Postgres text value —
+    # psycopg raises, and an unhandled raise here is a 500 for a typo.
+    q = request.query.get("q", "").replace("\x00", "").strip()[:200]
     if not q:
         conn = _db()
         ok = conn is not None
@@ -611,7 +613,8 @@ async def search(request: web.Request) -> web.Response:
         toks = [t for t in re.split(r"[^0-9A-Za-z]+", q.lower()) if len(t) >= 2][:6]
         pq = " & ".join(t + ":*" for t in toks) if toks else None
         like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        with conn.cursor() as cur:
+        try:
+          with conn.cursor() as cur:
             cur.execute(
                 "WITH q AS (SELECT websearch_to_tsquery('pg_catalog.english', %s) AS ws, "
                 "                  CASE WHEN %s::text IS NULL THEN NULL::tsquery "
@@ -625,6 +628,11 @@ async def search(request: web.Request) -> web.Response:
                 (q, pq, pq, like))
             for r in cur.fetchall():
                 take(r, float(r[4]) + (0.02 if r[5] else 0.0))
+        except Exception:
+            # A malformed query must never 500: the filename half already has an
+            # answer, and half a result list beats an error page.
+            conn.rollback()
+            rows = []
         rows.sort(key=lambda r: -r["rank"])
         return web.json_response({"results": rows[:30], "files": files, "db": True})
     finally:

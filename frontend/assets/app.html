@@ -4,21 +4,21 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Ollsoft Company OS</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1784965855555" />
-  <link rel="stylesheet" href="/static/style.css?v=1784965855555" />
-  <link rel="stylesheet" href="/static/xterm.css?v=1784965855555" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1784984673475" />
+  <link rel="stylesheet" href="/static/style.css?v=1784984673475" />
+  <link rel="stylesheet" href="/static/xterm.css?v=1784984673475" />
 </head>
 <body>
   <header class="topbar">
     <button id="nav-btn" class="navbtn" data-testid="nav-btn" aria-label="Toggle file tree" title="Files">☰</button>
     <span class="brand">
-      <span class="brand-tile" aria-hidden="true"><img src="/static/logo-mark.svg?v=1784965855555" alt="" /></span>
-      <span class="brand-word"><img class="logo-word" src="/static/logo.svg?v=1784965855555" alt="Ollsoft" /><small>Ollsoft Company OS</small></span>
+      <span class="brand-tile" aria-hidden="true"><img src="/static/logo-mark.svg?v=1784984673475" alt="" /></span>
+      <span class="brand-word"><img class="logo-word" src="/static/logo.svg?v=1784984673475" alt="Ollsoft" /><small>Company OS</small></span>
     </span>
     <span class="topbar-sep" aria-hidden="true"></span>
     <span id="whoami" class="who" data-testid="whoami" title="Everything here runs as your OS account">…</span>
-    <input id="search" class="search" placeholder="Search files and contents…" data-testid="search"
-           readonly aria-label="Search files and contents" />
+    <button id="search" class="search" data-testid="search" aria-haspopup="dialog"
+            aria-label="Search files and contents"><span id="search-label">Search files and contents…</span></button>
     <span class="spacer"></span>
     <button id="newdoc" data-testid="newdoc" aria-label="New document"><span class="btn-label">New doc</span></button>
     <button id="more-btn" class="morebtn" data-testid="more-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
@@ -26,10 +26,18 @@
       <span id="whoami-m" class="menu-id" aria-hidden="true"></span>
       <div id="menu-launchers" class="menu-launchers" data-testid="menu-launchers"></div>
       <button id="admin-btn" data-testid="admin-btn" hidden>Admin</button>
-      <button id="cron-btn" data-testid="cron-btn" title="Your scheduled jobs (crontab)">Cron</button>
-      <button id="toggleterm" data-testid="toggle-term" title="Toggle terminal panel (Ctrl+`)">Terminal</button>
-      <button id="keys-btn" data-testid="keys-btn" title="Keyboard shortcuts (?)">Shortcuts</button>
-      <a href="/logout" class="logout">Sign out</a>
+      <!-- icon-only in the bar (label kept for the ⋯ menu on phones + a11y);
+           the title attribute is the hover tooltip -->
+      <button id="cron-btn" class="icon-btn" data-testid="cron-btn" aria-label="Cron"
+              title="Cron — your scheduled jobs"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg><span class="btn-label">Cron</span></button>
+      <button id="mic-btn" class="icon-btn" data-testid="mic-btn" aria-label="Dictate" aria-pressed="false"
+              title="Dictate (F9) — hold to talk, or tap and tap again. The text lands wherever you were typing, including the terminal. Audio goes to ElevenLabs for transcription and is not stored there."><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg><span class="btn-label">Dictate</span></button>
+      <button id="toggleterm" class="icon-btn" data-testid="toggle-term" aria-label="Terminal"
+              title="Terminal — toggle panel (Ctrl+`)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="6.5 9.5 9.5 12 6.5 14.5"/><line x1="12" y1="15" x2="17" y2="15"/></svg><span class="btn-label">Terminal</span></button>
+      <button id="keys-btn" class="icon-btn" data-testid="keys-btn" aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.6-2.8 2.6"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span class="btn-label">Shortcuts</span></button>
+      <a href="/logout" class="logout icon-btn" aria-label="Sign out"
+         title="Sign out"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3.5" y2="12"/></svg><span class="btn-label">Sign out</span></a>
     </nav>
   </header>
   <div id="launchbar" class="launchbar" data-testid="launchbar"></div>
@@ -81,6 +89,8 @@
           <button data-md="video" title="Insert video or audio"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="14" height="16" rx="2"/><path d="m16 12 6-4v8z"/></svg></button>
           <button data-md="table" title="Insert table"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
           <button data-md="hr" title="Divider" class="mdb-txt">―</button>
+          <span class="mdbar-sep"></span>
+          <button data-md="mic" title="Dictate (F9) — hold to talk, or tap and tap again"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg></button>
           <input id="up-img" type="file" accept="image/*" multiple hidden />
           <input id="up-video" type="file" accept="video/*,audio/*" multiple hidden />
           <input id="up-file" type="file" multiple hidden />
@@ -112,7 +122,21 @@
       </div>
     </section>
   </main>
+  <!-- Recording indicator. A fixed overlay, not something inline: dictation runs
+       while focus is in the editor or the terminal, and the state has to stay
+       visible wherever you are looking. -->
+  <div id="ptt" class="ptt" data-testid="ptt" data-state="idle" hidden>
+    <span class="ptt-dot" aria-hidden="true"></span>
+    <span id="ptt-label" class="ptt-label">Listening…</span>
+    <div class="ptt-meter" aria-hidden="true"><i id="ptt-bar" class="ptt-bar"></i></div>
+    <button id="ptt-stop" class="mini" data-testid="ptt-stop" title="Finish and transcribe">Stop</button>
+  </div>
+  <!-- Live regions must already be in the DOM before anything is written to
+       them; a region injected and populated in the same tick is often not
+       announced at all. -->
+  <p id="ptt-status" role="status" aria-live="polite" class="visually-hidden"></p>
+  <p id="ptt-error" role="alert" class="visually-hidden"></p>
   <input id="up-tree" type="file" multiple hidden />
-  <script type="module" src="/static/app.js?v=1784965855555"></script>
+  <script type="module" src="/static/app.js?v=1784984673475"></script>
 </body>
 </html>

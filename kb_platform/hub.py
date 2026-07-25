@@ -262,6 +262,8 @@ class Hub:
         self._user_sessions: dict[str, aiohttp.ClientSession] = {}
         self._spawn_locks: dict[str, asyncio.Lock] = {}
         self._syncd_session: aiohttp.ClientSession | None = None
+        self._stt_key = self._load_stt_key()
+        self._stt_used: dict[str, tuple[str, int]] = {}   # user -> (utc day, bytes)
 
     # --- identity -----------------------------------------------------------
     def current_user(self, request: web.Request) -> str | None:
@@ -375,8 +377,16 @@ class Hub:
         return self._syncd_session
 
     # --- auth routes --------------------------------------------------------
+    # The HTML shell must NEVER be cached. Asset URLs inside it carry a ?v=
+    # build stamp, so app.js and style.css bust themselves — but nothing busts
+    # the document that names them. Without this header a browser applies
+    # heuristic freshness (a fraction of the time since Last-Modified) and can
+    # keep serving yesterday's app.html, which points at yesterday's bundle:
+    # the user deploys, reloads, and sees no change.
+    NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+
     async def login_page(self, request: web.Request) -> web.Response:
-        return web.FileResponse(STATIC_DIR / "login.html")
+        return web.FileResponse(STATIC_DIR / "login.html", headers=self.NO_STORE)
 
     async def do_login(self, request: web.Request) -> web.Response:
         data = await request.post()
@@ -398,7 +408,7 @@ class Hub:
     async def index(self, request: web.Request) -> web.Response:
         if not self.current_user(request):
             raise web.HTTPFound("/login")
-        return web.FileResponse(STATIC_DIR / "app.html")
+        return web.FileResponse(STATIC_DIR / "app.html", headers=self.NO_STORE)
 
     async def deep_link(self, request: web.Request) -> web.Response:
         """Repo paths ARE routes: /company/notes.md serves the app, which opens
@@ -406,7 +416,7 @@ class Hub:
         Unauthenticated visitors go through login and land on the file after."""
         if not self.current_user(request):
             raise web.HTTPFound("/login?next=" + urllib.parse.quote(request.rel_url.raw_path))
-        return web.FileResponse(STATIC_DIR / "app.html")
+        return web.FileResponse(STATIC_DIR / "app.html", headers=self.NO_STORE)
 
     async def vc_proxy(self, request: web.Request) -> web.Response:
         """Version-history reads (log/show/diff/activity) — proxied to syncd
@@ -987,6 +997,146 @@ class Hub:
                                 "method": method, "url": url, "error": str(e)[:200]})
             return web.json_response({"error": f"upstream error: {e}"}, status=502)
 
+    # --- dictation: speech-to-text for everyone, key readable by no one ------
+    # The ElevenLabs key is a COMPANY credential, and that makes it the exact
+    # INVERSE of the `_secrets/` model directly above: there, "can use the key"
+    # is deliberately the same thing as "can read the file", enforced by the
+    # kernel. Here everyone may spend the key and nobody may read it — so it
+    # cannot live in the repo, and it cannot live in a per-user backend either
+    # (those are spawned `runuser -u <user>`, so anything the backend can read
+    # the user's own shell, cron job or agent can read). It lives beside the
+    # session key: 0600 root:root under /etc/kb, opened only in this process.
+    #
+    # The caller never chooses the URL. That is the load-bearing detail — it is
+    # why a key with speech-to-text scope can never be pointed at
+    # /v1/text-to-speech, /v1/voices/add or /v1/user by anyone who can log in.
+    STT_KEY_FILE = common.ETC_DIR / "elevenlabs.key"
+    STT_URL = os.environ.get("KB_STT_URL", "https://api.elevenlabs.io/v1/speech-to-text")
+    STT_MODEL = os.environ.get("KB_STT_MODEL", "scribe_v2")
+    STT_LOG = Path("/var/log/kb/stt.log")
+    STT_MAX_BYTES = 12 * 1024 * 1024              # ~50 min of 32 kbps mono opus
+    STT_DAILY_BYTES = int(os.environ.get("KB_STT_DAILY_BYTES", 60 * 60 * 4096))
+    STT_MIN_BYTES = 1024                          # smaller than this is a stray tap
+    _STT_EXT = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a",
+                "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
+                "audio/mpeg": "mp3", "audio/flac": "flac"}
+
+    def _load_stt_key(self) -> str | None:
+        """Fail SOFT. A missing key must 503 one route, never raise out of
+        __init__ — the unit is Restart=on-failure, so a raise here would turn
+        "dictation isn't set up" into a crash-looping platform. Accepts either a
+        bare key or the `header = "xi-api-key: …"` curl-config form."""
+        try:
+            raw = self.STT_KEY_FILE.read_text().strip()
+        except OSError:
+            return None
+        m = re.search(r"xi-api-key:\s*([A-Za-z0-9_\-]+)", raw)
+        return m.group(1) if m else (raw.split()[0] if raw else None)
+
+    def _stt_quota(self, user: str, nbytes: int) -> bool:
+        """A guardrail against one person burning the company's credit, not
+        billing: in-memory, per UTC day, resets on restart. That is the right
+        trade — the audit log is the record, this is just the brake."""
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        seen_day, used = self._stt_used.get(user, (day, 0))
+        if seen_day != day:
+            used = 0
+        if used + nbytes > self.STT_DAILY_BYTES:
+            return False
+        self._stt_used[user] = (day, used + nbytes)
+        return True
+
+    def _stt_audit(self, line: dict) -> None:
+        # Records THAT someone dictated — never WHAT they said. This is a
+        # microphone in an office; the transcript is nobody else's business.
+        try:
+            self.STT_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.STT_LOG, "a") as f:
+                f.write(json.dumps(line) + "\n")
+        except OSError:
+            pass
+
+    async def stt(self, request: web.Request) -> web.Response:
+        """Audio in, transcript out. The API key never leaves this process, and
+        no upstream response body is ever forwarded verbatim."""
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        if not self._stt_key:
+            return web.json_response(
+                {"error": "dictation is not set up on this server"}, status=503)
+        ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not ctype.startswith("audio/"):
+            return web.json_response({"error": "expected an audio body"}, status=400)
+
+        # Read with an explicit cap. NOT `request.content.read(cap + 1)`: that
+        # returns whatever is buffered, not the number of bytes asked for, so a
+        # single read both fails to detect an oversize body AND silently truncates
+        # it into the upstream call. The app-wide client_max_size is 2 GiB (it has
+        # to be, for uploads), so this is the only thing standing between a stray
+        # multi-gigabyte POST and the hub's memory.
+        buf = bytearray()
+        while True:
+            chunk = await request.content.read(64 * 1024)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > self.STT_MAX_BYTES:
+                return web.json_response({"error": "that recording is too long"}, status=413)
+        body = bytes(buf)
+        if len(body) < self.STT_MIN_BYTES:
+            # A tap, not speech. Answer without spending an API call.
+            return web.json_response({"ok": True, "text": ""})
+        if not self._stt_quota(user, len(body)):
+            return web.json_response(
+                {"error": "daily dictation limit reached — try again tomorrow"}, status=429)
+
+        fd = aiohttp.FormData()
+        fd.add_field("file", body, content_type=ctype,
+                     filename="dictation." + self._STT_EXT.get(ctype, "bin"))
+        fd.add_field("model_id", self.STT_MODEL)
+        fd.add_field("tag_audio_events", "false")   # defaults TRUE: "(laughter)" in your prose
+        fd.add_field("timestamps_granularity", "none")
+        fd.add_field("diarize", "false")
+        fd.add_field("enable_logging", "false")     # zero retention upstream
+        lang = (request.query.get("lang") or "").strip().lower()
+        if re.fullmatch(r"[a-z]{2,3}", lang):
+            fd.add_field("language_code", lang)
+
+        started = time.time()
+        try:
+            timeout = aiohttp.ClientTimeout(total=120)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.post(self.STT_URL, headers={"xi-api-key": self._stt_key},
+                                  data=fd, allow_redirects=False) as resp:
+                    raw = await resp.content.read(8 * 1024 * 1024 + 1)
+                    ms = int((time.time() - started) * 1000)
+                    if resp.status != 200:
+                        self._stt_audit({"ts": int(started), "user": user, "bytes": len(body),
+                                         "status": resp.status, "ms": ms})
+                        # Never forward the upstream body — it is not ours to leak,
+                        # and it can carry key metadata in an auth error.
+                        msg = ("dictation is rate-limited — wait a moment"
+                               if resp.status == 429 else
+                               "speech-to-text is unavailable right now")
+                        return web.json_response({"error": msg}, status=502)
+                    try:
+                        j = json.loads(raw)
+                    except ValueError:
+                        return web.json_response(
+                            {"error": "unreadable response from upstream"}, status=502)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self._stt_audit({"ts": int(started), "user": user, "bytes": len(body),
+                             "error": str(e)[:200]})
+            return web.json_response({"error": f"upstream error: {e}"}, status=502)
+
+        text = (j.get("text") or "").strip()
+        self._stt_audit({"ts": int(started), "user": user, "bytes": len(body), "status": 200,
+                         "ms": int((time.time() - started) * 1000), "chars": len(text),
+                         "secs": j.get("audio_duration_secs")})
+        return web.json_response({"ok": True, "text": text,
+                                  "language_code": j.get("language_code", "")})
+
     async def admin_launchers(self, request: web.Request) -> web.Response:
         """Replace the company-wide launcher buttons. The list lives in the data
         repo at .claude/launchers.json (root-owned 644 like the agent skills:
@@ -1260,6 +1410,11 @@ def make_app() -> web.Application:
     app.router.add_get("/admin/egress", hub.admin_egress_get)
     app.router.add_post("/admin/egress", hub.admin_egress_set)
     app.router.add_post("/egress", hub.egress)
+    # Dictation. Its own top-level prefix, NOT /api/stt: the `*` catch-all below
+    # owns every method under /api that isn't explicitly registered, so an
+    # /api/stt would silently proxy GET and OPTIONS into the user backend —
+    # which is exactly the process that must never see the key.
+    app.router.add_post("/stt", hub.stt)
     app.router.add_static("/static", STATIC_DIR)
     # Everything under /api/* is proxied to the per-user backend.
     app.router.add_route("*", "/api/{tail:.*}", hub.proxy_http)

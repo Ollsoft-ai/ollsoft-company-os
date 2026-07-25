@@ -230,3 +230,39 @@ def test_terminal_shift_drag_selects_inside_mouse_app(browser):
     assert "MOUSEAPP_LINE_QQ" in sel, sel
     assert clip == sel, (clip, sel)
     ctx.close()
+
+
+def test_terminal_paste_arrives_once_without_clipboard_read_permission(browser):
+    """Ctrl+V and Ctrl+Shift+V must each paste exactly once, and must not
+    depend on the clipboard READ permission.
+
+    Reading the clipboard ourselves (navigator.clipboard.readText) broke it
+    both ways: text copied in ANOTHER app made Chrome demand permission — it
+    pops a little "Paste" chip and nothing ever arrives — while text copied
+    inside the page landed twice, because Chrome ran its own paste as well.
+    Handing the key back to the browser leaves exactly one paste path, and the
+    native paste event carries the text with it, no permission needed."""
+    ctx = browser.new_context(permissions=[])        # clipboard READ denied
+    # fill the clipboard the way another application would: a real Ctrl+C
+    helper = ctx.new_page()
+    helper.goto("http://127.0.0.1:8300/login")
+    helper.evaluate("""() => { const ta = document.createElement('textarea');
+        ta.value = 'PASTED_ONCE_QQ'; document.body.appendChild(ta);
+        ta.focus(); ta.select(); }""")
+    helper.keyboard.press("Control+C")
+    helper.wait_for_timeout(200)
+
+    page = login(ctx, "alice")
+    _open_terminal(page)
+    page.evaluate("""() => { window.__sent = [];
+                             window.__kbterm.onData(d => window.__sent.push(d)); }""")
+    for key in ("Control+Shift+V", "Control+V"):
+        page.evaluate("() => { window.__sent = []; }")
+        page.keyboard.press(key)
+        page.wait_for_timeout(700)
+        sent = page.evaluate("() => window.__sent")
+        copies = sum(s.count("PASTED_ONCE_QQ") for s in sent)
+        assert copies == 1, f"{key} must paste exactly once, got {copies}: {sent}"
+        # and it must never leak ^V into the shell alongside the paste
+        assert not any("\x16" in s for s in sent), f"{key} sent a literal ^V: {sent}"
+    ctx.close()

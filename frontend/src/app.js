@@ -14,6 +14,8 @@ import { tags as t } from "@lezer/highlight";
 import { yCollab } from "y-codemirror.next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { initDictation, toggleDictation, dictationReady, retryDictation,
+         releaseMicNow } from "./dictation.js";
 
 // Markdown on the Ollsoft palette: content stays ink; the machinery (marks,
 // urls, code) recedes into blues so the words lead.
@@ -799,6 +801,93 @@ function activeDocView() {
     ? active.view : null;
 }
 
+// ---- dictation: where do the spoken words go? ------------------------------
+// There is no single "focused pane" in this app — `active` is the active TAB and
+// `activeTerm` the active TERMINAL, and neither means "has focus". So ask the
+// DOM, using the same probes the keyboard dispatcher and activateTerm() use.
+//
+// Resolved when recording STARTS, then stashed: the round trip to the server is
+// a second or more, and by the time the transcript lands the user may have
+// clicked somewhere else entirely. Re-validated at insert time, because the
+// target can also disappear in that window.
+function dictationTarget() {
+  let el = document.activeElement;
+  while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+
+  if (el && el.closest && el.closest("#terminal-panel") && activeTerm)
+    return { kind: "term", t: activeTerm };
+
+  if (el && (el.tagName === "TEXTAREA" ||
+             (el.tagName === "INPUT" && /^(text|search|url|tel|email)$/.test(el.type))))
+    return { kind: "field", el };
+
+  const v = activeDocView();
+  if (v) return { kind: "doc", view: v };
+
+  // Nothing focused and no writable document: the terminal if it is showing,
+  // otherwise nowhere — and "nowhere" is a message, not a silent drop.
+  if (activeTerm && !$("#terminal-panel").hidden) return { kind: "term", t: activeTerm };
+  return null;
+}
+
+function insertDictation(target, text) {
+  if (!text) { kbToast("Nothing was said", "err"); return; }
+  if (!target) {
+    kbToast("Nowhere to put that — click into a document or the terminal first", "err");
+    return;
+  }
+
+  if (target.kind === "term") {
+    const t = target.t;
+    if (!terms.includes(t) || !t.ws || t.ws.readyState !== 1) {
+      kbToast("That terminal isn't connected", "err");
+      return;
+    }
+    // NEVER introduce an implicit Enter. A mis-transcribed command that runs
+    // itself has no undo; the human presses Return. `[\r\n]` and not `\r?\n`,
+    // because a LONE \r is Enter as far as the PTY is concerned — sanitize() in
+    // dictation.js already folds those, and this is the second layer.
+    const oneLine = text.replace(/[\r\n]+/g, " ").replace(/[ \t]{2,}/g, " ").trim();
+    // term.paste(), not rawSend(): paste() normalizes newlines to \r, adds
+    // bracketed-paste framing only when the foreground app actually enabled
+    // DECSET 2004, and rewrites any embedded ESC to U+241B — which matters here
+    // because the transcript is third-party text. We strip control characters
+    // in dictation.js as well; this is the second layer, not the only one.
+    t.term.paste(t.term.modes && t.term.modes.bracketedPasteMode ? text : oneLine);
+    t.term.focus();
+    return;
+  }
+
+  if (target.kind === "field") {
+    const el = target.el;
+    if (!el.isConnected) { kbToast("That field is gone", "err"); return; }
+    el.focus();
+    // execCommand is deprecated but is still the only thing that preserves the
+    // native undo buffer in an input; setRangeText fires no event and pushes no
+    // undo entry, so it is the fallback, with the event synthesized by hand.
+    try { if (document.execCommand("insertText", false, text)) return; } catch (e) { /* below */ }
+    const from = el.selectionStart == null ? el.value.length : el.selectionStart;
+    const to = el.selectionEnd == null ? from : el.selectionEnd;
+    el.setRangeText(text, from, to, "end");
+    el.dispatchEvent(new InputEvent("input",
+      { bubbles: true, inputType: "insertText", data: text }));
+    return;
+  }
+
+  const v = target.view;
+  if (!v || v.state.readOnly) { kbToast("That document is read-only", "err"); return; }
+  v.focus();
+  v.dispatch({
+    ...v.state.replaceSelection(text),
+    scrollIntoView: true,
+    // "input.paste", not "input.type": adjacent input.type transactions get
+    // merged into one undo step, so a dictation followed by typing would
+    // collapse together and one Ctrl+Z would eat both.
+    userEvent: "input.paste",
+    effects: EditorView.announce.of("Inserted " + text.length + " characters"),
+  });
+}
+
 function tbInline(mark) {
   const v = activeDocView(); if (!v) return;
   const { from, to } = v.state.selection.main;
@@ -931,6 +1020,7 @@ function wireMdBar() {
       case "image": pickInto(imgInput); break;
       case "video": pickInto($("#up-video")); break;
       case "file": pickInto(fileInput); break;
+      case "mic": toggleDictation(); break;
     }
   });
 }
@@ -968,6 +1058,7 @@ const I = {
   folder: svgIcon('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'),
   command: svgIcon('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
   keyboard: svgIcon('<rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10"/><line x1="10" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="14" y2="10"/><line x1="18" y1="10" x2="18" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/>'),
+  mic: svgIcon('<path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/>'),
 };
 
 function treeIcon(n) {
@@ -3140,6 +3231,26 @@ function pathScore(q, path) {
   return null;
 }
 
+// Command labels are prose, not paths — "Go to file / search everything" has a
+// slash in it, and pathScore would treat everything after it as the basename
+// and return hit indexes into the wrong string. Same ladder, one string.
+function labelScore(q, label) {
+  const fq = foldText(q), fl = foldText(label);
+  const span = (at, len) => Array.from({ length: len }, (_, k) => at + k);
+  if (!fq) return { score: 1, hits: [] };
+  if (fl.startsWith(fq)) return { score: 900, hits: span(0, fq.length) };
+  const at = fl.indexOf(fq);
+  if (at >= 0) return { score: 800 - Math.min(at, 99), hits: span(at, fq.length) };
+  const toks = fq.split(/\s+/).filter(Boolean);
+  if (toks.length > 1 && toks.every((t) => fl.includes(t))) {
+    const hits = [];
+    for (const t of toks) hits.push(...span(fl.indexOf(t), t.length));
+    return { score: 600, hits };
+  }
+  const m = subseqMatch(fq, fl);
+  return m ? { score: 200 + m.score, hits: m.hits } : null;
+}
+
 // Render text with the matched characters emphasised. Folding can change a
 // string's length (ligatures), so highlight only when the indexes still line up.
 function markHits(text, hits) {
@@ -3264,18 +3375,38 @@ const BINDINGS = [
     label: "Find in this document", run: findInDoc },
   { id: "history", keys: ["Alt+H"], group: "Documents", when: hasTab,
     label: "Version history", run: () => { if (active) openHistory(active.path); } },
-  { id: "perms", keys: ["Alt+Y"], group: "Documents", when: hasTab,
-    label: "Permissions and sharing", run: () => { if (active) openPerms(active.path); } },
+  { id: "perms", keys: ["Alt+S"], group: "Documents", when: hasTab,
+    label: "Sharing and permissions", run: () => { if (active) openPerms(active.path); } },
   { id: "link", keys: ["Mod+Shift+K"], group: "Documents", when: hasDoc,
     label: "Insert link", run: tbLink },
   { id: "save", keys: ["Mod+S"], group: "Documents",
     label: "Save (already continuous)", run: saveNow },
 
   // — Terminal —
-  { id: "term", keys: ["Mod+Backquote"], group: "Terminal", term: true,
+  // physical Ctrl on every platform: ⌘+` is "cycle windows" on macOS, and this
+  // is the one binding users already had
+  { id: "term", keys: ["Ctrl+Backquote"], group: "Terminal", term: true,
     label: "Show / hide the terminal", when: () => canShell, run: toggleTerminalPanel },
-  { id: "newterm", keys: ["Mod+Shift+Backquote"], group: "Terminal", term: true,
+  { id: "newterm", keys: ["Ctrl+Shift+Backquote"], group: "Terminal", term: true,
     label: "New terminal", when: () => canShell, run: () => openTermWith() },
+
+  // — Dictation —
+  // F9 is the one function key no browser has claimed (F1 help, F3 find, F5
+  // reload, F6 toolbar, F7 caret browsing, F10 menu, F11 fullscreen, F12
+  // devtools are all spoken for), it has no default GNOME/KDE binding, and no
+  // IME conflict. Alt+K is the alias for anyone whose window manager grabs
+  // F-keys — the only Alt+letter this app hadn't already claimed.
+  //
+  // dictation.js handles the actual keydown/keyup in the capture phase (it needs
+  // e.repeat and it needs a keyup, neither of which the dispatcher has). This
+  // entry is what puts the key in the help sheet and the palette, and — via
+  // term:true — what stops xterm from sending \x1b[20~ to the shell instead.
+  // The cost, stated plainly: F9 no longer reaches the terminal, so mc's menu
+  // key is gone while dictation is available. `when` makes that conditional.
+  { id: "dictate", keys: ["F9", "Alt+K"], group: "Dictation", term: true,
+    label: "Dictate — speak, and the text lands where you were typing",
+    hint: "hold to talk, or tap once and tap again when you're done",
+    when: dictationReady, run: toggleDictation },
 
   // — Help —
   { id: "help", keys: ["?", "F1", "Mod+Slash"], group: "Help",
@@ -3284,19 +3415,47 @@ const BINDINGS = [
 
 // Commands that have no key of their own but belong in the palette.
 const EXTRA_COMMANDS = [
-  { id: "newfolder", label: "New folder in company/", run: () => newFolderIn("company") },
-  { id: "upload", label: "Upload files into company/", run: () => uploadInto("company") },
+  { id: "newfolder", label: "New folder in company", run: () => newFolderIn("company") },
+  { id: "upload", label: "Upload files into company", run: () => uploadInto("company") },
   { id: "hidden", label: "Show / hide dot-files", run: () => $("#hidden-toggle").click() },
   { id: "foldall", label: "Collapse / expand all folders", run: toggleFoldAll },
   { id: "cron", label: "Scheduled jobs (cron)", when: () => canShell, run: openCron },
   { id: "admin", label: "Admin — users, groups, network", when: () => !$("#admin-btn").hidden,
     run: openAdmin },
   { id: "copypath", label: "Copy the open file's path", when: hasTab,
-    run: () => { navigator.clipboard.writeText(active.path)
-      .then(() => kbToast("Path copied", "ok"), () => kbToast("Clipboard blocked", "err")); } },
+    run: () => { if (!active) return;
+      navigator.clipboard.writeText(active.path)
+        .then(() => kbToast("Path copied", "ok"), () => kbToast("Clipboard blocked", "err")); } },
   { id: "reload", label: "Reload the file tree", run: () => loadTree(true).then(() => kbToast("Tree reloaded", "ok")) },
+  { id: "retryspeech", label: "Retry the last dictation", when: dictationReady,
+    run: retryDictation },
+  // The mic is held open between utterances so the next one starts instantly and
+  // the browser doesn't re-prompt. This hands it back without waiting out the
+  // five-minute idle timer, for anyone who wants the recording indicator gone.
+  { id: "releasemic", label: "Release the microphone", when: dictationReady,
+    run: () => { releaseMicNow(); kbToast("Microphone released", "ok"); } },
+  { id: "speechlang", label: "Dictation language…", when: dictationReady,
+    run: dictationLangPrompt },
   { id: "signout", label: "Sign out", run: () => { location.href = "/logout"; } },
 ];
+
+// Auto-detect handles mixed Czech/English in one session, which is the common
+// case here; pinning a language measurably improves accuracy when you only ever
+// speak one. Stored per browser, sent to the server as ?lang=.
+async function dictationLangPrompt() {
+  const cur = localStorage.getItem("kbDictateLang") || "";
+  const v = await kbPrompt(
+    "Two-letter language code — cs, en, de … Leave empty to auto-detect.", cur,
+    { title: "Dictation language", ok: "Save", placeholder: "auto-detect" });
+  if (v === null) return;
+  const code = v.trim().toLowerCase();
+  if (code && !/^[a-z]{2,3}$/.test(code)) { kbToast("That isn't a language code", "err"); return; }
+  try {
+    if (code) localStorage.setItem("kbDictateLang", code);
+    else localStorage.removeItem("kbDictateLang");
+  } catch (e) { /* private mode */ }
+  kbToast(code ? "Dictation set to " + code : "Dictation set to auto-detect", "ok");
+}
 
 function allCommands() {
   const cmds = [];
@@ -3313,10 +3472,11 @@ function allCommands() {
 }
 
 function tabIndexFromEvent(e) {
-  if (!/^Digit[1-9]$/.test(e.code || "")) return -1;
+  const m = /^(?:Digit|Numpad)([1-9])$/.exec(e.code || "");
+  if (!m) return -1;
   const plainAlt = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
   const ctrlShift = e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey;
-  return plainAlt || ctrlShift ? Number(e.code.slice(5)) - 1 : -1;
+  return plainAlt || ctrlShift ? Number(m[1]) - 1 : -1;
 }
 
 // Which binding (if any) does this event fire? Used by the global dispatcher
@@ -3429,7 +3589,8 @@ let treeCursor = null;
 let _typeAhead = { s: "", at: 0 };
 
 function visibleRows() {
-  return Array.from($("#tree").querySelectorAll(".tree-item"))
+  // [data-path] skips the in-flight upload ghosts, which have no real path yet
+  return Array.from($("#tree").querySelectorAll(".tree-item[data-path]"))
     .filter((el) => el.offsetParent !== null);
 }
 function paintTreeCursor() {
@@ -3450,6 +3611,22 @@ function moveTreeCursor(d) {
 }
 function nodeAt(path) {
   return flatEntries().find((n) => n.path === path) || null;
+}
+// Renaming and deleting need write on the PARENT — the same rule renderNodes
+// uses to decide whether to draw those buttons. Top-level areas have no parent
+// node in the tree and are never removable.
+function parentWritable(path) {
+  if (!path.includes("/")) return false;
+  const parent = nodeAt(path.slice(0, path.lastIndexOf("/")));
+  return !!(parent && parent.access && parent.access.write);
+}
+function jumpTo(i) {
+  const rows = visibleRows();
+  if (!rows.length) return;
+  const el = rows[i < 0 ? rows.length - 1 : i];
+  treeCursor = el.dataset.path;
+  paintTreeCursor();
+  el.scrollIntoView({ block: "nearest" });
 }
 function focusTree() {
   document.body.classList.remove("nav-hidden");
@@ -3482,8 +3659,8 @@ function wireTreeKeys() {
     switch (e.key) {
       case "ArrowDown": e.preventDefault(); moveTreeCursor(1); return;
       case "ArrowUp": e.preventDefault(); moveTreeCursor(-1); return;
-      case "Home": e.preventDefault(); { const r = visibleRows(); if (r.length) { treeCursor = r[0].dataset.path; paintTreeCursor(); } } return;
-      case "End": e.preventDefault(); { const r = visibleRows(); if (r.length) { treeCursor = r[r.length - 1].dataset.path; paintTreeCursor(); } } return;
+      case "Home": e.preventDefault(); jumpTo(0); return;
+      case "End": e.preventDefault(); jumpTo(-1); return;
       case "ArrowRight":
         e.preventDefault();
         if (n && n.dir && !open(n.path)) setFolderOpen(n.path, true);
@@ -3506,8 +3683,11 @@ function wireTreeKeys() {
         if (n.dir) setFolderOpen(n.path, !open(n.path));
         else openEntry(n);
         return;
-      case "F2": e.preventDefault(); if (n) renameEntry(n); return;
-      case "Delete": e.preventDefault(); if (n) deleteEntry(n); return;
+      // The kernel would refuse anyway, but the keyboard must not offer a verb
+      // the mouse UI hides: those buttons appear only where the PARENT is
+      // writable, and top-level areas are never deletable.
+      case "F2": e.preventDefault(); if (n && parentWritable(n.path)) renameEntry(n); return;
+      case "Delete": e.preventDefault(); if (n && parentWritable(n.path)) deleteEntry(n); return;
       case "Escape": treeCursor = null; paintTreeCursor(); host.blur(); return;
       default: break;
     }
@@ -3541,6 +3721,7 @@ let _palette = null;
 
 function closePalette() {
   if (!_palette) return;
+  clearTimeout(_palette.timer);   // a content search in flight must not paint into dead DOM
   _palette.ov.remove();
   _palette = null;
 }
@@ -3557,12 +3738,19 @@ function openPalette(mode, seed) {
   const kind = document.createElement("span");
   kind.className = "palette-kind";
   kind.setAttribute("data-testid", "palette-kind");
+  const x = document.createElement("button");
+  x.className = "modal-x palette-x";
+  x.textContent = "×";
+  x.title = "Close";
+  x.setAttribute("aria-label", "Close");
+  x.addEventListener("click", closePalette);
   const input = document.createElement("input");
   input.className = "palette-input";
   input.setAttribute("data-testid", "palette-input");
   input.spellcheck = false;
   input.autocomplete = "off";
-  head.append(kind, input);
+  head.append(kind, input, x);   // on a phone the card fills the screen, so the
+                                 // click-the-backdrop escape hatch isn't reachable
   const list = document.createElement("div");
   list.className = "palette-list";
   list.setAttribute("data-testid", "palette-list");
@@ -3609,14 +3797,19 @@ function openPalette(mode, seed) {
       ic.innerHTML = it.icon || "";
       const body = document.createElement("span");
       body.className = "pi-body";
+      // Build the label HERE, every render. An item may not cache DOM: a
+      // DocumentFragment is EMPTIED by appendChild (its children are moved),
+      // so a cached one paints once and then renders a blank row on every
+      // later pass — and render() runs again on each arrow key and when the
+      // content results land.
       const main = document.createElement("span");
       main.className = "pi-main";
-      main.appendChild(it.mainNode || document.createTextNode(it.main || ""));
+      main.appendChild(markHits(it.main.text, it.main.hits));
       body.appendChild(main);
-      if (it.subNode || it.sub) {
+      if (it.sub) {
         const sub = document.createElement("span");
         sub.className = "pi-sub";
-        sub.appendChild(it.subNode || document.createTextNode(it.sub));
+        sub.appendChild(markHits(it.sub.text, it.sub.hits));
         body.appendChild(sub);
       }
       row.append(ic, body);
@@ -3649,9 +3842,9 @@ function openPalette(mode, seed) {
 
   const fileItem = (n, hit) => ({
     group: "Files", icon: fileIcon(n), path: n.path,
-    mainNode: markHits(n.path.slice(n.path.lastIndexOf("/") + 1),
-                       hit && hit.on === "name" ? hit.hits : []),
-    subNode: markHits(n.path, hit && hit.on === "path" ? hit.hits : []),
+    main: { text: n.path.slice(n.path.lastIndexOf("/") + 1),
+            hits: hit && hit.on === "name" ? hit.hits : [] },
+    sub: { text: n.path, hits: hit && hit.on === "path" ? hit.hits : [] },
     run: () => (n.dir ? revealFolder(n.path) : openEntry(n)),
   });
 
@@ -3661,11 +3854,10 @@ function openPalette(mode, seed) {
       kind.textContent = "Run";
       const cq = q.slice(1).trim();
       for (const c of allCommands()) {
-        const hit = cq ? pathScore(cq, c.label) : { score: 1, hits: [] };
+        const hit = cq ? labelScore(cq, c.label) : { score: 1, hits: [] };
         if (!hit) continue;
         out.push({ group: "Commands", icon: I.command, score: hit.score, keys: c.keys,
-                   mainNode: markHits(c.label, hit.on === "name" ? hit.hits : hit.hits),
-                   run: c.run });
+                   main: { text: c.label, hits: hit.hits }, run: c.run });
       }
       out.sort((a, b) => b.score - a.score);
       return out;
@@ -3709,21 +3901,23 @@ function openPalette(mode, seed) {
   let contentTimer = null;
   const searchContents = (q) => {
     clearTimeout(contentTimer);
-    if (!q || q.startsWith(">") || q.length < 2) return;
+    // bump BEFORE the early return: shrinking the query below two characters,
+    // or switching to commands, must also invalidate a request already in flight
     const mine = ++seq;
-    contentTimer = setTimeout(async () => {
+    if (!q || q.startsWith(">") || q.length < 2) return;
+    const self = _palette;
+    contentTimer = _palette.timer = setTimeout(async () => {
       let j;
       try { j = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json(); }
       catch (e) { return; }
-      if (mine !== seq || !_palette) return;
+      if (mine !== seq || _palette !== self) return;   // superseded or closed
       const hits = (j.results || []).slice(0, 12);
       if (!hits.length) return;
-      const known = new Set(items.map((i2) => i2.path));
       for (const m of hits) {
         items.push({
           group: "In documents", icon: I.doc, path: m.path + ":" + m.line,
-          mainNode: markHits(m.text, contentHits(q, m.text)),
-          sub: m.path + " · line " + m.line + (known.has(m.path) ? "" : ""),
+          main: { text: m.text, hits: contentHits(q, m.text) },
+          sub: { text: m.path + " · line " + m.line, hits: [] },
           run: () => openAtLine(m.path, m.line),
         });
       }
@@ -3742,10 +3936,10 @@ function openPalette(mode, seed) {
   input.addEventListener("input", refresh);
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) {
-      e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); render();
+      e.preventDefault(); sel = Math.max(0, Math.min(sel + 1, items.length - 1)); render();
       const el = list.querySelector(".palette-item.sel"); if (el) el.scrollIntoView({ block: "nearest" });
     } else if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "p")) {
-      e.preventDefault(); sel = Math.max(sel - 1, 0); render();
+      e.preventDefault(); sel = Math.max(0, Math.min(sel - 1, items.length - 1)); render();
       const el = list.querySelector(".palette-item.sel"); if (el) el.scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter") {
       e.preventDefault(); choose(sel);
@@ -3754,7 +3948,7 @@ function openPalette(mode, seed) {
     }
   });
 
-  _palette = { ov, input };
+  _palette = { ov, input, timer: null };
   input.value = mode === "commands" ? ">" : (seed || "");
   refresh();
   input.placeholder = mode === "commands"
@@ -3784,6 +3978,7 @@ function revealFolder(path) {
   let acc = "";
   for (const seg of path.split("/")) { acc = acc ? acc + "/" + seg : seg; collapsed.delete(acc); }
   rerenderTree();
+  document.body.classList.remove("nav-hidden");   // Alt+B may have hidden it
   if (isMobile()) document.body.classList.add("nav-open");
   treeCursor = path;
   paintTreeCursor();
@@ -3795,6 +3990,13 @@ async function openAtLine(path, line) {
   await openPath(path, kindForPath(path));
   const t = tabs.find((x) => x.path === path);
   if (!t || !t.view || !line) return;
+  // A freshly opened document is EMPTY until the CRDT seed arrives over the
+  // websocket, so jumping straight to the line would always land on line 1.
+  // Wait for the text (bounded), and give up quietly if the tab goes away.
+  for (let i = 0; i < 60 && t.view && t.view.state.doc.lines < line; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (!t.view || !tabs.includes(t) || active !== t) return;
   const doc = t.view.state.doc;
   const l = doc.line(Math.min(Math.max(line, 1), doc.lines));
   t.view.dispatch({ selection: { anchor: l.from },
@@ -3884,11 +4086,14 @@ function openShortcuts() {
 // The topbar field is the visible door to the palette — it never grew its own
 // result list, because two ranked lists that disagree is worse than one.
 function wireSearch() {
-  const box = $("#search");
-  box.readOnly = true;
-  const open = () => { box.blur(); openPalette("find"); };
-  box.addEventListener("focus", open);
-  box.addEventListener("click", open);
+  // A button, not a text field: it opens the palette rather than accepting
+  // text. Opening on `focus` would make it untraversable — Tab would land on
+  // it and immediately fling a modal at you — so it opens on activation only,
+  // which is what a button does anyway (click covers Enter and Space).
+  $("#search").addEventListener("click", () => {
+    if (_palette) return;
+    openPalette("find");
+  });
 }
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
@@ -3934,7 +4139,8 @@ function wireTerminal() {
     hint.textContent = SELECT_MODIFIER + "+drag to select · copies on select";
     hint.title = "In a full-screen terminal app (e.g. claude code) the app owns "
       + "the mouse, so hold " + SELECT_MODIFIER + " while dragging to select text. "
-      + "Selecting copies it; Ctrl+Shift+V pastes.";
+      + "Selecting copies it; "
+      + (IS_MAC ? "⌘V" : "Ctrl+V or Ctrl+Shift+V") + " pastes.";
   }
   // Ctrl+` lives in BINDINGS with every other shortcut — see wireShortcuts().
   // Refit whenever the terminal area actually changes size (panel resize,
@@ -4163,7 +4369,8 @@ function copyTermSelection(t, quiet) {
 //     htop) hold the SELECT_MODIFIER while dragging — Option on Mac, Shift
 //     elsewhere — since the app otherwise owns the mouse.
 //   • Ctrl+C copies when something is selected, and interrupts otherwise (as a
-//     terminal always has); Ctrl+Shift+C always copies; Ctrl+Shift+V pastes.
+//     terminal always has); Ctrl+Shift+C always copies; Ctrl+V and Ctrl+Shift+V
+//     both paste (⌘V on a Mac, where Ctrl+V stays the shell's).
 function wireTermClipboard(t) {
   // OSC 52: the escape sequence a program inside the terminal uses to put text
   // on the system clipboard (claude code's "copy", vim/tmux yank, etc.). xterm
@@ -4201,19 +4408,31 @@ function wireTermClipboard(t) {
     if (bindingFor(ev, true)) return false;
     if (!ev.ctrlKey || ev.altKey) return true;
     // `return false` makes xterm bail out early — WITHOUT its usual
-    // preventDefault — so each branch cancels the browser default itself.
-    // Ctrl+Shift+V otherwise pastes twice: once here and once natively into
-    // xterm's hidden helper textarea.
+    // preventDefault — so each branch decides for itself whether the browser
+    // still gets to act on the key.
     if (ev.code === "KeyC" && ev.shiftKey) { ev.preventDefault(); copyTermSelection(t); return false; }
     if (ev.code === "KeyC" && t.term.hasSelection()) {
       ev.preventDefault(); copyTermSelection(t); t.term.clearSelection(); return false;
     }
-    if (ev.code === "KeyV" && ev.shiftKey) {
-      ev.preventDefault();
-      navigator.clipboard.readText().then((txt) => { if (txt) t.term.paste(txt); },
-        () => kbToast("The browser blocked clipboard access", "err"));
-      return false;
-    }
+    // Ctrl+V / Ctrl+Shift+V: hand the paste straight back to the browser — bail
+    // out of xterm (so it doesn't send ^V) but leave the default action alone.
+    // The browser's own paste event carries the clipboard text with it, and
+    // xterm already listens for that event and turns it into a bracketed paste.
+    //
+    // Plain Ctrl+V pastes as well, the way Windows Terminal and VS Code's
+    // terminal do it. The cost is that ^V itself can no longer be typed —
+    // readline's quoted-insert, page-down in nano/emacs — which is the trade
+    // those terminals make too. On a Mac Ctrl+V is not a paste shortcut at all,
+    // so there it still goes to the shell and ⌘V pastes natively.
+    //
+    // Reading the clipboard ourselves (navigator.clipboard.readText) was the
+    // bug, and it broke both ways: for text copied in ANOTHER app Chrome
+    // requires permission and pops its little "Paste" confirmation chip, so
+    // nothing ever arrived; and for text copied inside the page — where no
+    // permission is needed — the text landed TWICE, because Chrome ran its own
+    // paste-as-plain-text regardless of the preventDefault we had here. One
+    // paste path is the only way to be sure there is exactly one paste.
+    if (ev.code === "KeyV" && (ev.shiftKey || !IS_MAC)) return false;
     return true;
   });
 }
@@ -4466,10 +4685,20 @@ async function boot() {
   wireShortcuts(); wireTreeKeys();
   // null-guarded: a browser holding a cached older app.html must not lose the
   // whole boot sequence over one missing button
+  // icon + label markup lives in app.html now
   const keysBtn = $("#keys-btn");
-  if (keysBtn) {
-    keysBtn.innerHTML = I.keyboard + '<span class="btn-label">Shortcuts</span>';
-    keysBtn.addEventListener("click", openShortcuts);
+  if (keysBtn) keysBtn.addEventListener("click", openShortcuts);
+  // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
+  // insecure context — getUserMedia needs https or localhost), which also makes
+  // `when: dictationReady` false and hands F9 back to the shell.
+  const micBtn = $("#mic-btn");
+  if (micBtn && dictationReady()) {
+    initDictation({ resolveTarget: dictationTarget, insert: insertDictation,
+                    toast: kbToast, button: micBtn });
+  } else if (micBtn) {
+    micBtn.hidden = true;
+    const mdMic = document.querySelector('#mdbar button[data-md="mic"]');
+    if (mdMic) mdMic.hidden = true;
   }
   const ht = $("#hidden-toggle");
   ht.classList.toggle("on", showHidden);
@@ -4482,8 +4711,11 @@ async function boot() {
   $("#tree-fold").addEventListener("click", toggleFoldAll);
   $("#doc-history").innerHTML = I.history;
   $("#doc-history").addEventListener("click", () => { if (active) openHistory(active.path); });
-  // touch: no Ctrl+K to advertise; and the file list IS the home screen
-  if (window.matchMedia("(hover: none)").matches) $("#search").placeholder = "search everything…";
+  // a physical keyboard is worth advertising the shortcut to; a phone is not
+  if (!window.matchMedia("(hover: none)").matches) {
+    const lbl = $("#search-label");
+    if (lbl) lbl.textContent = "Search files and contents…  " + comboLabel("Mod+K");
+  }
   if (isMobile()) document.body.classList.add("nav-open");
   $("#cron-btn").addEventListener("click", openCron);
   // Show the Admin panel to platform admins (sudo group) — and, network-section

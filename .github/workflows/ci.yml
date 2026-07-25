@@ -63,6 +63,20 @@ jobs:
       # symlink attempts — to prove the KERNEL enforces access rather than
       # application code. That only means anything when run as a real demo user,
       # so the venv lives somewhere world-readable and pytest runs as alice.
+      # The hub answers 503 for every /stt request when no key is installed,
+      # which is *before* body validation — so without a key the request-shape
+      # tests (400 / 413 / tiny-body short-circuit) never reach the code they
+      # are testing. A dummy key unlocks those paths and bills nothing: the
+      # tests that actually call ElevenLabs are gated behind KB_STT_LIVE.
+      - name: Dummy dictation key (exercises validation, never calls upstream)
+        run: |
+          printf 'ci_dummy_key_not_a_real_credential' | sudo tee /etc/kb/elevenlabs.key >/dev/null
+          sudo chown root:root /etc/kb/elevenlabs.key
+          sudo chmod 0600 /etc/kb/elevenlabs.key
+          sudo systemctl restart kb-hub
+          sleep 4
+          systemctl is-active --quiet kb-hub || { sudo journalctl -u kb-hub -n 40 --no-pager; exit 1; }
+
       - name: Test dependencies
         run: |
           sudo python3 -m venv /opt/kb-testvenv

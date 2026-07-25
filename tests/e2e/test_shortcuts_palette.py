@@ -90,6 +90,43 @@ def test_content_search_streams_in_underneath(page):
     page.keyboard.press("Escape")
 
 
+def test_rows_keep_their_labels_across_re_renders(page):
+    """render() runs again on every arrow key and when the content results land.
+    Assert on the TEXT, not just data-path: a row can keep its path attribute
+    and still paint empty (a DocumentFragment is emptied by the first append)."""
+    palette(page, "plan")
+    labels = lambda: [t.strip() for t in page.locator(".pi-main").all_inner_texts()]
+    assert all(labels()), labels()
+    page.keyboard.press("ArrowDown")
+    page.wait_for_timeout(150)
+    assert all(labels()), f"labels blanked after ArrowDown: {labels()}"
+    page.wait_for_timeout(1200)          # let the content search land and re-render
+    groups = [g.lower() for g in page.locator(".palette-group").all_inner_texts()]
+    assert any("document" in g for g in groups), \
+        f"no content results, so the re-render never happened — test is vacuous: {groups}"
+    assert all(labels()), f"labels blanked when content results arrived: {labels()}"
+    subs = [t.strip() for t in page.locator(".pi-sub").all_inner_texts()]
+    assert all(subs), subs
+    page.keyboard.press("Escape")
+
+
+def test_the_close_button_dismisses_the_palette(page):
+    """A phone has no reachable backdrop — the card fills the screen."""
+    palette(page, "over")
+    page.click(".palette-x")
+    page.wait_for_selector('[data-testid="palette"]', state="detached", timeout=4000)
+
+
+def test_the_search_button_can_be_tabbed_past(page):
+    """Opening on focus would make the topbar untraversable by keyboard."""
+    page.evaluate("() => document.querySelector('[data-testid=\"search\"]').focus()")
+    page.wait_for_timeout(250)
+    assert page.locator('[data-testid="palette"]').count() == 0
+    page.keyboard.press("Enter")
+    page.wait_for_selector('[data-testid="palette-input"]', timeout=4000)
+    page.keyboard.press("Escape")
+
+
 def test_escape_closes_the_palette(page):
     palette(page, "over")
     page.keyboard.press("Escape")

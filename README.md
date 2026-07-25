@@ -110,6 +110,12 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   and deletes jobs, which run as the user even while logged out.
 - **Read-only viewing** of files you can see but not edit (live, but the daemon
   refuses to persist your edits).
+- **Dictation** (`F9`, hold-to-talk or tap-to-latch): speech-to-text that lands
+  wherever you were already typing — a document, a **terminal**, the command
+  palette, any field. The ElevenLabs key is a company credential at
+  `/etc/kb/elevenlabs.key` (`0600 root:root`): every logged-in user may spend it
+  through the hub, nobody may read it, and the caller never picks the upstream
+  URL. See [docs/dictation.md](docs/dictation.md).
 - **Full-text + task search** over a Postgres index, RLS-scoped per user.
 - **To-dos**: `- [ ] task @assignee #tag` checkboxes aggregated across everything
   you can see, filterable, with write-back to the source file.
@@ -170,6 +176,7 @@ ollsoft-company-os/
 │   └── indexer.py          markdown → Postgres index (RLS metadata, ACLs, tasks)
 ├── frontend/               vanilla-JS SPA (CodeMirror 6 + Yjs + xterm), esbuild
 │   ├── src/app.js          the whole client
+│   ├── src/dictation.js    microphone capture + push-to-talk (owns no routing)
 │   ├── assets/             hand-authored shell: app.html, login.html, style.css, logos
 │   ├── static/             build output (generated, gitignored)
 │   └── build.mjs           esbuild bundler
@@ -177,13 +184,15 @@ ollsoft-company-os/
 │   ├── install.sh          one-command install / upgrade  ← start here
 │   ├── seed-demo.sh        optional sample company (alice/bob/carol + acme)
 │   ├── deploy.sh           redeploy code after editing it (development)
+│   ├── install-dictation-key.sh  validate + install the ElevenLabs key (root 0600)
+│   ├── bounce_backends.py  restart per-user backends after a deploy
 │   ├── schema.sql          Postgres schema, RLS functions, grants
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
 ├── systemd/                kb-hub / kb-syncd / kb-indexer units + tmpfiles
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright) + torture/
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · remote-access
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · dictation · remote-access
 ```
 
 **Created on the box by the installer** (not in this repo):
@@ -193,6 +202,7 @@ ollsoft-company-os/
 /opt/kb-venv          the Python venv, world-executable
 /srv/kb               the knowledgebase: git repo of markdown + attachments
 /etc/kb/kb.env        runtime configuration read by the systemd units
+/etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it
 /etc/kb/session.key   HMAC key (root 0600)
 /run/kb               unix sockets: syncd.sock (root), users/<u>/ (per-user 0700)
 ```

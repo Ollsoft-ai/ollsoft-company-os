@@ -131,16 +131,25 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 .who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
   box-shadow: 0 0 6px rgba(47, 206, 152, .8); animation: live 2.4s ease-in-out infinite; }
 @keyframes live { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+/* the topbar search is a BUTTON that opens the palette — it never takes text */
 .search { flex: 0 1 360px; margin-left: auto; padding: .42rem .7rem; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--panel); color: var(--ink);
-  font-family: var(--mono); font-size: .8rem; }
-.search::placeholder { color: var(--faint); }
-.search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+  border: 1px solid var(--border); background: var(--panel); color: var(--faint);
+  font-family: var(--mono); font-size: .8rem; text-align: left; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search:hover { color: var(--ink); border-color: #2C4166; }
+.search:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
 .spacer { flex: 1; }
 .topbar button, .topbar .logout { background: transparent; color: var(--muted); border: 1px solid var(--border);
   padding: .38rem .7rem; border-radius: 7px; cursor: pointer; text-decoration: none;
   font-family: var(--sans); font-size: .8rem; font-weight: 500; white-space: nowrap; }
 .topbar button:hover, .topbar .logout:hover { color: var(--ink); background: var(--panel2); border-color: #2C4166; }
+/* Cron / Terminal / Shortcuts / Sign out are icon-only in the bar — the label
+   stays in the DOM (a11y + the ⋯ menu on phones), the title is the tooltip */
+.topbar .icon-btn { display: inline-flex; align-items: center; gap: .45rem; }
+@media (min-width: 881px) {
+  .topbar .icon-btn { padding: .42rem .55rem; }
+  .topbar .icon-btn .btn-label { display: none; }
+}
 /* the one primary action in the chrome: create something */
 #newdoc { background: var(--accent-deep); border-color: transparent; color: #fff; font-weight: 600; }
 #newdoc:hover { background: var(--accent); color: #fff; }
@@ -154,9 +163,12 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 body { display: flex; flex-direction: column; }
 .topbar { flex: 0 0 auto; }
 .layout { display: grid; grid-template-columns: 264px 1fr; flex: 1 1 auto; min-height: 0; }
-/* Alt+B on a wide screen: give the document the whole width */
-body.nav-hidden .layout { grid-template-columns: 1fr; }
-body.nav-hidden .sidebar { display: none; }
+/* Alt+B on a wide screen: give the document the whole width. Scoped, so a
+   window that shrinks into the drawer layout never keeps a hidden sidebar. */
+@media (min-width: 881px) {
+  body.nav-hidden .layout { grid-template-columns: 1fr; }
+  body.nav-hidden .sidebar { display: none; }
+}
 
 /* ── Launcher bar — one-tap company (blue) & personal (violet) shortcuts ──── */
 .launchbar { display: flex; align-items: center; gap: .35rem; flex: 0 0 auto;
@@ -526,6 +538,7 @@ body.nav-hidden .sidebar { display: none; }
 .palette-input { flex: 1; background: transparent; border: 0; outline: none; color: var(--ink);
   font-family: var(--sans); font-size: .96rem; padding: .8rem 0; min-width: 0; }
 .palette-input::placeholder { color: var(--faint); }
+.palette-x { flex: 0 0 auto; font-size: 1.3rem; line-height: 1; padding: .2rem .3rem; }
 .palette-list { overflow: auto; padding: .35rem; flex: 1 1 auto; min-height: 0; }
 .palette-group { font-size: .62rem; text-transform: uppercase; letter-spacing: .09em;
   color: var(--faint); padding: .5rem .55rem .25rem; font-weight: 600; }
@@ -546,9 +559,6 @@ body.nav-hidden .sidebar { display: none; }
 .linkish { background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer;
   text-decoration: underline; text-underline-offset: 2px; padding: 0; }
 .linkish:hover { color: var(--accent); }
-/* the topbar field is a door to the palette, not a text input */
-.search { cursor: pointer; }
-.search:focus { outline: none; }
 
 /* ── Keyboard shortcut sheet ──────────────────────────────────────────────── */
 .keys-card { width: min(620px, 94vw); }
@@ -749,6 +759,40 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .cm-md-secret { text-decoration-style: dotted; }
 .cm-md-secret::before { content: "🔒"; font-size: .72em; margin-right: .18em; }
 
+/* ── Dictation ────────────────────────────────────────────────────────────────
+   The indicator sits above the toasts, bottom-right, and is deliberately louder
+   than anything else in the app: a live microphone is a state the user must never
+   be able to lose track of. */
+.ptt { position: fixed; z-index: 95;
+  bottom: max(1rem, env(safe-area-inset-bottom)); right: 1rem;
+  display: flex; align-items: center; gap: .6rem;
+  background: var(--panel2); border: 1px solid var(--danger-deep);
+  border-radius: var(--r); padding: .5rem .7rem;
+  box-shadow: 0 10px 30px rgba(3, 8, 18, .55);
+  font-size: .82rem; animation: rise .15s ease-out; }
+.ptt[data-state="sending"] { border-color: var(--border); }
+.ptt-dot { width: .55rem; height: .55rem; border-radius: 50%; flex: 0 0 auto;
+  background: var(--danger); animation: ptt-pulse 1.2s ease-in-out infinite; }
+.ptt[data-state="sending"] .ptt-dot { background: var(--muted); animation: none; }
+/* Never colour alone: the label carries the meaning for anyone who can't see
+   the dot, doesn't know what it means, or has animations turned off. */
+.ptt-label { white-space: nowrap; }
+.ptt-meter { width: 56px; height: 4px; border-radius: 2px; overflow: hidden;
+  background: var(--chassis); flex: 0 0 auto; }
+.ptt-bar { display: block; width: 100%; height: 100%; background: var(--danger);
+  transform-origin: left center; transform: scaleX(0); will-change: transform; }
+@keyframes ptt-pulse { 50% { opacity: .3; } }
+/* Recording is the one thing worth colouring the topbar button for. */
+#mic-btn.rec { color: var(--danger); border-color: var(--danger);
+  background: rgba(242, 128, 156, .12); }
+#mic-btn.busy { color: var(--muted); }
+#mdbar button[data-md="mic"].rec { color: var(--danger); }
+/* Screen-reader-only. The live regions must occupy no space but must stay in the
+   accessibility tree — display:none or visibility:hidden would silence them. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px;
+  padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  border: 0; }
+
 /* ── Toasts — quiet, self-dismissing notices ──────────────────────────────── */
 #toasts { position: fixed; bottom: max(1rem, env(safe-area-inset-bottom)); right: 1rem;
   display: flex; flex-direction: column; gap: .4rem; z-index: 90; pointer-events: none;
@@ -888,5 +932,10 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .who::before { animation: none; }
   .modal-overlay, .modal-card, .topbar-actions, .toast, .ctx-menu { animation: none; }
   .caret .icon { transition: none; }
+  /* The dot stops pulsing and the level meter stops moving — dictation.js also
+     skips the rAF loop entirely rather than just hiding its output. The label
+     still says "Listening…", so no information is lost. */
+  .ptt, .ptt-dot { animation: none; }
+  .ptt-bar { transform: scaleX(1) !important; }
   * { transition: none !important; }
 }

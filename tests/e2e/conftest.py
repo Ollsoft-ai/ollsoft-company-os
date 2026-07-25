@@ -1,35 +1,6 @@
 import json
-import os
-import re
-from pathlib import Path
-
 import pytest
 from playwright.sync_api import sync_playwright
-
-# Serve the frontend straight out of this checkout instead of the deployed copy,
-# so you can test an edit without redeploying. Enable with KB_DEV_BUNDLE=1.
-# Derived from the repo layout — never a hardcoded home directory.
-DEV = os.environ.get(
-    "KB_DEV_BUNDLE_DIR",
-    str(Path(__file__).resolve().parents[2] / "frontend" / "static"),
-)
-_MIME = {".js": "application/javascript", ".css": "text/css", ".html": "text/html",
-         ".svg": "image/svg+xml", ".woff2": "font/woff2"}
-
-
-def _use_dev_bundle(page):
-    def serve(route):
-        p = re.sub(r"\?.*$", "", route.request.url.split(BASE, 1)[-1])
-        f = DEV + "/app.html" if p == "/" else DEV + p[len("/static"):]
-        try:
-            body = open(f, "rb").read()
-        except OSError:
-            route.continue_(); return
-        route.fulfill(status=200,
-                      content_type=_MIME.get("." + f.rsplit(".", 1)[-1], "application/octet-stream"),
-                      body=body)
-    page.route(BASE + "/", serve)
-    page.route(re.compile(re.escape(BASE) + r"/static/.*"), serve)
 
 BASE = "http://127.0.0.1:8300"
 CREDS = json.load(open("/tmp/kb-test-creds.json"))
@@ -38,15 +9,13 @@ CREDS = json.load(open("/tmp/kb-test-creds.json"))
 @pytest.fixture(scope="session")
 def browser():
     with sync_playwright() as p:
-        b = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks"])
+        b = p.chromium.launch(headless=True, args=["--no-sandbox"])
         yield b
         b.close()
 
 
 def login(context, user):
     page = context.new_page()
-    if os.environ.get("KB_DEV_BUNDLE"):
-        _use_dev_bundle(page)
     page.goto(BASE + "/login")
     page.fill('input[name="username"]', user)
     page.fill('input[name="password"]', CREDS[user])
