@@ -4298,11 +4298,33 @@ function sendData(t, d) {
 // the convention mobile terminals like Termux use.
 function wireTouchScroll(t) {
   let lastY = null, lastX = 0, acc = 0;
+  // Pinch = text size, the gesture every phone user will try first. The
+  // browser's own pinch-zoom never fires here (#terminal has touch-action:
+  // none), so the gesture is ours to implement: scale the font by the ratio
+  // of the current finger distance to where the pinch started.
+  let pinchD = null, pinchBase = 0;
+  const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                                 e.touches[0].clientY - e.touches[1].clientY);
   t.el.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      lastY = null;                       // a pinch is never also a swipe
+      pinchD = dist(e); pinchBase = termFontSize();
+      return;
+    }
+    pinchD = null;
     if (e.touches.length !== 1) { lastY = null; return; }
     lastY = e.touches[0].clientY; lastX = e.touches[0].clientX; acc = 0;
   }, { passive: true });
+  t.el.addEventListener("touchend", (e) => {
+    if (e.touches.length < 2) pinchD = null;
+  }, { passive: true });
   t.el.addEventListener("touchmove", (e) => {
+    if (pinchD && e.touches.length === 2) {
+      e.preventDefault();
+      const n = Math.round(pinchBase * dist(e) / pinchD);
+      if (n !== termFontSize()) setTermFontSize(n);
+      return;
+    }
     if (lastY == null || e.touches.length !== 1) return;
     const y = e.touches[0].clientY;
     lastX = e.touches[0].clientX;
@@ -4396,7 +4418,8 @@ function setTermFontSize(n) {
   try { localStorage.setItem("kbTermFont", String(n)); } catch (e) { /* private mode */ }
   for (const t of terms) t.term.options.fontSize = n;
   fitTerm(activeTerm);
-  kbToast("Terminal text: " + n + "px");
+  // No toast: the text visibly changing size IS the feedback, and during a
+  // pinch this fires many times a second.
 }
 
 function setTermMax(on) {
