@@ -35,11 +35,14 @@ runuser -u postgres -- pg_isready -q 2>/dev/null || note "postgres not accepting
 # Compare the newest markdown on disk (shared areas only: the indexer cannot
 # read users' 0700 dirs, so they must not count) against what kb.files recorded
 # for it. Disk newer than the index by minutes = the indexer is running blind.
+# %p (full path) then strip the repo prefix — %P is relative to the FIND ROOT
+# (company/ or projects/), which produced paths kb.files has never heard of and
+# a false STALE alert on the very first quiet afternoon.
 newest=$(find "$REPO/company" "$REPO/projects" -name '*.md' -not -path '*/.git/*' \
-         -printf '%T@ %P\n' 2>/dev/null | sort -rn | head -1)
+         -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)
 if [ -n "$newest" ]; then
   disk_t=${newest%% *}; disk_t=${disk_t%.*}
-  rel=${newest#* }
+  rel=${newest#* }; rel=${rel#"$REPO"/}
   age=$(( $(date +%s) - disk_t ))
   if [ "$age" -gt 120 ]; then          # grace: give the indexer 2 min to catch up
     idx_t=$(runuser -u postgres -- psql -d "$PGDB" -tAc \
