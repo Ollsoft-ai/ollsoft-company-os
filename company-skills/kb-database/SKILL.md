@@ -77,7 +77,7 @@ GRANT SELECT, INSERT ON u_alice.scores TO kb_users;         -- read + append
 GRANT USAGE, SELECT ON u_alice.scores_id_seq TO kb_users;   -- needed for INSERT on bigserial
 ```
 
-**Never write `GRANT ... TO bob, carol, carol, test` as a way of saying "everyone".** That list is frozen at the moment you type it. The next person hired gets the file (OS groups inherit) and gets the page — and then every query behind it fails with `permission denied for schema u_alice`, with nothing in the UI explaining why. This has already happened once on this platform; `kb_users` exists so it doesn't happen again.
+**Never write `GRANT ... TO alice, bob, carol` as a way of saying "everyone".** That list is frozen at the moment you type it. The next person hired gets the file (OS groups inherit) and gets the page — and then every query behind it fails with `permission denied for schema u_alice`, with nothing in the UI explaining why. This has already happened once on this platform; `kb_users` exists so it doesn't happen again.
 
 ## Specific people → grant by name
 
