@@ -81,8 +81,23 @@ jobs:
       - name: Diagnostics on failure
         if: failure()
         run: |
-          sudo journalctl -u kb-hub -u kb-syncd -u kb-indexer -n 200 --no-pager || true
-          sudo ls -la /srv/kb /srv/kb/.claude || true
+          echo '--- service state ---'
+          systemctl is-active kb-hub kb-syncd kb-indexer || true
+          echo '--- indexer log (its own unit only; the others flood with runuser noise) ---'
+          sudo journalctl -u kb-indexer -n 80 --no-pager || true
+          echo '--- seeded file ownership and modes ---'
+          sudo ls -la /srv/kb /srv/kb/company /srv/kb/company/dashboards || true
+          sudo getfacl -p /srv/kb/company /srv/kb/company/overview.md 2>/dev/null || true
+          echo '--- can kbindexer actually read the file? ---'
+          sudo -u kbindexer test -r /srv/kb/company/overview.md \
+            && echo 'kbindexer CAN read overview.md' || echo 'kbindexer CANNOT read overview.md'
+          echo '--- what the index holds for it ---'
+          sudo -u postgres psql -d kb -c \
+            "SELECT path, owner_name, group_name, to_hex(mode) AS mode, to_timestamp(mtime) FROM kb.files WHERE path='company/overview.md'" || true
+          sudo -u postgres psql -d kb -c \
+            "SELECT line, checked, left(text,45) FROM kb.blocks WHERE file_path='company/overview.md' AND kind='task'" || true
+          echo '--- on-disk truth ---'
+          sudo grep -n 'Ship the knowledgebase' /srv/kb/company/overview.md || true
           sudo cat /etc/kb/kb.env || true
 
       - name: Uninstall the demo cleanly
