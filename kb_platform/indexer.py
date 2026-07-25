@@ -242,15 +242,23 @@ class Indexer:
         self.conn.commit()
 
     def reconcile_perms(self):
-        """Fallback sweep so chmod/chown/setfacl changes propagate to RLS even if
-        inotify missed them. Uses a cheap stat signature (incl. ctime, which every
-        perm change bumps) to skip unchanged files, so the expensive ACL read
-        (getfacl) runs only for files that actually changed."""
+        """Fallback sweep so filesystem changes propagate even if inotify missed
+        them. Uses a cheap stat signature (incl. ctime, which every permission
+        change AND every write bumps) to skip unchanged files, so the expensive
+        work — getfacl, and re-parsing a document — runs only for files that
+        actually changed.
+
+        Covering CONTENT here, not just permissions, is load-bearing: watch_loop
+        is the only other thing that re-parses a file, and inotify silently drops
+        events when the kernel watch limit is hit or the queue overflows. Without
+        this, one dropped event means a document's blocks stay stale until the
+        service restarts — invisibly, since the file itself looks fine."""
+        stale: list[Path] = []
         with self.conn.cursor() as cur:
             cur.execute("SELECT path, owner_name, group_name, mode, acl_users, acl_groups, "
-                        "acl_x_users, acl_x_groups FROM kb.files")
+                        "acl_x_users, acl_x_groups, size, mtime FROM kb.files")
             rows = cur.fetchall()
-            for path, owner, group, mode, au, ag, axu, axg in rows:
+            for path, owner, group, mode, au, ag, axu, axg, size, mtime in rows:
                 p = self.root / path
                 try:
                     st = p.lstat()
@@ -263,9 +271,14 @@ class Indexer:
                     continue                          # unchanged -> skip getfacl
                 self._sig[path] = sig
                 try:
-                    o, g, m, _is_dir, _sz, _mt, nru, nrg, nxu, nxg = self.stat_row(p)
+                    o, g, m, _is_dir, nsz, nmt, nru, nrg, nxu, nxg = self.stat_row(p)
                 except OSError:
                     continue
+                # Content changed under a missed inotify event? Re-parse it after
+                # this sweep (reindex_file manages its own transaction).
+                if (path.endswith(".md") and not stat.S_ISDIR(st.st_mode)
+                        and (nsz != size or mtime is None or abs(nmt - mtime) > 1e-6)):
+                    stale.append(p)
                 if (o, g, m, nru, nrg, nxu, nxg) != (owner, group, mode, au or [], ag or [],
                                                      axu or [], axg or []):
                     cur.execute("UPDATE kb.files SET owner_name=%s, group_name=%s, mode=%s, "
@@ -273,6 +286,11 @@ class Indexer:
                                 "updated_at=now() WHERE path=%s",
                                 (o, g, m, nru, nrg, nxu, nxg, path))
         self.conn.commit()
+        for p in stale:
+            try:
+                self.reindex_file(p)
+            except Exception:
+                self.conn.rollback()
 
     async def perms_loop(self):
         while True:
