@@ -90,7 +90,10 @@ def bounce(browser, user, creds):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("users", nargs="*", default=["bob", "carol"])
+    # Default to every user in the creds file rather than a hardcoded list —
+    # the accounts differ per box (demo users in CI, real people in production).
+    ap.add_argument("users", nargs="*",
+                    default=sorted(json.load(open(CREDS_FILE)).keys()))
     ap.add_argument("--yes", action="store_true", help="don't ask before ending shell sessions")
     args = ap.parse_args()
     users = args.users or ["bob", "carol"]
