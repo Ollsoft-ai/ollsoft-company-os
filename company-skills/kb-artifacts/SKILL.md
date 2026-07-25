@@ -114,7 +114,7 @@ table{border-collapse:collapse}td,th{padding:.4rem .7rem;border-bottom:1px solid
 </script>
 ```
 
-# House style (Company OS)
+# House style (Ollsoft Company OS)
 
 Match the platform chrome so your artifact feels native. Palette: background
 `#0D1626`, panel `#101B2E` / `#172741`, border `#223350`, text `#E9EFFA`,

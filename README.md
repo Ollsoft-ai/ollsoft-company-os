@@ -1,4 +1,4 @@
-# Company OS
+# Ollsoft Company OS
 
 An **OS-native, AI-agent-native company knowledgebase**. Think "Obsidian, but
 multiplayer, permissioned, and built for agents" — running on a single Linux box.
@@ -23,7 +23,7 @@ There is no permission table in this codebase. That is the whole point.
 
 ## Requirements
 
-Company OS needs a **whole machine** — a VM or bare metal running **Ubuntu 24.04**.
+Ollsoft Company OS needs a **whole machine** — a VM or bare metal running **Ubuntu 24.04**.
 
 It cannot run in an unprivileged container, and that is by design rather than an
 oversight: it creates real Linux accounts, authenticates against PAM, spawns
@@ -38,8 +38,8 @@ Budget a small VM: 2 vCPU / 4 GB RAM / 20 GB disk is comfortable for a team.
 ## Install
 
 ```bash
-git clone https://github.com/<you>/company-os.git
-cd company-os
+git clone https://github.com/<you>/ollsoft-company-os.git
+cd ollsoft-company-os
 sudo bash scripts/install.sh --admin <your-username>
 ```
 
@@ -50,7 +50,7 @@ right modes and ACLs, creates the Postgres cluster objects and RLS schema, write
 it to upgrade.
 
 It creates exactly one account: yours. A generated password is written to
-`/root/company-os-admin.txt` (delete it after your first login), or pass your own
+`/root/ollsoft-company-os-admin.txt` (delete it after your first login), or pass your own
 with `--admin-pass`.
 
 Then open **http://127.0.0.1:8300**. It binds to localhost only. From your laptop:
@@ -160,7 +160,7 @@ Full component tour: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 ## Repository layout
 
 ```
-company-os/
+ollsoft-company-os/
 ├── kb_platform/            the Python backend (one module per component)
 │   ├── common.py           paths, config, HMAC session tokens, safe path helpers
 │   ├── pam_auth.py         PAM login

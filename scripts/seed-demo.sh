@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Optional demo content for Company OS.
+# Optional demo content for Ollsoft Company OS.
 #
 # Creates three sample employees, a restricted project, and some seed documents,
 # so you can log in as different people and watch the permission model work
@@ -55,7 +55,7 @@ if [ "$UNDO" -eq 1 ]; then
     rm -f "${REPO:?}/$f" && echo "  removed $f"
   done
   rmdir "${REPO:?}/company/dashboards" 2>/dev/null || true
-  rm -f /tmp/kb-test-creds.json /root/company-os-demo.txt
+  rm -f /tmp/kb-test-creds.json /root/ollsoft-company-os-demo.txt
   systemctl is-active --quiet kb-indexer && systemctl restart kb-indexer
   echo "  demo removed. Documents you created yourself under company/ were left alone."
   exit 0
@@ -66,7 +66,7 @@ fi
 # ---------------------------------------------------------------------------
 say "demo users"
 # ---------------------------------------------------------------------------
-CREDS=/root/company-os-demo.txt
+CREDS=/root/ollsoft-company-os-demo.txt
 # The test suite reads its logins from here; every tests/cli module and the e2e
 # conftest load it at import time, so without it pytest fails during collection.
 TEST_CREDS=/tmp/kb-test-creds.json

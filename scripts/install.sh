@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Company OS installer.
+# Ollsoft Company OS installer.
 #
 # Stands the platform up on a fresh Ubuntu 24.04 host: system packages, the
 # service account, the repo skeleton with kernel-enforced permissions, the
@@ -116,7 +116,7 @@ getent group "$ADMIN_GROUP" >/dev/null || die "admin group '$ADMIN_GROUP' does n
 # ---------------------------------------------------------------------------
 say "admin account: $ADMIN_USER"
 # ---------------------------------------------------------------------------
-CREDS=/root/company-os-admin.txt
+CREDS=/root/ollsoft-company-os-admin.txt
 if id "$ADMIN_USER" &>/dev/null; then
   echo "  account exists — adopting it (password unchanged)"
 else
@@ -273,7 +273,7 @@ say "kb-history CLI"
 # caller's identity via SO_PEERCRED, so this needs no privileges of its own.
 cat > /usr/local/bin/kb-history <<WRAP
 #!/bin/sh
-# Company OS version-history CLI. Installed by scripts/install.sh.
+# Ollsoft Company OS version-history CLI. Installed by scripts/install.sh.
 PYTHONPATH="$PREFIX" exec "$VENV/bin/python" -m kb_platform.vc_cli "\$@"
 WRAP
 chmod 0755 /usr/local/bin/kb-history
@@ -293,7 +293,7 @@ for u in ${PRIOR_PROTECTED//,/ }; do
 done
 
 cat > /etc/kb/kb.env <<ENV
-# Company OS runtime configuration. Read by the systemd units.
+# Ollsoft Company OS runtime configuration. Read by the systemd units.
 # Changing anything here requires: systemctl restart kb-hub kb-syncd kb-indexer
 KB_REPO=$REPO
 KB_RUN=/run/kb
@@ -352,7 +352,7 @@ fi
 say "done"
 # ---------------------------------------------------------------------------
 cat <<DONE
-Company OS is installed.
+Ollsoft Company OS is installed.
 
   Web UI      http://127.0.0.1:$PORT   (localhost only — see docs/remote-access.md
                                         before exposing it to a network)

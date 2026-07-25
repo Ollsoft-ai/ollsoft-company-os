@@ -1,4 +1,4 @@
-# Contributing to Company OS
+# Contributing to Ollsoft Company OS
 
 Thanks for looking. A few things about this codebase that will save you time.
 

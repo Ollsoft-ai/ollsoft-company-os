@@ -1,4 +1,4 @@
-# Remote access — putting Company OS behind a front door
+# Remote access — putting Ollsoft Company OS behind a front door
 
 The hub binds to **127.0.0.1 only**. It speaks plain HTTP and has no TLS, no rate
 limiting on the login endpoint, and no protection against someone who can reach
@@ -125,7 +125,7 @@ location / {
 - Change `--port` or firewall the box so 8300 is not reachable from the LAN
   either. `127.0.0.1` binding protects you from the network, not from other
   local users.
-- Delete `/root/company-os-admin.txt` and `/root/company-os-demo.txt` once
+- Delete `/root/ollsoft-company-os-admin.txt` and `/root/ollsoft-company-os-demo.txt` once
   passwords have been changed.
 - Remove the demo company if this is a real deployment:
   `sudo bash scripts/seed-demo.sh --undo`. It drops the demo accounts, the

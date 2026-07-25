@@ -59,7 +59,7 @@ One account, named by `--admin`. It is added to `kb-users` and to the admin grou
 (`sudo` by default, `--admin-group` to change). If the account already exists it
 is adopted, and its password is left alone.
 
-The generated password is written to `/root/company-os-admin.txt` — delete that
+The generated password is written to `/root/ollsoft-company-os-admin.txt` — delete that
 file after your first login.
 
 ### 4. The repo skeleton
