@@ -810,24 +810,66 @@ function activeDocView() {
 // a second or more, and by the time the transcript lands the user may have
 // clicked somewhere else entirely. Re-validated at insert time, because the
 // target can also disappear in that window.
+// Sticky pane memory. On touch, *getting to* the mic button destroys the focus
+// evidence: tapping the ⋯ menu blurs the terminal, so by the time recording
+// starts, activeElement is a menu button and the resolver used to fall through
+// to the open document — spoken words landed in the markdown file instead of
+// the shell. Remember the last pane the user MEANINGFULLY interacted with
+// (typing, tapping into it); opening menus and tapping toolbar buttons must
+// not count, which is exactly why this cannot be document.activeElement.
+let lastPane = null;   // "term" | "doc" | {kind:"field", el}
+document.addEventListener("focusin", (e) => {
+  const el = e.target;
+  if (!el || !el.closest) return;
+  if (el.closest("#terminal-panel")) { lastPane = "term"; return; }
+  if (el.tagName === "TEXTAREA" ||
+      (el.tagName === "INPUT" && /^(text|search|url|tel|email)$/.test(el.type))) {
+    // Fields inside transient chrome (menus, dialogs) are real dictation
+    // targets while open — but must not linger as the sticky pane after the
+    // chrome closes. Track them live, revalidate at use.
+    lastPane = { kind: "field", el };
+    return;
+  }
+  if (el.closest(".cm-editor")) { lastPane = "doc"; return; }
+  // buttons, menus, tabs: leave lastPane alone — that's the whole point
+});
+
 function dictationTarget() {
   let el = document.activeElement;
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
 
+  let target = null;
   if (el && el.closest && el.closest("#terminal-panel") && activeTerm)
-    return { kind: "term", t: activeTerm };
-
-  if (el && (el.tagName === "TEXTAREA" ||
+    target = { kind: "term", t: activeTerm };
+  else if (el && (el.tagName === "TEXTAREA" ||
              (el.tagName === "INPUT" && /^(text|search|url|tel|email)$/.test(el.type))))
-    return { kind: "field", el };
+    target = { kind: "field", el };
 
-  const v = activeDocView();
-  if (v) return { kind: "doc", view: v };
+  // Focus is on chrome (a menu button, the body): fall back to the last pane
+  // the user actually worked in, not to "whatever document happens to be open".
+  if (!target && lastPane === "term" && activeTerm && !$("#terminal-panel").hidden)
+    target = { kind: "term", t: activeTerm };
+  if (!target && lastPane && lastPane.kind === "field" &&
+      document.contains(lastPane.el) && !lastPane.el.disabled &&
+      lastPane.el.offsetParent !== null)
+    target = { kind: "field", el: lastPane.el };
 
+  if (!target) {
+    const v = activeDocView();
+    if (v) target = { kind: "doc", view: v };
+  }
   // Nothing focused and no writable document: the terminal if it is showing,
   // otherwise nowhere — and "nowhere" is a message, not a silent drop.
-  if (activeTerm && !$("#terminal-panel").hidden) return { kind: "term", t: activeTerm };
-  return null;
+  if (!target && activeTerm && !$("#terminal-panel").hidden)
+    target = { kind: "term", t: activeTerm };
+
+  // Say where the words will land while they can still be stopped: the pill
+  // shows "→ terminal" for the whole recording, so a misroute is visible
+  // before the text lands instead of after.
+  const ind = $("#ptt-target");
+  if (ind) ind.textContent =
+    target ? { term: "→ terminal", doc: "→ document", field: "→ field" }[target.kind] : "";
+  return target;
 }
 
 function insertDictation(target, text) {
@@ -4133,6 +4175,9 @@ function wireTerminal() {
   $("#toggleterm").addEventListener("click", toggleTerminalPanel);
   $("#term-new").addEventListener("click", () => newTerminal());
   $("#term-hide").addEventListener("click", hideTerminalPanel);
+  const maxBtn = $("#term-max");   // null-guarded: cached older app.html
+  if (maxBtn) maxBtn.addEventListener("click", () =>
+    setTermMax(!document.body.classList.contains("term-max")));
   // how to select+copy where a full-screen app (claude code) owns the mouse
   const hint = $("#term-hint");
   if (hint) {
@@ -4176,6 +4221,7 @@ function wireTerminal() {
     if (!document.hidden) retryTermsNow();
   });
   window.__kbterms = terms;   // test hook
+  window.__kbDictTarget = dictationTarget;   // test hook: routing is testable
 }
 
 // The on-screen keyboard: some mobile browsers cover the page instead of
@@ -4189,15 +4235,24 @@ function wireViewport() {
   let pinned = false;
   const apply = () => {
     const covered = window.innerHeight - vv.height;   // ~0 when the browser resizes the layout itself
+    const panel = $("#terminal-panel");
     if (covered > 80) {
       document.body.style.height = vv.height + "px";
+      // The full-screen terminal is position:fixed, so the body pinning above
+      // does nothing for it — size the panel to the VISIBLE viewport directly,
+      // and it ends exactly where the keyboard begins (iOS overlays the
+      // keyboard instead of resizing the layout; interactive-widget in the
+      // meta tag only helps Chrome).
+      if (document.body.classList.contains("term-max"))
+        panel.style.height = vv.height + "px";
       window.scrollTo(0, 0);
       pinned = true;
     } else if (pinned) {
       document.body.style.height = "";
+      panel.style.height = "";
       pinned = false;
     }
-    if (!$("#terminal-panel").hidden) fitTerm(activeTerm);
+    if (!panel.hidden) fitTerm(activeTerm);
   };
   vv.addEventListener("resize", apply);
   vv.addEventListener("scroll", () => { if (pinned) window.scrollTo(0, 0); });
@@ -4291,6 +4346,29 @@ function wireTermKeys() {
     if (!b || !activeTerm) return;
     const t = activeTerm;
     if (b.dataset.k === "ctrl") { setCtrlArmed(!ctrlArmed); t.term.focus(); return; }
+    if (b.dataset.k === "mic") {
+      // Focus the terminal FIRST: the whole point of a mic in the keybar is
+      // that the route to it never leaves the terminal, unlike the ⋯ menu.
+      t.term.focus();
+      if (dictationReady()) toggleDictation();
+      else kbToast("Dictation isn't available here", "err");
+      return;
+    }
+    if (b.dataset.k === "copy") {
+      const sel = t.term.getSelection();
+      if (!sel) { kbToast("Nothing selected — long-press to select first", "err"); return; }
+      navigator.clipboard.writeText(sel)
+        .then(() => kbToast("Copied"))
+        .catch(() => kbToast("Clipboard blocked by the browser", "err"));
+      t.term.focus();
+      return;
+    }
+    if (b.dataset.k === "paste") {
+      navigator.clipboard.readText()
+        .then((txt) => { if (txt) t.term.paste(txt); t.term.focus(); })
+        .catch(() => kbToast("Paste blocked — long-press the terminal and use the system menu", "err"));
+      return;
+    }
     // honor application-cursor mode (vim, less, htop want ESC O; shells ESC [)
     const app = t.term.modes && t.term.modes.applicationCursorKeysMode;
     const A = (s) => (app ? "\x1bO" : "\x1b[") + s;
@@ -4301,12 +4379,33 @@ function wireTermKeys() {
   });
 }
 
+// Mobile terminal modes: FULL (fixed overlay, owns the screen — the default,
+// because the phone use case is full attention) or HALF (in-flow, share with
+// the doc). The choice is remembered; ⤢ in the header flips it. On desktop
+// the class is never set and the panel behaves exactly as before.
+function setTermMax(on) {
+  document.body.classList.toggle("term-max", on);
+  // The keyboard-pinning in wireViewport() sets an inline height on the fixed
+  // panel; carrying that into the other mode would freeze the panel at a stale
+  // size. Clear it — the next visualViewport resize re-applies if needed.
+  $("#terminal-panel").style.height = "";
+  try { localStorage.setItem("kbTermMode", on ? "max" : "half"); } catch (e) { /* private mode */ }
+  const b = $("#term-max");
+  if (b) { b.textContent = on ? "⤡" : "⤢"; b.title = on ? "Shrink to half screen" : "Full screen"; }
+  requestAnimationFrame(() => fitTerm(activeTerm));
+}
+function preferredTermMax() {
+  try { return (localStorage.getItem("kbTermMode") || "max") === "max"; }
+  catch (e) { return true; }
+}
+
 function toggleTerminalPanel() {
   if (!canShell) return;
   const panel = $("#terminal-panel");
   if (panel.hidden) {
     closeNav();   // the drawer would cover the panel on mobile
     panel.hidden = false;
+    if (isMobile()) setTermMax(preferredTermMax());
     if (!terms.length) newTerminal();
     else if (activeTerm) activateTerm(activeTerm, true);
     saveSession();
@@ -4314,7 +4413,11 @@ function toggleTerminalPanel() {
     hideTerminalPanel();
   }
 }
-function hideTerminalPanel() { $("#terminal-panel").hidden = true; saveSession(); }
+function hideTerminalPanel() {
+  $("#terminal-panel").hidden = true;
+  document.body.classList.remove("term-max");
+  saveSession();
+}
 
 function openTermWith(cmd) {
   if (!canShell) { kbToast("This account has no terminal access", "err"); return; }
@@ -4446,11 +4549,20 @@ function wireTermClipboard(t) {
 // server says the shell actually ended. With `cmd`, type that command into a
 // fresh shell once the prompt has painted (launcher buttons).
 function newTerminal(cmd, sid, savedName) {
+  const wasHidden = $("#terminal-panel").hidden;
   $("#terminal-panel").hidden = false;
+  // Every door into the terminal honours the mobile mode, not just the toggle —
+  // launcher buttons and session restore land here too.
+  if (wasHidden && isMobile()) setTermMax(preferredTermMax());
   const el = document.createElement("div");
   el.className = "term-content";
   $("#terminal").appendChild(el);
-  const term = new Terminal({ fontSize: 13, fontFamily: TERM_FONT, theme: TERM_THEME,
+  // 16px on touch, and not one pixel less: iOS zooms the whole page when any
+  // focusable element under 16px receives focus — xterm's hidden textarea
+  // qualifies, and that zoom is the "terminal scrolls somewhere weird" bug.
+  const term = new Terminal({
+    fontSize: window.matchMedia("(pointer: coarse)").matches ? 16 : 13,
+    fontFamily: TERM_FONT, theme: TERM_THEME,
                               scrollback: 5000,
                               // let Mac users Option+drag to select inside a
                               // mouse-tracking app (claude code) — otherwise no
@@ -4652,6 +4764,10 @@ function sendResize(t) {
 // Drag the panel's top edge to resize it, like the VS-Code panel divider.
 // Pointer events (with capture) cover mouse, touch and pen with one handler.
 function wireTermResizer() {
+  // Free-drag resize is a desktop affordance. On touch the handle is a 6px
+  // target that fights scrolling and the keyboard — the ⤢ snap states replace
+  // it there (the CSS hides the handle; this spares the dead listeners).
+  if (window.matchMedia("(pointer: coarse)").matches) return;
   const handle = $("#term-resizer");
   const panel = $("#terminal-panel");
   handle.addEventListener("pointerdown", (e) => {

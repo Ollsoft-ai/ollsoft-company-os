@@ -512,6 +512,33 @@ body { display: flex; flex-direction: column; }
   border: 1px solid var(--warn); border-radius: 999px; padding: 0 .55rem; }
 /* touch keybar: esc/tab/ctrl/arrows a phone keyboard doesn't have */
 .term-keys { display: none; }
+
+/* Full-screen / half toggle: a phone-only affordance. On desktop the panel is
+   freely resizable and this button is noise. */
+.term-max-btn { display: none; }
+
+/* ── Mobile terminal: modes, not a resizable panel ────────────────────────────
+   A docked panel resized by dragging is a desktop metaphor; on a phone it
+   fights the soft keyboard and the visualViewport pinning. Instead the panel
+   has exactly two states on small screens: HALF (in-flow, share with the doc)
+   and FULL (fixed overlay, own the screen). Default is FULL — the phone use
+   case is full attention, not split attention. */
+@media (max-width: 880px) {
+  .term-resizer { display: none; }              /* snap states, no free drag */
+  .terminal-panel { height: 50%; }              /* the half state */
+  .term-max-btn { display: inline-block; }
+  body.term-max .terminal-panel {
+    position: fixed; inset: 0; height: auto; z-index: 58;
+    border-top: 0;
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+/* the dictation pill's routing indicator: where the words will land */
+.ptt-target { font: 500 .68rem/1.4 var(--mono); color: var(--muted);
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 999px;
+  padding: .05rem .5rem; white-space: nowrap; }
+.ptt-target:empty { display: none; }
 @media (pointer: coarse) {
   .term-keys { display: flex; gap: .3rem; flex: 0 0 auto; overflow-x: auto;
     scrollbar-width: none; background: var(--chassis); border-top: 1px solid var(--border);
@@ -826,11 +853,11 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .sr-item { padding: .55rem .6rem; }
   /* swipes belong to our scrollback handler, not to browser pan gestures */
   #terminal { touch-action: none; }
-  /* the panel grip becomes a real in-flow handle you can actually grab */
-  .term-resizer { position: static; height: 16px; flex: 0 0 auto; display: grid;
-    place-items: center; background: var(--chassis); }
-  .term-resizer::after { content: ""; width: 44px; height: 4px; border-radius: 4px;
-    background: var(--border); }
+  /* No drag handle on touch at all: the panel snaps between half and full
+     (the ⤢ button / body.term-max), so a grip would be dead UI. This replaces
+     the earlier in-flow grab handle — free-drag on a phone fought scrolling,
+     the soft keyboard, and the viewport pinning. */
+  .term-resizer { display: none; }
 }
 
 /* ── Mobile layout (phones, small tablets) ────────────────────────────────── */

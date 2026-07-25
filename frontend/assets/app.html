@@ -105,10 +105,12 @@
           <span class="spacer"></span>
           <span id="term-hint" class="muted small term-hint"></span>
           <span class="muted small">shell as <span id="term-user"></span></span>
+          <button id="term-max" class="mini term-max-btn" data-testid="term-max" title="Toggle full screen / half">⤢</button>
           <button id="term-hide" class="mini" data-testid="term-hide" title="Hide panel — terminals keep running (Ctrl+`)">▾</button>
         </div>
         <div id="terminal" data-testid="terminal"></div>
         <div id="term-keys" class="term-keys" data-testid="term-keys">
+          <button data-k="mic" id="tk-mic" title="Dictate into this terminal">🎤</button>
           <button data-k="esc" title="Escape">esc</button>
           <button data-k="tab" title="Tab">tab</button>
           <button data-k="stab" title="Shift+Tab">⇧tab</button>
@@ -118,6 +120,8 @@
           <button data-k="down" title="Down">↓</button>
           <button data-k="up" title="Up">↑</button>
           <button data-k="right" title="Right">→</button>
+          <button data-k="copy" title="Copy the terminal selection">copy</button>
+          <button data-k="paste" title="Paste from the clipboard">paste</button>
         </div>
       </div>
     </section>
@@ -128,6 +132,7 @@
   <div id="ptt" class="ptt" data-testid="ptt" data-state="idle" hidden>
     <span class="ptt-dot" aria-hidden="true"></span>
     <span id="ptt-label" class="ptt-label">Listening…</span>
+    <span id="ptt-target" class="ptt-target" data-testid="ptt-target"></span>
     <div class="ptt-meter" aria-hidden="true"><i id="ptt-bar" class="ptt-bar"></i></div>
     <button id="ptt-stop" class="mini" data-testid="ptt-stop" title="Finish and transcribe">Stop</button>
   </div>
