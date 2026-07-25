@@ -2,6 +2,10 @@
 Description=KB indexer (markdown -> Postgres, disposable index)
 After=network.target postgresql.service
 
+OnFailure=kb-alert@%n.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=kbindexer

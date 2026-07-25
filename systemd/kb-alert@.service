@@ -1,0 +1,8 @@
+[Unit]
+Description=Notify the operator that %i failed (via kb-alert.sh -> ntfy)
+
+[Service]
+Type=oneshot
+# %i is the failed unit's name (from OnFailure=kb-alert@%n). Include the last
+# journal lines so the phone notification is already a diagnosis, not a riddle.
+ExecStart=/bin/bash -c '/opt/kb-platform/scripts/kb-alert.sh "%i FAILED" "$(journalctl -u %i -n 15 --no-pager -o cat | tail -c 1500)" max skull'

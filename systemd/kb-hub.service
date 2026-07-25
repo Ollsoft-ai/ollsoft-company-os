@@ -2,6 +2,10 @@
 Description=KB hub (PAM auth + per-user backend spawner + reverse proxy)
 After=network.target kb-syncd.service
 
+OnFailure=kb-alert@%n.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=root

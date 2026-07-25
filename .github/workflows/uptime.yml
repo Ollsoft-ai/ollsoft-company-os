@@ -1,0 +1,52 @@
+name: uptime probe
+
+# Layer-1 monitoring: an external check that survives the box itself dying.
+# Everything on the VM (heartbeat, OnFailure hooks) dies with the VM — this
+# runs on GitHub's infrastructure and alerts the operator's phone via ntfy.
+#
+# The public hostname and ntfy topic live in repository VARIABLES/SECRETS, not
+# in this file, so the repo can go public without leaking either:
+#   vars.KB_PUBLIC_URL     e.g. https://os.example.org  (probe skips if unset)
+#   secrets.KB_NTFY_TOPIC  the alert topic (treat as a password)
+#
+# GitHub schedules are best-effort (5-min minimum, often minutes late) — this
+# is the smoke detector for "the whole box is gone", not a latency monitor.
+# Known limitation: repeats while down (stateless), no recovery message.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Probe the public edge
+        run: |
+          URL='${{ vars.KB_PUBLIC_URL }}'
+          [ -n "$URL" ] || { echo "KB_PUBLIC_URL not set — probe disabled"; exit 0; }
+          # Any 2xx/3xx proves edge + tunnel + origin chain is alive. The
+          # Access login redirect is the expected healthy answer for an
+          # unauthenticated probe. Two attempts 20s apart: one blip is not an
+          # outage, and a stateless prober cannot debounce any other way.
+          for attempt in 1 2; do
+            code=$(curl -m 20 -s -o /dev/null -w '%{http_code}' -I "$URL" || echo 000)
+            case "$code" in
+              2*|3*) echo "alive (HTTP $code)"; exit 0 ;;
+            esac
+            echo "attempt $attempt: HTTP $code"
+            [ "$attempt" = 1 ] && sleep 20
+          done
+          TOPIC='${{ secrets.KB_NTFY_TOPIC }}'
+          if [ -n "$TOPIC" ]; then
+            curl -m 10 -s -o /dev/null \
+              -H "Title: Company OS UNREACHABLE from the internet" \
+              -H "Priority: max" -H "Tags: skull,globe_with_meridians" \
+              -d "External probe got HTTP $code twice. Box down, tunnel dead, or edge broken. On-box monitoring cannot see this — check the VM." \
+              "https://ntfy.sh/$TOPIC" || true
+          fi
+          exit 1

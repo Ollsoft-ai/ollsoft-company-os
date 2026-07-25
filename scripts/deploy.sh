@@ -51,12 +51,15 @@ chmod -R a+rX "$PREFIX"
 
 echo "== systemd units =="
 cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
-for u in "$SRC"/systemd/kb-*.service; do
+for u in "$SRC"/systemd/kb-*.service "$SRC"/systemd/kb-*.timer; do
+  [ -e "$u" ] || continue
   sed -e "s|/opt/kb-venv|$VENV|g" -e "s|/opt/kb-platform|$PREFIX|g" \
       "$u" > "/etc/systemd/system/$(basename "$u")"
 done
 systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
 systemctl daemon-reload
+# the health check is monitoring, not a workload — always on, never restarted
+systemctl enable --now kb-heartbeat.timer 2>/dev/null || true
 
 if [ "$RESTART" -eq 1 ]; then
   echo "== restart =="

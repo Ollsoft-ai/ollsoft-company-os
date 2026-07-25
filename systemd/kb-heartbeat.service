@@ -1,0 +1,8 @@
+[Unit]
+Description=KB functional health check (outcomes, not processes)
+After=network.target
+
+[Service]
+Type=oneshot
+StateDirectory=kb-monitor
+ExecStart=/opt/kb-platform/scripts/kb-heartbeat.sh

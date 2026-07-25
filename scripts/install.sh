@@ -308,6 +308,10 @@ KB_ADMIN_GROUP=$ADMIN_GROUP
 # Accounts the admin UI refuses to modify or delete, comma-separated. The
 # founding admin is listed so a second admin cannot lock them out.
 KB_PROTECTED_USERS=$PROTECTED_LIST
+# ntfy topic for monitoring alerts (kb-heartbeat + OnFailure hooks). Empty =
+# monitoring stays silent. Topics are public — pick an unguessable name and
+# subscribe to it in the ntfy app.
+KB_NTFY_TOPIC=
 ENV
 chmod 644 /etc/kb/kb.env
 
@@ -323,12 +327,17 @@ for u in "$SRC"/systemd/kb-*.service; do
       -e "s|@@VENV@@|$VENV|g"          -e "s|@@PREFIX@@|$PREFIX|g" \
       "$u" > "/etc/systemd/system/$(basename "$u")"
 done
+for u in "$SRC"/systemd/kb-*.timer; do
+  [ -e "$u" ] || continue
+  cp "$u" "/etc/systemd/system/$(basename "$u")"
+done
 systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
 systemctl daemon-reload
 
 FAILED=0
 if [ "$DO_START" -eq 1 ]; then
   systemctl enable kb-syncd kb-hub kb-indexer >/dev/null 2>&1
+  systemctl enable --now kb-heartbeat.timer >/dev/null 2>&1 || true
   # restart, not just start: on an upgrade the units are already running and
   # would otherwise keep executing the previous code and environment.
   systemctl restart kb-syncd kb-hub kb-indexer

@@ -2,6 +2,10 @@
 Description=KB sync daemon (CRDT relay + filesystem merge)
 After=network.target
 
+OnFailure=kb-alert@%n.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=root
