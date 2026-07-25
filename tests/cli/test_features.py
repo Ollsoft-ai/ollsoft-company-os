@@ -56,9 +56,13 @@ def test_checkbox_roundtrip():
     marker = "- [x]" if expect else "- [ ]"
     assert disk[target["line"] - 1].strip().startswith(marker)
 
-    # Index reflects the new state within ~3s (indexer reparsed the file).
+    # The index eventually reflects the new state (the indexer reparses the
+    # file). The indexer's main loop sleeps 5s between passes and a pass itself
+    # takes longer under full-suite load or on slow CI hardware, so allow ~40s
+    # — several cycles. What is being asserted is that the toggle round-trips,
+    # not that it does so within any particular deadline.
     ok = False
-    for _ in range(24):    # generous: the indexer lags under full-suite load
+    for _ in range(80):
         t2 = kry.get("/api/tasks").json()["tasks"]
         m = next((t for t in t2 if t["path"] == target["path"] and t["line"] == target["line"]), None)
         if m and m["checked"] is expect:
