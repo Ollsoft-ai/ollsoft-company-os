@@ -27,7 +27,7 @@ SERVER="${KB_NTFY_SERVER:-https://ntfy.sh}"
 
 # 3 attempts: an alert that matters is worth retrying, but a downed network
 # must not wedge the caller (heartbeat runs under a timer with its own budget).
-for i in 1 2 3; do
+for _attempt in 1 2 3; do
   curl -m 10 -s -o /dev/null \
        -H "Title: $TITLE" -H "Priority: $PRIO" -H "Tags: $TAGS" \
        -d "$MSG" "$SERVER/$TOPIC" && exit 0
