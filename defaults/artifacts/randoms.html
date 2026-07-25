@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #16161e; color: #e8e8f2; padding: 1.2rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .2rem; }
+  .sub { color: #9a9ab2; font-size: .82rem; margin-bottom: 1rem; }
+  .sub b { color: #b7acff; font-family: ui-monospace, monospace; }
+  .err { background: #3a1f28; color: #ff9db0; padding: .6rem .8rem; border-radius: 8px; font-size: .85rem;
+    font-family: ui-monospace, monospace; }
+  table { border-collapse: collapse; width: 100%; max-width: 560px; font-size: .9rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #2c2c39; }
+  th { color: #9a9ab2; font-weight: 600; font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; }
+  td.num { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  input.val { width: 4.5rem; background: #23232f; color: #e8e8f2; border: 1px solid #34343f; border-radius: 6px;
+    padding: .2rem .4rem; font-family: ui-monospace, monospace; }
+  button.del { background: transparent; border: 1px solid #4a2a33; color: #ff9db0; border-radius: 6px;
+    cursor: pointer; padding: .15rem .5rem; }
+  button.del:hover { background: #3a1f28; }
+  .live { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: #3ecf8e;
+    margin-right: .4rem; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+</style>
+</head>
+<body>
+  <h1><span class="live"></span>Live random readings</h1>
+  <div class="sub">Auto-refreshing every 2s · this artifact runs its queries as <b id="who">…</b></div>
+  <div id="content"></div>
+
+<script>
+  // --- bridge SDK: the artifact never touches a DB directly; it asks the host to
+  // run SQL as the viewer. All access control is Postgres GRANTs behind this line.
+  let _id = 0; const _pending = {};
+  window.addEventListener("message", (ev) => {
+    const m = ev.data || {};
+    if (m.type !== "kb-result") return;
+    const p = _pending[m.id]; if (!p) return;
+    delete _pending[m.id]; p(m);
+  });
+  function kbQuery(sql, params = []) {
+    return new Promise((res) => {
+      const id = ++_id; _pending[id] = res;
+      parent.postMessage({ type: "kb-query", id, sql, params }, "*");
+    });
+  }
+
+  const TABLE = "u_alice.readings";
+  const content = document.getElementById("content");
+
+  kbQuery("SELECT current_user").then((r) => {
+    if (r.rows && r.rows[0]) document.getElementById("who").textContent = r.rows[0][0];
+  });
+
+  async function refresh() {
+    const r = await kbQuery(
+      `SELECT id, value, to_char(created_at,'HH24:MI:SS') AS at FROM ${TABLE} ORDER BY id DESC LIMIT 15`);
+    if (r.error) { content.innerHTML = `<div class="err">query denied: ${r.error}</div>`; return; }
+    if (!r.rows.length) { content.innerHTML = '<div class="sub">no readings yet…</div>'; return; }
+    const rows = r.rows.map((row) => {
+      const [id, value, at] = row;
+      return `<tr data-id="${id}">
+        <td class="num">${id}</td>
+        <td><input class="val" type="number" value="${value}" /></td>
+        <td class="num">${at}</td>
+        <td><button class="del">delete</button></td></tr>`;
+    }).join("");
+    content.innerHTML = `<table><thead><tr><th>#</th><th>value (editable)</th><th>time</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    content.querySelectorAll("input.val").forEach((inp) => {
+      inp.addEventListener("change", async () => {
+        const id = inp.closest("tr").dataset.id;
+        const res = await kbQuery(`UPDATE ${TABLE} SET value=%s WHERE id=%s`, [Number(inp.value), Number(id)]);
+        if (res.error) alert("edit denied: " + res.error);
+      });
+    });
+    content.querySelectorAll("button.del").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.closest("tr").dataset.id;
+        const res = await kbQuery(`DELETE FROM ${TABLE} WHERE id=%s`, [Number(id)]);
+        if (res.error) alert("delete denied: " + res.error);
+        else refresh();
+      });
+    });
+  }
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>

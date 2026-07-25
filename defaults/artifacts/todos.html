@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #16161e; color: #e8e8f2;
+    padding: 1rem 1.2rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .1rem; }
+  .sub { color: #9a9ab2; font-size: .8rem; margin-bottom: .9rem; }
+  .sub b { color: #b7acff; font-family: ui-monospace, monospace; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  .tabs { display: inline-flex; border: 1px solid #34343f; border-radius: 8px; overflow: hidden; }
+  .tabs button { background: #1c1c26; color: #cfcfe0; border: 0; padding: .35rem .8rem; cursor: pointer; font-size: .85rem; }
+  .tabs button.on { background: #6a54e6; color: #fff; font-weight: 600; }
+  select, input[type=text] { background: #23232f; color: #e8e8f2; border: 1px solid #34343f; border-radius: 8px;
+    padding: .35rem .55rem; font-size: .85rem; }
+  label.chk { font-size: .82rem; color: #9a9ab2; display: inline-flex; gap: .3rem; align-items: center; }
+  .count { margin-left: auto; color: #6d6d84; font-size: .8rem; }
+  .group { margin-bottom: 1rem; }
+  .group h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: #8a8aa0;
+    margin: .6rem 0 .3rem; font-family: ui-monospace, monospace; }
+  .task { display: flex; gap: .55rem; align-items: baseline; padding: .3rem .3rem; border-bottom: 1px solid #23232f; }
+  .task input { margin: 0; margin-top: .15rem; }
+  .task .body { flex: 1; min-width: 0; }
+  .task .txt.done { text-decoration: line-through; color: #6d6d84; }
+  .task .loc { color: #6d6d84; font-size: .72rem; font-family: ui-monospace, monospace; }
+  .mention { color: #7ee0b0; font-weight: 600; }
+  .mention.me { background: #3ecf8e2a; border-radius: 4px; padding: 0 .2rem; }
+  .tag { color: #e0a34a; }
+  .empty { color: #6d6d84; padding: 1rem 0; }
+  .err { background: #3a1f28; color: #ff9db0; padding: .6rem .8rem; border-radius: 8px; font-size: .85rem; }
+</style>
+</head>
+<body>
+  <h1>To-dos</h1>
+  <div class="sub">Across everything you can see · queried as <b id="who">…</b> · row-level security applies</div>
+  <div class="bar">
+    <span class="tabs">
+      <button id="tab-mine" class="on">Assigned to me</button>
+      <button id="tab-all">All visible</button>
+    </span>
+    <select id="folder"><option value="">All folders</option></select>
+    <input id="q" type="text" placeholder="filter text…" size="14">
+    <label class="chk"><input type="checkbox" id="showdone"> show done</label>
+    <span class="count" id="count"></span>
+  </div>
+  <div id="content"><div class="empty">loading…</div></div>
+
+<script>
+  // --- bridge SDK ---
+  let _id = 0; const _pending = {};
+  window.addEventListener("message", (ev) => {
+    const m = ev.data || {};
+    if (m.type === "kb-result" && _pending[m.id]) { _pending[m.id](m); delete _pending[m.id]; }
+  });
+  const kbQuery = (sql, params = []) => new Promise((res) => {
+    const id = ++_id; _pending[id] = res; parent.postMessage({ type: "kb-query", id, sql, params }, "*"); });
+  const kbToggle = (path, line) => new Promise((res) => {
+    const id = ++_id; _pending[id] = res; parent.postMessage({ type: "kb-toggle", id, path, line }, "*"); });
+
+  const state = { me: "", view: "mine", folder: "", q: "", showdone: false, rows: [] };
+  const el = (id) => document.getElementById(id);
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function decorate(text) {
+    return esc(text)
+      .replace(/@([A-Za-z0-9_][A-Za-z0-9_-]*)/g,
+        (m, u) => `<span class="mention${u === state.me ? " me" : ""}">@${u}</span>`)
+      .replace(/#([A-Za-z0-9_][A-Za-z0-9_-]*)/g, (m, t) => `<span class="tag">#${t}</span>`);
+  }
+
+  async function load() {
+    const r = await kbQuery(
+      "SELECT file_path, line, checked, text, assignees FROM kb.blocks WHERE kind='task' " +
+      "ORDER BY checked, file_path, line");
+    const content = el("content");
+    if (r.error) { content.innerHTML = `<div class="err">${r.error}</div>`; return; }
+    state.rows = r.rows.map(([path, line, checked, text, assignees]) =>
+      ({ path, line, checked, text, assignees: assignees || [] }));
+    buildFolderOptions();
+    render();
+  }
+
+  function buildFolderOptions() {
+    const set = new Set();
+    for (const t of state.rows) {
+      const parts = t.path.split("/"); parts.pop();
+      for (let i = 1; i <= parts.length; i++) set.add(parts.slice(0, i).join("/"));
+    }
+    const sel = el("folder"); const cur = sel.value;
+    sel.innerHTML = '<option value="">All folders</option>' +
+      [...set].sort().map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+    sel.value = cur;
+  }
+
+  function visible() {
+    return state.rows.filter((t) => {
+      if (!state.showdone && t.checked) return false;
+      if (state.view === "mine" && !t.assignees.includes(state.me)) return false;
+      if (state.folder && !(t.path === state.folder || t.path.startsWith(state.folder + "/"))) return false;
+      if (state.q && !t.text.toLowerCase().includes(state.q.toLowerCase())) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    const rows = visible();
+    el("count").textContent = rows.length + " shown";
+    const content = el("content");
+    if (!rows.length) { content.innerHTML = '<div class="empty">nothing here.</div>'; return; }
+    const groups = {};
+    for (const t of rows) { const d = t.path.split("/").slice(0, -1).join("/") || "/"; (groups[d] ||= []).push(t); }
+    content.innerHTML = "";
+    for (const dir of Object.keys(groups).sort()) {
+      const g = document.createElement("div"); g.className = "group";
+      g.innerHTML = `<h2>${esc(dir)}</h2>`;
+      for (const t of groups[dir]) {
+        const row = document.createElement("div"); row.className = "task";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = t.checked;
+        cb.addEventListener("change", () => toggle(t, cb));
+        const body = document.createElement("div"); body.className = "body";
+        body.innerHTML = `<span class="txt ${t.checked ? "done" : ""}">${decorate(t.text)}</span>` +
+          ` <span class="loc">${esc(t.path)}:${t.line}</span>`;
+        row.append(cb, body); g.appendChild(row);
+      }
+      content.appendChild(g);
+    }
+  }
+
+  async function toggle(t, cb) {
+    const res = await kbToggle(t.path, t.line);
+    if (res.error) { alert("cannot toggle: " + res.error); cb.checked = t.checked; return; }
+    t.checked = res.checked;                 // optimistic local update
+    setTimeout(load, 1400);                  // reconcile once the index catches up
+    render();
+  }
+
+  el("tab-mine").onclick = () => { state.view = "mine"; el("tab-mine").classList.add("on"); el("tab-all").classList.remove("on"); render(); };
+  el("tab-all").onclick = () => { state.view = "all"; el("tab-all").classList.add("on"); el("tab-mine").classList.remove("on"); render(); };
+  el("folder").onchange = (e) => { state.folder = e.target.value; render(); };
+  el("q").oninput = (e) => { state.q = e.target.value; render(); };
+  el("showdone").onchange = (e) => { state.showdone = e.target.checked; render(); };
+
+  kbQuery("SELECT current_user").then((r) => {
+    if (r.rows && r.rows[0]) { state.me = r.rows[0][0]; el("who").textContent = state.me; }
+    load();
+  });
+</script>
+</body>
+</html>

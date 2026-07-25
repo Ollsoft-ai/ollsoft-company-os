@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8">
+<pre id="out">running…</pre>
+<script>
+  let _id=0,_p={};
+  onmessage=e=>{const m=e.data||{};if(m.type==="kb-result"&&_p[m.id]){_p[m.id](m);delete _p[m.id];}};
+  const _send=(msg)=>new Promise(r=>{const id=++_id;_p[id]=r;parent.postMessage({id,...msg},"*");});
+  const kbRead=(path)=>_send({type:"kb-read",path});
+  const kbWrite=(path,content)=>_send({type:"kb-write",path,content});
+  (async()=>{
+    const path="company/dashboards/io_written.md";
+    const w=await kbWrite(path,"# artifact write proof\nvalue=IO_PROOF_42\n");
+    const rd=await kbRead(path);
+    const ok = rd.content && rd.content.includes("IO_PROOF_42");
+    document.getElementById("out").textContent="write_ok="+(!!w.ok)+" read_proof="+(!!ok);
+  })();
+</script>

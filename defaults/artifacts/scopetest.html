@@ -1,0 +1,7 @@
+<!doctype html><meta charset=utf-8><pre id=o>run</pre>
+<script>
+ let _i=0,_p={};onmessage=e=>{const m=e.data||{};if(m.type==="kb-result"&&_p[m.id]){_p[m.id](m);delete _p[m.id];}};
+ const kbRead=(path)=>new Promise(r=>{const id=++_i;_p[id]=r;parent.postMessage({id,type:"kb-read",path},"*");});
+ (async()=>{const r=await kbRead("users/alice/private.md");
+  document.getElementById("o").textContent="err="+(r.error||"NONE")+" leaked="+(r.content?"YES":"no");})();
+</script>

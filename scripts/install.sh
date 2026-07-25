@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Company OS installer.
+#
+# Stands the platform up on a fresh Ubuntu 24.04 host: system packages, the
+# service account, the repo skeleton with kernel-enforced permissions, the
+# Postgres cluster objects, the Python venv, the frontend bundle, and the
+# systemd units. Creates ONE admin account — yours. No demo content; run
+# scripts/seed-demo.sh separately if you want the sample company.
+#
+# Idempotent: safe to re-run to upgrade an existing install.
+#
+# Usage:
+#   sudo bash scripts/install.sh --admin <username> [options]
+#
+# Options:
+#   --admin <user>      Admin account to create (or adopt, if it exists).
+#   --admin-pass <pw>   Password for it. Default: generated and printed once.
+#   --repo <path>       Knowledgebase location.        Default /srv/kb
+#   --prefix <path>     Where code is deployed.        Default /opt/kb-platform
+#   --port <n>          Hub listen port on 127.0.0.1.  Default 8300
+#   --admin-group <g>   OS group granting admin rights. Default sudo
+#   --no-packages       Skip apt-get (deps already installed).
+#   --no-start          Install but don't enable/start the services.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+ADMIN_USER=""; ADMIN_PASS=""; REPO=/srv/kb; PREFIX=/opt/kb-platform
+PORT=8300; ADMIN_GROUP=sudo; DO_PACKAGES=1; DO_START=1
+VENV="${PREFIX%/*}/kb-venv"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Re-running an existing install must not silently move the knowledgebase or
+# change the port back to defaults. Adopt whatever the last install chose;
+# explicit flags below still win.
+if [ -f /etc/kb/kb.env ]; then
+  # shellcheck disable=SC1091
+  . /etc/kb/kb.env
+  REPO="${KB_REPO:-$REPO}"
+  PORT="${KB_HUB_PORT:-$PORT}"
+  PREFIX="${KB_PLATFORM_ROOT:-$PREFIX}"
+  ADMIN_GROUP="${KB_ADMIN_GROUP:-$ADMIN_GROUP}"
+  VENV="$(dirname "$(dirname "${KB_VENV_PY:-$VENV/bin/python}")")"
+  PRIOR_PROTECTED="${KB_PROTECTED_USERS:-}"
+fi
+PRIOR_PROTECTED="${PRIOR_PROTECTED:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --admin)        ADMIN_USER="${2:?}"; shift 2 ;;
+    --admin-pass)   ADMIN_PASS="${2:?}"; shift 2 ;;
+    --repo)         REPO="${2:?}"; shift 2 ;;
+    --prefix)       PREFIX="${2:?}"; VENV="${PREFIX%/*}/kb-venv"; shift 2 ;;
+    --port)         PORT="${2:?}"; shift 2 ;;
+    --admin-group)  ADMIN_GROUP="${2:?}"; shift 2 ;;
+    --no-packages)  DO_PACKAGES=0; shift ;;
+    --no-start)     DO_START=0; shift ;;
+    -h|--help)      sed -n '2,/^# ---/p' "$0" | sed '$d'; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+say() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+
+[ "$(id -u)" -eq 0 ] || die "run as root (sudo bash scripts/install.sh ...)"
+[ -n "$ADMIN_USER" ] || die "--admin <username> is required"
+[[ "$ADMIN_USER" =~ ^[a-z][a-z0-9_]{1,30}$ ]] || die "invalid admin username '$ADMIN_USER'"
+case "$ADMIN_USER" in
+  root|postgres|kbindexer|nobody|daemon|bin|sys)
+    die "'$ADMIN_USER' is a system account — pick a human username" ;;
+esac
+if id "$ADMIN_USER" &>/dev/null && [ "$(id -u "$ADMIN_USER")" -lt 1000 ]; then
+  die "'$ADMIN_USER' is a system account (uid < 1000) — pick a human username"
+fi
+
+# ---------------------------------------------------------------------------
+say "preflight"
+# ---------------------------------------------------------------------------
+. /etc/os-release 2>/dev/null || true
+[ "${ID:-}" = "ubuntu" ] || echo "  WARNING: tested on Ubuntu 24.04; found '${PRETTY_NAME:-unknown}'"
+[ -d /run/systemd/system ] || die "systemd is not running. This platform needs real systemd, PAM,
+       and per-user processes — it cannot run in an unprivileged container.
+       Use a VM or bare metal."
+command -v runuser >/dev/null || die "runuser not found (package: util-linux)"
+
+# ---------------------------------------------------------------------------
+if [ "$DO_PACKAGES" -eq 1 ]; then
+say "system packages"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq \
+  postgresql postgresql-contrib \
+  python3-pip python3-venv python3-dev \
+  acl inotify-tools build-essential libpam0g-dev \
+  nodejs npm git curl ca-certificates rsync
+# pgvector package name tracks the server major version
+PGMAJ="$(psql --version | grep -oE '[0-9]+' | head -1)"
+apt-get install -y -qq "postgresql-${PGMAJ}-pgvector" \
+  || die "no pgvector package for PostgreSQL ${PGMAJ}. Install it manually, then re-run with --no-packages."
+fi
+
+command -v psql >/dev/null || die "postgres client not found"
+systemctl is-active --quiet postgresql || systemctl start postgresql
+
+# ---------------------------------------------------------------------------
+say "groups and service account"
+# ---------------------------------------------------------------------------
+groupadd -f kb-users
+if ! id kbindexer &>/dev/null; then
+  useradd -r -m -d /var/lib/kbindexer -s /usr/sbin/nologin kbindexer
+fi
+usermod -aG kb-users kbindexer
+getent group "$ADMIN_GROUP" >/dev/null || die "admin group '$ADMIN_GROUP' does not exist"
+
+# ---------------------------------------------------------------------------
+say "admin account: $ADMIN_USER"
+# ---------------------------------------------------------------------------
+CREDS=/root/company-os-admin.txt
+if id "$ADMIN_USER" &>/dev/null; then
+  echo "  account exists — adopting it (password unchanged)"
+else
+  useradd -m -s /bin/bash "$ADMIN_USER"
+  [ -n "$ADMIN_PASS" ] || { ADMIN_PASS="$(openssl rand -base64 12)"; }
+  echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
+  ( umask 077; printf '%s %s\n' "$ADMIN_USER" "$ADMIN_PASS" > "$CREDS" ); chmod 600 "$CREDS"
+  echo "  created; password written to $CREDS"
+fi
+usermod -aG kb-users,"$ADMIN_GROUP" "$ADMIN_USER"
+
+# ---------------------------------------------------------------------------
+say "knowledgebase repo: $REPO"
+# ---------------------------------------------------------------------------
+mkdir -p "$REPO"
+if ! git -C "$REPO" rev-parse --git-dir &>/dev/null; then
+  git -C "$REPO" init -q
+  git -C "$REPO" config user.name  kb-syncd
+  git -C "$REPO" config user.email kb-syncd@localhost
+fi
+# SECURITY: .git is root-only, always — its objects hold every committed version
+# of every file, so group access would bypass file permissions (and Postgres RLS)
+# for all private content ever committed. Re-asserted here on every run because
+# an earlier install may have left it group-readable.
+git -C "$REPO" config --unset core.sharedRepository 2>/dev/null || true
+chmod 700 "$REPO/.git"
+
+if [ ! -f "$REPO/.gitignore" ]; then
+  cat > "$REPO/.gitignore" <<'IGN'
+# History covers what people write: documents (.md), artifacts (.html), and
+# the platform's auditable config (.claude/*.json). Everything else — uploads,
+# binaries, machinery — stays out of version history.
+*
+!*/
+!*.md
+!*.html
+!.gitignore
+!.claude/*.json
+# secrets NEVER enter history (belt; the wall is in root-owned syncd code)
+**/_secrets/**
+IGN
+  chown root:kb-users "$REPO/.gitignore"; chmod 644 "$REPO/.gitignore"
+fi
+
+mkdir -p "$REPO/company" "$REPO/projects" "$REPO/users"
+# Shared containers: setgid so children inherit the group.
+chgrp kb-users "$REPO"          ; chmod 2775 "$REPO"
+chgrp kb-users "$REPO/projects" ; chmod 2775 "$REPO/projects"
+chgrp kb-users "$REPO/users"    ; chmod 2775 "$REPO/users"
+# company/: everyone in kb-users reads+writes. The default ACL makes new files
+# group-writable regardless of the writer's umask, so vim, agents and the web
+# app all converge on the same permissions.
+chgrp kb-users "$REPO/company"  ; chmod 2775 "$REPO/company"
+setfacl -k "$REPO/company" 2>/dev/null || true
+setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/company"
+# Sticky bit: group members create freely at the top level but may only delete
+# what they own — protects the root-owned .gitignore.
+chmod +t "$REPO"
+
+install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "$REPO/users/$ADMIN_USER"
+
+# --- agent configuration and skills ---------------------------------------
+# .claude/ is root-owned and world-readable: agents read it, only admins write
+# it. The hub writes egress.json through a dir_fd on this directory, so it must
+# exist before the platform starts.
+install -d -m 0755 -o root -g kb-users "$REPO/.claude"
+for f in CLAUDE.md egress.json launchers.json; do
+  # never clobber a live system's edits
+  [ -e "$REPO/.claude/$f" ] || install -m 0644 -o root -g kb-users "$SRC/defaults/$f" "$REPO/.claude/$f"
+done
+# The To-dos aggregator is a platform default, not demo content: the docs
+# present it as a shipped feature, so install it if the operator has not
+# replaced it with their own.
+if [ ! -e "$REPO/company/todos.html" ]; then
+  install -m 0664 -o root -g kb-users "$SRC/defaults/artifacts/todos.html" \
+          "$REPO/company/todos.html"
+fi
+
+# Skills DO get refreshed every run — they document the platform and must track
+# the code, not drift from it.
+install -d -m 0755 -o root -g kb-users "$REPO/.claude/skills"
+for d in "$SRC"/company-skills/*/; do
+  name="$(basename "$d")"
+  install -d -m 0755 -o root -g kb-users "$REPO/.claude/skills/$name"
+  install -m 0644 -o root -g kb-users "$d/SKILL.md" "$REPO/.claude/skills/$name/SKILL.md"
+done
+
+# ---------------------------------------------------------------------------
+say "python venv"
+# ---------------------------------------------------------------------------
+if [ ! -x "$VENV/bin/python" ]; then
+  python3 -m venv "$VENV"
+fi
+"$VENV/bin/python" -m pip install --upgrade -q pip
+"$VENV/bin/pip" install -q -r "$SRC/requirements.txt"
+
+# ---------------------------------------------------------------------------
+say "frontend bundle"
+# ---------------------------------------------------------------------------
+if command -v npm >/dev/null && [ -d "$SRC/frontend/src" ]; then
+  # Always rebuild when we can: on an upgrade the checked-in bundle (if any) is
+  # by definition older than the source that was just pulled.
+  ( cd "$SRC/frontend" && npm install --silent && node build.mjs )
+elif [ -n "$(ls -A "$SRC/frontend/static" 2>/dev/null)" ]; then
+  echo "  npm unavailable — using the pre-built bundle in frontend/static"
+else
+  die "npm not found and no pre-built bundle present; install nodejs/npm and re-run"
+fi
+[ -f "$SRC/frontend/static/app.html" ] || die "frontend build produced no app.html — check frontend/assets/"
+
+# ---------------------------------------------------------------------------
+say "deploy code to $PREFIX"
+# ---------------------------------------------------------------------------
+mkdir -p "$PREFIX/frontend"
+rsync -a --delete "$SRC/kb_platform" "$PREFIX/"
+rsync -a --delete "$SRC/scripts"     "$PREFIX/"
+rsync -a --delete "$SRC/frontend/static" "$PREFIX/frontend/"
+cp "$SRC/requirements.txt" "$PREFIX/" 2>/dev/null || true
+# World-readable + executable: per-user backends run this code as their own uid.
+chown -R root:root "$PREFIX" "$VENV"
+chmod -R a+rX "$PREFIX" "$VENV"
+
+# ---------------------------------------------------------------------------
+say "postgres"
+# ---------------------------------------------------------------------------
+runuser -u postgres -- psql -v ON_ERROR_STOP=1 <<SQL
+DO \$\$
+BEGIN
+  -- Group role mirroring the kb-users OS group. Every human joins it, so a
+  -- table shared with "the whole company" needs ONE grant, not one per person
+  -- (and new hires inherit it). The hub adds new accounts on creation.
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='kb_users')  THEN CREATE ROLE kb_users NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='kbindexer') THEN CREATE ROLE kbindexer LOGIN;  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='$ADMIN_USER') THEN CREATE ROLE "$ADMIN_USER" LOGIN; END IF;
+  -- kbindexer is deliberately NOT a member: it indexes markdown and has no
+  -- business reading users' application data.
+  GRANT kb_users TO "$ADMIN_USER";
+END \$\$;
+SQL
+runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='kb'" | grep -q 1 \
+  || runuser -u postgres -- createdb -O kbindexer kb
+runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+runuser -u kbindexer -- psql -d kb -v ON_ERROR_STOP=1 < "$SRC/scripts/schema.sql"
+# Personal schema + search_path for the admin (the hub does this for later users).
+runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 <<SQL
+CREATE SCHEMA IF NOT EXISTS "u_$ADMIN_USER" AUTHORIZATION "$ADMIN_USER";
+ALTER ROLE "$ADMIN_USER" SET search_path = "u_$ADMIN_USER", kb, public;
+SQL
+
+# ---------------------------------------------------------------------------
+say "kb-history CLI"
+# ---------------------------------------------------------------------------
+# The documented way for a user to read version history: the socket checks the
+# caller's identity via SO_PEERCRED, so this needs no privileges of its own.
+cat > /usr/local/bin/kb-history <<WRAP
+#!/bin/sh
+# Company OS version-history CLI. Installed by scripts/install.sh.
+PYTHONPATH="$PREFIX" exec "$VENV/bin/python" -m kb_platform.vc_cli "\$@"
+WRAP
+chmod 0755 /usr/local/bin/kb-history
+
+# ---------------------------------------------------------------------------
+say "runtime config and directories"
+# ---------------------------------------------------------------------------
+install -d -m 0755 /run/kb /run/kb/users /etc/kb
+if [ ! -f /etc/kb/session.key ]; then
+  head -c 48 /dev/urandom | base64 | tr -d '\n' > /etc/kb/session.key
+  chmod 600 /etc/kb/session.key
+fi
+# Preserve any protected users a previous install (or the operator) added.
+PROTECTED_LIST="$ADMIN_USER"
+for u in ${PRIOR_PROTECTED//,/ }; do
+  case ",$PROTECTED_LIST," in *",$u,"*) ;; *) PROTECTED_LIST="$PROTECTED_LIST,$u" ;; esac
+done
+
+cat > /etc/kb/kb.env <<ENV
+# Company OS runtime configuration. Read by the systemd units.
+# Changing anything here requires: systemctl restart kb-hub kb-syncd kb-indexer
+KB_REPO=$REPO
+KB_RUN=/run/kb
+KB_ETC=/etc/kb
+KB_HUB_PORT=$PORT
+KB_PG_DB=kb
+KB_VENV_PY=$VENV/bin/python
+KB_PLATFORM_ROOT=$PREFIX
+PYTHONPATH=$PREFIX
+# OS group whose members are platform admins (sudo on Debian/Ubuntu, wheel on RHEL).
+KB_ADMIN_GROUP=$ADMIN_GROUP
+# Accounts the admin UI refuses to modify or delete, comma-separated. The
+# founding admin is listed so a second admin cannot lock them out.
+KB_PROTECTED_USERS=$PROTECTED_LIST
+ENV
+chmod 644 /etc/kb/kb.env
+
+# ---------------------------------------------------------------------------
+say "systemd units"
+# ---------------------------------------------------------------------------
+cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
+for u in "$SRC"/systemd/kb-*.service; do
+  # Point ExecStart/venv at the chosen prefix.
+  # Tokenise both defaults BEFORE expanding either, or a --prefix that contains
+  # the other default gets substituted twice (e.g. /opt/kb-platform/kb-venv).
+  sed -e "s|/opt/kb-venv|@@VENV@@|g"   -e "s|/opt/kb-platform|@@PREFIX@@|g" \
+      -e "s|@@VENV@@|$VENV|g"          -e "s|@@PREFIX@@|$PREFIX|g" \
+      "$u" > "/etc/systemd/system/$(basename "$u")"
+done
+systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
+systemctl daemon-reload
+
+FAILED=0
+if [ "$DO_START" -eq 1 ]; then
+  systemctl enable kb-syncd kb-hub kb-indexer >/dev/null 2>&1
+  # restart, not just start: on an upgrade the units are already running and
+  # would otherwise keep executing the previous code and environment.
+  systemctl restart kb-syncd kb-hub kb-indexer
+  sleep 3
+  for unit in kb-syncd kb-hub kb-indexer; do
+    st="$(systemctl is-active "$unit")"
+    printf '  %-12s %s\n' "$unit" "$st"
+    [ "$st" = "active" ] || FAILED=1
+  done
+  if [ "$FAILED" -ne 0 ]; then
+    echo
+    echo "ERROR: a service failed to start. Diagnose with:" >&2
+    echo "  journalctl -u kb-hub -u kb-syncd -u kb-indexer -n 50 --no-pager" >&2
+    exit 1
+  fi
+else
+  echo "  installed but not started (--no-start)"
+fi
+
+# ---------------------------------------------------------------------------
+say "done"
+# ---------------------------------------------------------------------------
+cat <<DONE
+Company OS is installed.
+
+  Web UI      http://127.0.0.1:$PORT   (localhost only — see docs/remote-access.md
+                                        before exposing it to a network)
+  Log in as   $ADMIN_USER
+$( [ -f "$CREDS" ] && echo "  Password    in $CREDS (delete it once you've logged in)" )
+  Repo        $REPO
+  Config      /etc/kb/kb.env
+  Logs        journalctl -u kb-hub -u kb-syncd -u kb-indexer -f
+
+Optional: populate a sample company to explore the permission model —
+  sudo bash scripts/seed-demo.sh
+DONE

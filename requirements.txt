@@ -1,0 +1,11 @@
+# Runtime dependencies. Installed into the platform venv by scripts/install.sh.
+aiohttp>=3.10,<4
+pycrdt-websocket>=0.15
+watchfiles>=0.24
+psycopg[binary]>=3.2
+diff-match-patch>=20241021
+python-pam>=2.0
+python-multipart>=0.0.12
+# python-pam imports `six` but does not declare it — pin it explicitly or PAM
+# auth fails at import time with ModuleNotFoundError.
+six>=1.16

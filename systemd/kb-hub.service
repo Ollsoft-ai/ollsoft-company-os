@@ -1,0 +1,20 @@
+[Unit]
+Description=KB hub (PAM auth + per-user backend spawner + reverse proxy)
+After=network.target kb-syncd.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/kb/kb.env
+Environment=PYTHONPATH=/opt/kb-platform
+Environment=KB_PLATFORM_ROOT=/opt/kb-platform
+Environment=KB_VENV_PY=/opt/kb-venv/bin/python
+Environment=KB_REPO=/srv/kb
+Environment=KB_RUN=/run/kb
+Environment=KB_ETC=/etc/kb
+ExecStart=/opt/kb-venv/bin/python -m kb_platform.hub
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

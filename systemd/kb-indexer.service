@@ -1,0 +1,18 @@
+[Unit]
+Description=KB indexer (markdown -> Postgres, disposable index)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=kbindexer
+EnvironmentFile=-/etc/kb/kb.env
+Environment=PYTHONPATH=/opt/kb-platform
+Environment=KB_REPO=/srv/kb
+Environment=KB_RUN=/run/kb
+Environment=KB_ETC=/etc/kb
+ExecStart=/opt/kb-venv/bin/python -m kb_platform.indexer
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

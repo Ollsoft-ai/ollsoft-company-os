@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The important job: prove scripts/install.sh works on a machine that is not
+  # the author's. GitHub's ubuntu-24.04 runners are full VMs with systemd, PAM
+  # and passwordless sudo, which is exactly what this platform needs — so the
+  # installer can be exercised for real rather than mocked.
+  install:
+    name: install + demo + tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity-check the environment the installer expects
+        run: |
+          test -d /run/systemd/system || { echo "no systemd on this runner"; exit 1; }
+          command -v runuser >/dev/null || { echo "no runuser"; exit 1; }
+
+      - name: Run the installer
+        run: sudo bash scripts/install.sh --admin ciadmin --admin-pass 'ci-test-password-01'
+
+      - name: Services came up
+        run: |
+          for s in kb-syncd kb-hub kb-indexer; do
+            systemctl is-active --quiet "$s" || {
+              echo "::error::$s is not active"; sudo journalctl -u "$s" -n 60 --no-pager; exit 1; }
+          done
+
+      - name: Hub answers on its port
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8300/ || true)
+            [ "$code" = "302" ] || [ "$code" = "200" ] && exit 0
+            sleep 1
+          done
+          echo "::error::hub never answered"; sudo journalctl -u kb-hub -n 80 --no-pager; exit 1
+
+      - name: Installer is idempotent (second run must succeed)
+        run: sudo bash scripts/install.sh --admin ciadmin
+
+      - name: Seed the demo company
+        run: sudo bash scripts/seed-demo.sh
+
+      - name: Permission model holds (carol must not reach the restricted project)
+        run: |
+          sudo -u carol test -r /srv/kb/projects/acme/plan.md \
+            && { echo "::error::carol can read a restricted file"; exit 1; }
+          sudo -u alice test -r /srv/kb/projects/acme/plan.md \
+            || { echo "::error::alice cannot read her own project file"; exit 1; }
+          rows=$(sudo -u carol psql -d kb -At -c \
+            "SELECT count(*) FROM kb.blocks WHERE file_path LIKE 'projects/acme/%'")
+          [ "$rows" = "0" ] || { echo "::error::RLS leaked $rows rows to carol"; exit 1; }
+
+      - name: Test dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade -q pip
+          .venv/bin/pip install -q -r requirements-dev.txt
+
+      - name: CLI test suite
+        run: .venv/bin/python -m pytest tests/cli -q --maxfail=5
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo journalctl -u kb-hub -u kb-syncd -u kb-indexer -n 200 --no-pager || true
+          sudo ls -la /srv/kb /srv/kb/.claude || true
+          sudo cat /etc/kb/kb.env || true
+
+      - name: Uninstall the demo cleanly
+        run: sudo bash scripts/seed-demo.sh --undo
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - run: shellcheck -S warning scripts/*.sh
+
+  python:
+    name: python syntax + import check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m compileall -q kb_platform tests

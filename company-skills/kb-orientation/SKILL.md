@@ -1,0 +1,47 @@
+---
+name: kb-orientation
+description: Read this FIRST whenever you (an AI agent) are working inside this company knowledgebase. Explains where you are, who you are, how the filesystem and permissions work, and the rules for editing docs. Load it at the start of any task in /srv/kb.
+---
+
+# Where you are
+
+You are an AI agent working inside a company knowledgebase platform. The knowledgebase is a **git repository at `/srv/kb`**, and **markdown files are the source of truth**. There is a web app, a live multiplayer editor, a Postgres database, a terminal, and an artifact system on top — but underneath, everything is just files you can read and write normally.
+
+# Who you are (this is the whole security model)
+
+**Your identity is your Linux user.** Run `whoami` to see it. Everything you do — every file you open, every database query, every script you schedule — happens as that user, and the **kernel enforces** what that user may touch. You cannot escape it, and you should not try. If an action is denied, it is denied because your user lacks access — that is correct behavior, not an obstacle to work around.
+
+This is good news: you can act freely and safely. The worst you can do is limited to what your human user could do themselves.
+
+# The layout
+
+```
+/srv/kb/
+├── company/          shared with everyone — the common knowledgebase
+├── projects/<name>/  restricted to that project's team (you may not see all of these)
+├── users/<you>/      your own private space (only you can read it)
+└── .git/             full version history (auto-committed for you)
+```
+
+Use ordinary tools — `ls`, `cat`, `grep`, `find`. **You will only ever see what you are allowed to see**; restricted folders simply won't list for you. Don't interpret a "permission denied" as something to bypass.
+
+# Editing documents
+
+Just edit the `.md` files with your normal file tools. You don't need any special API. When you save:
+- the change **syncs live** to anyone viewing that doc in the web app (it's a shared CRDT, so your edit merges with theirs — no clobbering),
+- and it is **auto-committed to git**.
+
+Write markdown normally. Tasks are `- [ ] todo` / `- [x] done`. Headings with `#`. Keep files human-readable.
+
+# What else you can do (see the other skills)
+
+- **`kb-database`** — query the shared index (respects permissions automatically) and create your own private tables.
+- **`kb-automation`** — write scripts and schedule them with cron, running as you.
+- **`kb-artifacts`** — build live, shareable dashboards that render in the web app.
+
+# Golden rules
+
+1. Work **through files** and your own user — never try to escalate privileges or read another user's private data.
+2. If something is denied, respect it. It reflects a real permission boundary.
+3. Persist anything important as **markdown in `/srv/kb`** — that's the backed-up source of truth. Databases and scratch files are convenience, not durability.
+4. Prefer small, reversible changes. Git has your history if you need to look back.

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <title>Ollsoft Company OS</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1784965855555" />
+  <link rel="stylesheet" href="/static/style.css?v=1784965855555" />
+  <link rel="stylesheet" href="/static/xterm.css?v=1784965855555" />
+</head>
+<body>
+  <header class="topbar">
+    <button id="nav-btn" class="navbtn" data-testid="nav-btn" aria-label="Toggle file tree" title="Files">☰</button>
+    <span class="brand">
+      <span class="brand-tile" aria-hidden="true"><img src="/static/logo-mark.svg?v=1784965855555" alt="" /></span>
+      <span class="brand-word"><img class="logo-word" src="/static/logo.svg?v=1784965855555" alt="Ollsoft" /><small>Company OS</small></span>
+    </span>
+    <span class="topbar-sep" aria-hidden="true"></span>
+    <span id="whoami" class="who" data-testid="whoami" title="Everything here runs as your OS account">…</span>
+    <input id="search" class="search" placeholder="Search files and contents…" data-testid="search"
+           readonly aria-label="Search files and contents" />
+    <span class="spacer"></span>
+    <button id="newdoc" data-testid="newdoc" aria-label="New document"><span class="btn-label">New doc</span></button>
+    <button id="more-btn" class="morebtn" data-testid="more-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
+    <nav id="topbar-actions" class="topbar-actions">
+      <span id="whoami-m" class="menu-id" aria-hidden="true"></span>
+      <div id="menu-launchers" class="menu-launchers" data-testid="menu-launchers"></div>
+      <button id="admin-btn" data-testid="admin-btn" hidden>Admin</button>
+      <button id="cron-btn" data-testid="cron-btn" title="Your scheduled jobs (crontab)">Cron</button>
+      <button id="toggleterm" data-testid="toggle-term" title="Toggle terminal panel (Ctrl+`)">Terminal</button>
+      <button id="keys-btn" data-testid="keys-btn" title="Keyboard shortcuts (?)">Shortcuts</button>
+      <a href="/logout" class="logout">Sign out</a>
+    </nav>
+  </header>
+  <div id="launchbar" class="launchbar" data-testid="launchbar"></div>
+  <div id="scrim" class="scrim" aria-hidden="true"></div>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="pane-title">Files
+        <button id="tree-fold" class="mini" data-testid="tree-fold" title="Collapse all folders">⊟</button>
+        <button id="hidden-toggle" class="mini" data-testid="hidden-toggle"
+          title="Show hidden files and folders (names starting with a dot)">.*</button>
+      </div>
+      <div id="tree" class="tree" data-testid="tree"></div>
+    </aside>
+    <section class="main-col">
+      <div id="tabbar" class="tabbar" data-testid="tabbar" hidden></div>
+      <section class="editor-wrap">
+        <div class="doc-title-bar">
+          <span id="doc-title" data-testid="doc-title">No document open</span>
+          <span class="doc-title-right">
+            <button id="doc-history" class="mini doc-history" data-testid="doc-history"
+              title="Version history — every save, who made it, and restore" hidden></button>
+            <span id="sync-badge" class="sync-badge" data-testid="sync-badge" hidden></span>
+            <span id="presence" class="presence" data-testid="presence" hidden></span>
+            <span id="modeswitch" class="modeswitch" data-testid="modeswitch" hidden>
+              <button id="mode-rich" data-testid="mode-rich" title="Rendered, editable view">Rich</button>
+              <button id="mode-source" data-testid="mode-source" title="Raw markdown source">Source</button>
+            </span>
+            <span id="access-badge" class="access-badge" data-testid="access-badge" hidden></span>
+          </span>
+        </div>
+        <div id="mdbar" class="mdbar" data-testid="mdbar" hidden>
+          <button data-md="h1" title="Heading 1" class="mdb-txt">H1</button>
+          <button data-md="h2" title="Heading 2" class="mdb-txt">H2</button>
+          <button data-md="h3" title="Heading 3" class="mdb-txt">H3</button>
+          <span class="mdbar-sep"></span>
+          <button data-md="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button data-md="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button data-md="strike" title="Strikethrough"><s>S</s></button>
+          <button data-md="code" title="Inline code" class="mdb-mono">&lt;/&gt;</button>
+          <span class="mdbar-sep"></span>
+          <button data-md="ul" title="Bulleted list"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
+          <button data-md="ol" title="Numbered list" class="mdb-txt">1.</button>
+          <button data-md="task" title="Task checkbox"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+          <button data-md="quote" title="Quote" class="mdb-txt">❝</button>
+          <span class="mdbar-sep"></span>
+          <button data-md="link" title="Link"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+          <button data-md="image" title="Insert image"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></button>
+          <button data-md="file" title="Attach file"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+          <button data-md="video" title="Insert video or audio"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="14" height="16" rx="2"/><path d="m16 12 6-4v8z"/></svg></button>
+          <button data-md="table" title="Insert table"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
+          <button data-md="hr" title="Divider" class="mdb-txt">―</button>
+          <input id="up-img" type="file" accept="image/*" multiple hidden />
+          <input id="up-video" type="file" accept="video/*,audio/*" multiple hidden />
+          <input id="up-file" type="file" multiple hidden />
+        </div>
+        <div id="editor" class="editor" data-testid="editor"></div>
+      </section>
+      <div id="terminal-panel" class="terminal-panel" hidden>
+        <div id="term-resizer" class="term-resizer" title="Drag to resize"></div>
+        <div class="term-header">
+          <div id="term-tabs" class="term-tabs" data-testid="term-tabs"></div>
+          <button id="term-new" class="mini" data-testid="term-new" title="New terminal">＋</button>
+          <span class="spacer"></span>
+          <span id="term-hint" class="muted small term-hint"></span>
+          <span class="muted small">shell as <span id="term-user"></span></span>
+          <button id="term-hide" class="mini" data-testid="term-hide" title="Hide panel — terminals keep running (Ctrl+`)">▾</button>
+        </div>
+        <div id="terminal" data-testid="terminal"></div>
+        <div id="term-keys" class="term-keys" data-testid="term-keys">
+          <button data-k="esc" title="Escape">esc</button>
+          <button data-k="tab" title="Tab">tab</button>
+          <button data-k="stab" title="Shift+Tab">⇧tab</button>
+          <button data-k="ctrl" id="tk-ctrl" title="Ctrl — arms the next key you type">ctrl</button>
+          <button data-k="cc" title="Interrupt (Ctrl+C)">^C</button>
+          <button data-k="left" title="Left">←</button>
+          <button data-k="down" title="Down">↓</button>
+          <button data-k="up" title="Up">↑</button>
+          <button data-k="right" title="Right">→</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <input id="up-tree" type="file" multiple hidden />
+  <script type="module" src="/static/app.js?v=1784965855555"></script>
+</body>
+</html>

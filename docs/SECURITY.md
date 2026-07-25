@@ -1,0 +1,109 @@
+# Security model
+
+Read this before exposing the platform beyond a trusted single box.
+
+## Trust boundaries — what enforces what
+
+| Boundary | Enforced by | Notes |
+|----------|-------------|-------|
+| A user can only read/write their own files | **the Linux kernel** | the per-user backend *is* the user (`runuser`); every open/write is kernel-checked |
+| Search / DB queries can't return files you can't read | **Postgres RLS** (`kb.can_read`) | mirrors full Unix path resolution (read on file + traverse on every ancestor dir + ACLs) |
+| A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component |
+| An artifact can't touch the app or exfiltrate | **opaque-origin iframe + CSP** | `sandbox="allow-scripts"` (no same-origin) + `connect-src 'none'` — the artifact itself never reaches the network |
+| An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.claude/egress.json` (root:kb-users, admin-writable). Requests are proxied by the hub, so the artifact never holds the credential |
+| An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write` limited to the artifact's own directory |
+| A session cookie can't be forged | **HMAC-SHA256** with a root-only key | `/etc/kb/session.key`, 12h TTL |
+| A read-only viewer can't mutate a doc | **`kb-syncd` drops their CRDT writes** | they still see content + live updates |
+| Only admins can manage users/groups | **admin-group check** on every `/admin/*` call (membership of `KB_ADMIN_GROUP`, default `sudo`) | |
+
+The **guiding principle**: the safe outcome is the *default* outcome. Forgetting
+to share a file yields a broken view, never a leak. Almost all authorization is
+the kernel's; the two SQL/daemon mirrors exist only for surfaces the kernel can't
+see (a shared index; a root daemon).
+
+## The privileged surfaces (run as root)
+
+Three things run as root and are therefore the audited core:
+
+1. **`kb-hub`** — auth + reverse proxy + `/fs/*` + `/admin/*`. It never runs
+   business logic as a user; it re-derives the caller from the signed cookie and
+   checks Unix authorization before any privileged filesystem op.
+2. **`kb-syncd`** — the CRDT/file daemon. Reads/writes docs as root, so it carries
+   `fs_can` (a full Unix permission check *including ancestor traversal*) as its
+   sole gate, plus symlink-safe writes.
+3. **`/admin/*` in the hub** — user/group management. Admin-only; inputs are
+   regex-validated so they can't inject into `useradd`/`psql`/`setfacl`.
+
+### The symlink-safe write pattern (follow it in all root code)
+
+Privileged file operations must never trust a path string a user can influence,
+because the user can swap a component for a symlink (`company/x → /etc/cron.d/x`)
+and redirect a root write. The platform's rule, in `common.opendir_beneath()`:
+
+- Reach a directory via `openat` + `O_NOFOLLOW` at **every** component, rooted at
+  `/srv/kb` (refuses both final- and intermediate-component symlinks).
+- Create/write the final file `O_NOFOLLOW` (`O_EXCL` for new files) under that
+  dir fd; do ownership via `fchown` on the fd, ACLs via `setxattr` on the fd.
+- `kb-syncd`'s atomic write uses an **unpredictable** temp name + `O_EXCL|O_NOFOLLOW`
+  + `renameat`, so a pre-planted temp symlink is refused, not followed.
+
+If you add any root code that writes files, use these helpers — do **not** use
+path-string `open`/`chown`/`shutil`.
+
+## Adversarial audit — findings and fixes
+
+The platform was reviewed by an 8-dimension adversarial security sweep (each
+finding independently verified). **13 confirmed findings were all fixed**, with
+regression tests. The themes and remediations:
+
+| Finding (severity) | Fix |
+|--------------------|-----|
+| Backend-socket squatting → cross-user account takeover (**critical**) | per-user `0700` socket dirs; hub verifies socket `st_uid==target`; `/run/kb/users` is `0755`, not world-writable |
+| `fs_upload` / `syncd` / `fs_props` symlink → arbitrary **root** write (**critical/high**) | `opendir_beneath` + `O_NOFOLLOW` + fd-based `fchown`/`setxattr`; random `O_EXCL` temp in the daemon |
+| RLS ignored ancestor-dir traversal → world-readable file inside a `0700` dir leaked via search (**high**) | `kb.can_read` and daemon `fs_can` now require traverse on every ancestor |
+| RLS blind to POSIX ACL mask → over-shared a locked file to its whole group (**high**) | indexer de-masks group bits + records named ACL grants; RLS honors them |
+| `can_read` was an arbitrary-user oracle (**low**) | single-arg, uses `session_user` |
+| Artifact `kb-read`/`kb-write` confused-deputy exfiltration (**high**) | bridge scoped to the artifact's own folder |
+| `kb-toggle` could flip any checkbox-looking line in any writable file (**low**) | requires `.md` + a genuinely indexed task line (RLS-scoped) |
+| Indexer recorded a symlink's metadata over its target's; startup-crash DoS (**medium/low**) | indexer skips symlinks; guarded `rel()` |
+| Orphaned ACLs survive user deletion + uid recycling (**low**) | delete strips the user's ACL grants recursively |
+
+Two bugs surfaced *while remediating* (also fixed): the perms reconcile loop ran
+`getfacl` on every file every second (CPU storm → flaky) — now a ctime/mode
+signature cache skips unchanged files; and auto-granting `u:X:--x` on a dir the
+user already reached via group **downgraded** them (a named ACL entry overrides
+the group entry) — sharing now skips dirs the grantee can already traverse.
+
+## Residual risks / known limitations
+
+- **Single-box only.** OS users + inotify don't span machines; there is no
+  off-box replication yet (git history + a manual `_files/` rsync are your DR).
+- **Localhost-bound.** No TLS front door is wired in. Put Caddy/nginx in front
+  before exposing it; the app assumes it isn't directly internet-facing.
+- **Stateless logout.** The session cookie is valid until its TTL; logout clears
+  the browser cookie but can't revoke a captured token early. Add a server-side
+  session store / token version if you need instant revocation.
+- **Artifacts are author-trusted.** Contained against the system and other users,
+  but an artifact you open runs code with *your* authority (read/write within your
+  own permissions, folder-scoped). Only open artifacts from people you'd trust
+  with your own access — same as running a shared script.
+- **Private-dir files aren't globally indexed.** `kbindexer` can't read a `0700`
+  `users/<u>/` dir, so those files aren't searchable (by design; a per-user
+  indexer would be needed).
+- **`_secrets/` is kernel-protected, not encrypted.** A `_secrets/` folder holds
+  creator-owned `0600` files that `kb-syncd` refuses to sync and `.gitignore`
+  keeps out of history, and the egress proxy can inject them server-side so an
+  artifact uses a credential without ever seeing it. What it is *not* is
+  encryption at rest: root, and anyone who can read the file, can read the
+  secret. Full-disk encryption and a real encrypted store (see the roadmap in
+  [DEVELOPING.md](DEVELOPING.md)) are still worth having.
+- **`kb-hub`/`kb-syncd` run as root.** Acceptable for a localhost single box given
+  how small/audited they are; a hardening pass (dropping capabilities, seccomp)
+  is a reasonable next step for higher-assurance deployments.
+
+## Reproducing the audit
+
+The confirmed findings are pinned by regression tests:
+`tests/cli/test_security_fixes.py`, `test_security_remediation.py`,
+`test_share_reachable.py`, and `tests/e2e/test_artifact_scope.py` /
+`test_artifact_xss.py`. Run `.venv/bin/python -m pytest tests/ -q`.

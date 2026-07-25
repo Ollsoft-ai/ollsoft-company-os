@@ -1,0 +1,9 @@
+{
+  "buttons": [
+    {
+      "label": "claude",
+      "kind": "term",
+      "target": "claude"
+    }
+  ]
+}
