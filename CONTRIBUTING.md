@@ -56,6 +56,12 @@ make the claims in the README credible.
   `sudo /opt/kb-venv/bin/python -m pip install <pkg>` so you always hit the right
   interpreter — console scripts carry a baked-in shebang and break if the venv is
   ever relocated.
+- **Restarting `kb-hub` kills every open web terminal.** The units use systemd's
+  default `KillMode=control-group`, and per-user backends — plus the login shells
+  inside them — are spawned by the hub, so they share its cgroup. Check
+  `systemctl status kb-hub | sed -n '/CGroup/,$p'` before restarting, and remember
+  that a deployed-but-not-restarted change looks finished while the running system
+  still serves the old behaviour. `kb-syncd` and `kb-indexer` hold only themselves.
 - **Group membership is cached per process.** A user added to a group won't see
   the change until their backend restarts. The hub kills the backend on
   membership change for this reason.

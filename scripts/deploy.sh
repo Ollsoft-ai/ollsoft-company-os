@@ -6,6 +6,14 @@
 # non-default --prefix automatically. Run as root:
 #
 #   sudo bash scripts/deploy.sh [--no-restart]
+#
+# WARNING: restarting kb-hub kills every open web-terminal session. The units use
+# systemd's default KillMode=control-group, and the per-user backends (plus their
+# login shells) are spawned by the hub and therefore live in its cgroup. Check for
+# live work first — `systemctl status kb-hub | sed -n '/CGroup/,$p'` — and pass
+# --no-restart if someone is mid-session. kb-syncd and kb-indexer contain only
+# themselves, so those restarts are safe; a kb-syncd restart can however lose
+# CRDT edits that have not yet been flushed to disk.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
