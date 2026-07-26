@@ -52,6 +52,8 @@ chmod -R a+rX "$PREFIX"
 echo "== systemd units =="
 CVENV="${VENV%/*}/kb-convert-venv"
 cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
+cp "$SRC/systemd/kb-logrotate.conf" /etc/logrotate.d/kb
+install -d -m 750 -o root -g root /var/log/kb
 for u in "$SRC"/systemd/kb-*.service "$SRC"/systemd/kb-*.timer; do
   [ -e "$u" ] || continue
   # convert-venv first: longest path, must not be chewed by the shorter rules
@@ -61,8 +63,9 @@ for u in "$SRC"/systemd/kb-*.service "$SRC"/systemd/kb-*.timer; do
 done
 systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
 systemctl daemon-reload
-# the health check is monitoring, not a workload — always on, never restarted
+# Monitoring, not workloads — always on, and never bounced by a code deploy.
 systemctl enable --now kb-heartbeat.timer 2>/dev/null || true
+systemctl enable --now kb-maintenance.timer 2>/dev/null || true
 
 if [ "$RESTART" -eq 1 ]; then
   echo "== restart =="

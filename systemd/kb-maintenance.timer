@@ -1,0 +1,19 @@
+[Unit]
+Description=Run KB maintenance triage daily
+Documentation=file:/opt/kb-platform/scripts/kb-maintenance-policy.md
+
+[Timer]
+# Once a day, early, before anyone is likely to be working — so a problem found
+# overnight is on the operator's phone before it costs them a morning, and a
+# self-healing restart lands while the box is quiet.
+OnCalendar=*-*-* 07:30:00
+# Spread the load and avoid a thundering herd if this ever runs on more boxes.
+RandomizedDelaySec=15m
+# The box is not always on. A missed 07:30 (reboot, downtime) runs on the next
+# boot instead of being silently skipped — the day you most want a triage is the
+# day the box was down.
+Persistent=true
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

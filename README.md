@@ -189,15 +189,20 @@ ollsoft-company-os/
 │   ├── install.sh          one-command install / upgrade  ← start here
 │   ├── seed-demo.sh        optional sample company (alice/bob/carol + acme)
 │   ├── deploy.sh           redeploy code after editing it (development)
+│   ├── kb-heartbeat.sh     functional health check (kb-heartbeat.timer, 5 min)
+│   ├── kb-alert.sh         append an alert to /var/log/kb/alerts.log (push is opt-in)
+│   ├── kb-maintenance.sh   daily triage: bundle -> headless agent -> notify only if real
+│   ├── kb-maintenance-policy.md  what counts as noise vs a real problem, and what the agent may do
 │   ├── install-dictation-key.sh  validate + install the ElevenLabs key (root 0600)
 │   ├── bounce_backends.py  restart per-user backends after a deploy
 │   ├── schema.sql          Postgres schema, RLS functions, grants
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
-├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-convert units + tmpfiles
+├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-convert units, the
+│                           kb-heartbeat + kb-maintenance timers, tmpfiles, logrotate
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright) + torture/
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · dictation · remote-access · converted-documents · windows-drive
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · monitoring · dictation · remote-access · converted-documents · windows-drive
 ```
 
 **Created on the box by the installer** (not in this repo):
@@ -228,6 +233,9 @@ Everything the services need lives in `/etc/kb/kb.env`, written by the installer
 | `KB_PROTECTED_USERS` | founding admin | Accounts the admin UI refuses to modify or delete |
 | `KB_PLATFORM_ROOT` | `/opt/kb-platform` | Deployed code |
 | `KB_VENV_PY` | `/opt/kb-venv/bin/python` | Interpreter for per-user backends |
+| `KB_NTFY_TOPIC` | *(empty)* | ntfy topic for pushed alerts; empty = no pushes possible |
+| `KB_ALERT_PUSH` | `0` | `1` pushes every alert as it happens. `0` = log only, triaged daily |
+| `KB_ALERT_DEDUP` | `21600` | Seconds an identical alert title stays muted for pushes |
 
 After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer kb-convert`.
 
@@ -251,7 +259,16 @@ sudo systemctl restart kb-indexer
 
 # office/PDF → markdown sidecars are equally disposable — force a resweep
 sudo systemctl restart kb-convert
+
+# monitoring: alerts are logged, not pushed (see docs/monitoring.md)
+sudo tail -5 /var/log/kb/alerts.log            # every alert ever raised
+sudo tail -40 /var/log/kb/maintenance.log      # the daily triage verdicts
+sudo /opt/kb-platform/scripts/kb-maintenance.sh --dry-run --stdout   # triage now
 ```
+
+> `deploy.sh` restarts `kb-hub`, and its cgroup holds every open web terminal and
+> per-user backend. Pass `--no-restart` if anyone might be mid-session, then
+> restart only what your change touched.
 
 ### Running the tests
 

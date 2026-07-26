@@ -1,8 +1,18 @@
 name: uptime probe
 
 # Layer-1 monitoring: an external check that survives the box itself dying.
-# Everything on the VM (heartbeat, OnFailure hooks) dies with the VM — this
-# runs on GitHub's infrastructure and alerts the operator's phone via ntfy.
+# Everything on the VM (heartbeat, OnFailure hooks, the maintenance agent) dies
+# with the VM — this runs on GitHub's infrastructure.
+#
+# This is the ONE alert still allowed to reach the operator in real time, and
+# only because it is the one thing the box cannot possibly report about itself.
+# Everything on-box now appends to /var/log/kb/alerts.log and is triaged once a
+# day by kb-maintenance.service instead of buzzing a phone per occurrence.
+#
+# It notifies ONCE PER OUTAGE, not once per check. The previous version was
+# stateless and re-sent every 5 minutes for as long as the site was down, which
+# is how an operator learns to ignore a channel. State lives in the Actions
+# cache: a marker key whose presence means "we already said it is down".
 #
 # The public hostname and ntfy topic live in repository VARIABLES/SECRETS, not
 # in this file, so the repo can go public without leaking either:
@@ -11,7 +21,6 @@ name: uptime probe
 #
 # GitHub schedules are best-effort (5-min minimum, often minutes late) — this
 # is the smoke detector for "the whole box is gone", not a latency monitor.
-# Known limitation: repeats while down (stateless), no recovery message.
 
 on:
   schedule:
@@ -20,33 +29,101 @@ on:
 
 permissions: {}
 
+concurrency:
+  # Two overlapping probes would race on the outage marker and could double-send.
+  group: uptime-probe
+  cancel-in-progress: false
+
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
+    permissions:
+      # Deleting the marker cache on recovery needs write access to Actions.
+      actions: write
     steps:
       - name: Probe the public edge
+        id: probe
         run: |
           URL='${{ vars.KB_PUBLIC_URL }}'
-          [ -n "$URL" ] || { echo "KB_PUBLIC_URL not set — probe disabled"; exit 0; }
-          # Any 2xx/3xx proves edge + tunnel + origin chain is alive. The
+          if [ -z "$URL" ]; then
+            echo "KB_PUBLIC_URL not set — probe disabled"
+            echo "state=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Any 2xx/3xx proves the edge + tunnel + origin chain is alive. The
           # Access login redirect is the expected healthy answer for an
-          # unauthenticated probe. Two attempts 20s apart: one blip is not an
-          # outage, and a stateless prober cannot debounce any other way.
-          for attempt in 1 2; do
+          # unauthenticated probe. Three attempts over ~60s: a single blip is
+          # not an outage, and paging someone for one dropped packet is exactly
+          # the noise this whole change exists to remove.
+          code=000
+          for attempt in 1 2 3; do
             code=$(curl -m 20 -s -o /dev/null -w '%{http_code}' -I "$URL" || echo 000)
             case "$code" in
-              2*|3*) echo "alive (HTTP $code)"; exit 0 ;;
+              2*|3*)
+                echo "alive (HTTP $code)"
+                echo "state=up" >> "$GITHUB_OUTPUT"
+                exit 0 ;;
             esac
             echo "attempt $attempt: HTTP $code"
-            [ "$attempt" = 1 ] && sleep 20
+            [ "$attempt" != 3 ] && sleep 30
           done
-          TOPIC='${{ secrets.KB_NTFY_TOPIC }}'
+          echo "state=down" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      # The marker is the memory. Restoring it tells us whether an earlier probe
+      # already reported this outage; the key never changes, so a hit means
+      # "already notified" and a miss means "this outage is new".
+      - name: Look for an open-outage marker
+        if: steps.probe.outputs.state != 'skip'
+        id: marker
+        uses: actions/cache/restore@v4
+        with:
+          path: outage-marker
+          key: kb-uptime-outage-v1
+
+      - name: Announce a NEW outage
+        if: steps.probe.outputs.state == 'down' && steps.marker.outputs.cache-hit != 'true'
+        env:
+          TOPIC: ${{ secrets.KB_NTFY_TOPIC }}
+          CODE: ${{ steps.probe.outputs.code }}
+        run: |
           if [ -n "$TOPIC" ]; then
             curl -m 10 -s -o /dev/null \
               -H "Title: Company OS UNREACHABLE from the internet" \
               -H "Priority: max" -H "Tags: skull,globe_with_meridians" \
-              -d "External probe got HTTP $code twice. Box down, tunnel dead, or edge broken. On-box monitoring cannot see this — check the VM." \
+              -d "External probe got HTTP $CODE three times over 60s. Box down, tunnel dead, or edge broken. On-box monitoring cannot see this — check the VM. You will NOT be notified again until it recovers." \
               "https://ntfy.sh/$TOPIC" || true
           fi
-          exit 1
+          date -u +%FT%TZ > outage-marker
+
+      - name: Remember that this outage was announced
+        if: steps.probe.outputs.state == 'down' && steps.marker.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: outage-marker
+          key: kb-uptime-outage-v1
+
+      # Recovery is worth exactly one message: it closes the loop opened above,
+      # so nobody drives to a laptop for a box that already came back.
+      - name: Announce recovery and clear the marker
+        if: steps.probe.outputs.state == 'up' && steps.marker.outputs.cache-hit == 'true'
+        env:
+          TOPIC: ${{ secrets.KB_NTFY_TOPIC }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$TOPIC" ]; then
+            curl -m 10 -s -o /dev/null \
+              -H "Title: Company OS is reachable again" \
+              -H "Priority: default" -H "Tags: white_check_mark" \
+              -d "The external probe can reach the site again. Nothing else to do." \
+              "https://ntfy.sh/$TOPIC" || true
+          fi
+          # Deleting the cache entry re-arms the detector for the next outage.
+          gh api --method DELETE \
+            "repos/${{ github.repository }}/actions/caches?key=kb-uptime-outage-v1" \
+            || echo "could not delete the marker cache — next outage may not re-announce"
+
+      - name: Fail the run while down, so the Actions history shows the outage
+        if: steps.probe.outputs.state == 'down'
+        run: exit 1

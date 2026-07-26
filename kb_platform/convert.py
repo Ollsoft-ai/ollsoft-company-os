@@ -28,11 +28,14 @@ from __future__ import annotations
 import asyncio
 import grp
 import hashlib
+import json
 import logging
 import os
 import pwd
 import stat
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -41,6 +44,8 @@ from pathlib import Path
 from watchfiles import awatch
 
 from . import common
+from .convert_extract import (MAX_SIDECAR_CHARS, XLSX_ROW_CAP,  # noqa: F401 (re-exported)
+                              cap_table_rows)
 
 logging.basicConfig(level=logging.INFO, format="convert %(message)s")
 log = logging.getLogger("kb.convert")
@@ -54,11 +59,15 @@ CONVERTIBLE = {".docx", ".pptx", ".xlsx", ".pdf"}
 LEGACY = {".doc", ".ppt", ".xls"}
 
 MAX_SOURCE_BYTES = 100 * 1024 * 1024     # refuse to parse monsters
-MAX_SIDECAR_CHARS = 2_000_000            # cap derived text (the index parses every line)
-XLSX_ROW_CAP = 500                       # per sheet; big data belongs in Postgres
 STABLE_INTERVAL = 1.0                    # seconds between size/mtime probes
 STABLE_TIMEOUT = 30.0                    # give up waiting and convert anyway (hash-guarded)
 SWEEP_EVERY = 600.0                      # reconciliation period; also the inotify-drop net
+# Wall clock per document. Generous because it is a runaway guard, not a
+# quality bar: a 38 MB scanned manual legitimately takes pdfminer ~15 minutes,
+# and the work happens once per file *version* (the sidecar carries the source
+# hash), at Nice=10, in a child nobody waits on. Anything still going after
+# half an hour is pathological and better recorded as such than left spinning.
+EXTRACT_TIMEOUT = 1800.0
 
 # Editor/agent litter that must never trigger (or receive) a conversion:
 # Office lock files, atomic-write temps, LibreOffice locks.
@@ -77,25 +86,6 @@ def source_name_of(sidecar_name: str) -> str:
 
 def is_litter(name: str) -> bool:
     return name.startswith(_SKIP_PREFIXES) or name.lower().endswith(_SKIP_SUFFIXES)
-
-
-def cap_table_rows(text: str, cap: int = XLSX_ROW_CAP) -> str:
-    """Trim each markdown table to `cap` rows. Spreadsheets are the one format
-    whose text form can explode; a note marks the cut so nobody mistakes the
-    excerpt for the whole sheet."""
-    out, run = [], 0
-    for line in text.splitlines():
-        if line.lstrip().startswith("|"):
-            run += 1
-            if run == cap + 1:
-                out.append(f"| … remaining rows omitted (sidecar caps tables at {cap} rows; "
-                           f"query the full sheet from the original file) … |")
-            if run > cap:
-                continue
-        else:
-            run = 0
-        out.append(line)
-    return "\n".join(out)
 
 
 def compose_sidecar(source_name: str, sha: str, status: str, body: str,
@@ -207,28 +197,95 @@ def sha256_file(p: Path) -> str:
     return h.hexdigest()
 
 
+class ExtractFailed(Exception):
+    """Extraction did not produce text. The message is operator-readable and
+    goes verbatim into the sidecar body, so it must say what to do next."""
+
+
 class Converter:
     def __init__(self):
         self.root = common.REPO_ROOT.resolve()
-        self._md = None                      # lazy MarkItDown instance
-        self._md_note = ""
+        self._md_note = ""                   # learned from the extraction child
         self._lock = threading.Lock()        # sweep and worker share convert_one
         self._queue: asyncio.Queue[Path] = asyncio.Queue()
         self._queued: set[Path] = set()
         self._sig: dict[Path, tuple] = {}    # source -> (size, mtime_ns, sha) hash cache
 
-    # -- markitdown -----------------------------------------------------------
+    # -- markitdown, at arm's length ------------------------------------------
     def _extract(self, src: Path) -> str:
-        if self._md is None:
-            from markitdown import MarkItDown   # heavy import, once, on demand
-            self._md = MarkItDown(enable_plugins=False)
+        """Parse `src` in a child process and return its markdown.
+
+        The parse never runs in this process. Document parsers allocate in
+        proportion to decompressed content, so one fat spreadsheet can exceed
+        the unit's MemoryMax — and an in-process parse turned that into the
+        whole service being OOM-killed mid-sweep, restarted, and killed again
+        on the same file forever (see kb_platform/convert_extract.py). Out here
+        the child dies alone and we get to write down why.
+
+        Raises ExtractFailed for every unhappy path; the caller records it as
+        `status: failed` in a sidecar stamped with the source hash, so a bad
+        document is attempted once per version, not once per sweep.
+        """
+        fd, tmp_out = tempfile.mkstemp(prefix="kb-extract-", suffix=".md")
+        os.close(fd)
+        # The child imports this package; inherit our resolved sys.path so it
+        # works from the service venv, a dev checkout and pytest alike.
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+        try:
             try:
-                from importlib.metadata import version
-                self._md_note = f" (markitdown {version('markitdown')})"
-            except Exception:
-                self._md_note = " (markitdown)"
-        res = self._md.convert(str(src))
-        return getattr(res, "markdown", None) or getattr(res, "text_content", "") or ""
+                r = subprocess.run(
+                    [sys.executable, "-m", "kb_platform.convert_extract",
+                     str(src), tmp_out],
+                    capture_output=True, text=True, env=env, timeout=EXTRACT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                raise ExtractFailed(
+                    f"Extraction exceeded the {EXTRACT_TIMEOUT / 60:.0f}-minute time "
+                    f"budget and was stopped. The document is likely pathological "
+                    f"(huge embedded tables or images) — convert it by hand if the "
+                    f"text matters.") from None
+
+            if r.returncode != 0:
+                # Learn the converter even from a failure, so the sidecar blames
+                # the library that actually gave up.
+                self._md_note = self._child_json(r.stderr).get("note") or self._md_note
+                raise ExtractFailed(self._describe_child_failure(r))
+
+            self._md_note = self._child_json(r.stdout).get("note") or self._md_note
+            with open(tmp_out, errors="replace") as f:
+                return f.read()
+        finally:
+            try:
+                os.unlink(tmp_out)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _child_json(stream: str) -> dict:
+        """The child's last JSON line. Anything else on the stream (a library
+        printing a warning to stderr, a parser being chatty) is ignored."""
+        for line in reversed((stream or "").strip().splitlines()):
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                return obj
+        return {}
+
+    def _describe_child_failure(self, r: subprocess.CompletedProcess) -> str:
+        """Turn the child's exit into a sentence worth reading in a sidecar."""
+        detail = self._child_json(r.stderr).get("error", "")
+        # SIGKILL with no message is the cgroup OOM killer: nothing runs in the
+        # child after the kernel reaps it, so this is the only evidence there is.
+        if r.returncode in (-9, 137) or r.returncode == 3:
+            return ("Extraction ran out of memory and was stopped. The document's "
+                    "text form is larger than the conversion memory budget "
+                    "(kb-convert MemoryMax) — a very large spreadsheet or a PDF "
+                    "with enormous embedded tables. The original file is intact "
+                    "and untouched; only this machine-readable copy is missing.")
+        if r.returncode < 0:
+            return f"Extraction was killed by signal {-r.returncode}."
+        return f"Conversion failed: {detail or f'extractor exited {r.returncode}'}"
 
     # -- the one place a sidecar is written ------------------------------------
     def convert_one(self, src: Path) -> str | None:
@@ -277,15 +334,15 @@ class Converter:
             body = (f"Legacy format `{suffix}` is not converted. Re-save the file as "
                     f"`{suffix}x` (File → Save As in Office) and the text will appear here.")
         else:
+            # Say which file we are about to parse BEFORE parsing it. If the
+            # attempt ends in a way Python cannot report — a SIGKILL, a box
+            # reboot — this line is the only record of what was in flight, and
+            # its absence is what made the OOM loop take a subpoena to diagnose.
+            rel_pre = src.relative_to(self.root) if src.is_relative_to(self.root) else src
+            log.info("extracting  %s (%.1f MB)", rel_pre, st.st_size / 1e6)
             try:
-                text = self._extract(src)
+                text = self._extract(src)   # child process; shapes/caps the text
                 note = self._md_note
-                if suffix == ".xlsx":
-                    text = cap_table_rows(text)
-                if len(text) > MAX_SIDECAR_CHARS:
-                    text = (text[:MAX_SIDECAR_CHARS]
-                            + "\n\n> ⚠ Truncated — the extracted text exceeds the "
-                              "2,000,000-character sidecar cap.")
                 if not text.strip():
                     status = "empty"
                     body = ("No extractable text found."
@@ -293,6 +350,8 @@ class Converter:
                                "kb-convert does not do (yet)." if suffix == ".pdf" else ""))
                 else:
                     status, body = "ok", text
+            except ExtractFailed as e:
+                status, body = "failed", str(e)
             except Exception as e:  # a corrupt upload must not kill the service
                 status = "failed"
                 body = f"Conversion failed: {type(e).__name__}: {str(e)[:500]}"
