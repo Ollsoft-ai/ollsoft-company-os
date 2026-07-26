@@ -108,4 +108,17 @@ if [ "$cur" != "$prev" ] || [ ! -f "$H" ]; then
 fi
 
 echo "heartbeat: $cur"
-[ "$cur" = "OK" ]
+
+# Exit 0 whenever the check itself ran, even when it found problems.
+#
+# This used to be `[ "$cur" = "OK" ]`, which exited 1 on any finding — and for a
+# Type=oneshot unit that means systemd marks kb-heartbeat.service *failed* and
+# logs "Failed to start kb-heartbeat.service". So "the health check noticed
+# something" and "the health check is broken" looked identical in the journal,
+# 7 times in a single day. It cost the maintenance agent a whole report: it
+# blamed the heartbeat for OOM kills that belonged to kb-convert.
+#
+# The findings are reported through the channels built for them — kb-alert.sh,
+# health.md, and the line printed above. The exit status only answers "did the
+# check complete?", which is what systemd actually asks.
+exit 0

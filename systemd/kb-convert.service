@@ -23,6 +23,12 @@ RestartSec=3
 # Parsing a fat pptx is the one CPU/RAM-hungry thing on this box — keep it polite.
 Nice=10
 MemoryMax=2G
+# Each document is parsed in a short-lived child (kb_platform.convert_extract)
+# precisely so that blowing this budget kills the parse and not the service.
+# systemd's default OOMPolicy=stop would undo that: it treats *any* process in
+# the cgroup being OOM-killed as the unit failing, which is exactly the
+# 15-minute crash loop this design exists to end.
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target

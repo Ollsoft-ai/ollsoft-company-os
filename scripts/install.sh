@@ -42,8 +42,15 @@ if [ -f /etc/kb/kb.env ]; then
   ADMIN_GROUP="${KB_ADMIN_GROUP:-$ADMIN_GROUP}"
   VENV="$(dirname "$(dirname "${KB_VENV_PY:-$VENV/bin/python}")")"
   PRIOR_PROTECTED="${KB_PROTECTED_USERS:-}"
+  # Monitoring config is operator-chosen, not derivable — carry it across a
+  # re-install. Regenerating kb.env used to silently blank KB_NTFY_TOPIC, which
+  # turns alerting off in the least visible way possible.
+  PRIOR_NTFY_TOPIC="${KB_NTFY_TOPIC:-}"
+  PRIOR_ALERT_PUSH="${KB_ALERT_PUSH:-}"
 fi
 PRIOR_PROTECTED="${PRIOR_PROTECTED:-}"
+PRIOR_NTFY_TOPIC="${PRIOR_NTFY_TOPIC:-}"
+PRIOR_ALERT_PUSH="${PRIOR_ALERT_PUSH:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -323,10 +330,21 @@ KB_ADMIN_GROUP=$ADMIN_GROUP
 # Accounts the admin UI refuses to modify or delete, comma-separated. The
 # founding admin is listed so a second admin cannot lock them out.
 KB_PROTECTED_USERS=$PROTECTED_LIST
-# ntfy topic for monitoring alerts (kb-heartbeat + OnFailure hooks). Empty =
-# monitoring stays silent. Topics are public — pick an unguessable name and
-# subscribe to it in the ntfy app.
-KB_NTFY_TOPIC=
+# --- monitoring -------------------------------------------------------------
+# Alerts are ALWAYS appended to /var/log/kb/alerts.log. These two keys only
+# control whether an alert is *also* pushed to a phone, which is off by
+# default: kb-maintenance.service triages the log on a timer and is the thing
+# that decides something is worth interrupting a human for.
+#
+# ntfy topic for pushes (kb-heartbeat + OnFailure hooks). Empty = no pushes are
+# possible at all. Topics are public — pick an unguessable name and subscribe to
+# it in the ntfy app.
+KB_NTFY_TOPIC=$PRIOR_NTFY_TOPIC
+# 1 = also push every alert to ntfy as it happens. Leave at 0 unless you want
+# per-occurrence notifications: a flapping service will send one per flap.
+KB_ALERT_PUSH=$PRIOR_ALERT_PUSH
+# Seconds an identical alert title stays muted for pushes (log is unaffected).
+KB_ALERT_DEDUP=21600
 ENV
 chmod 644 /etc/kb/kb.env
 
@@ -334,6 +352,8 @@ chmod 644 /etc/kb/kb.env
 say "systemd units"
 # ---------------------------------------------------------------------------
 cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
+cp "$SRC/systemd/kb-logrotate.conf" /etc/logrotate.d/kb
+install -d -m 750 -o root -g root /var/log/kb
 for u in "$SRC"/systemd/kb-*.service; do
   # Point ExecStart/venv at the chosen prefix.
   # Tokenise all defaults BEFORE expanding any, or a --prefix that contains

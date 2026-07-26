@@ -23,8 +23,10 @@ How the KB platform actually works, component by component.
 | user backend | **the user**| `/run/kb/users/<u>/backend.sock` | files, terminal, search, tasks, artifact bridge — *all as the user* |
 | `kb-syncd`   | **root**    | `/run/kb/syncd.sock`| y-websocket CRDT relay + filesystem merge daemon |
 | `kb-indexer` | `kbindexer` | (no socket)         | parses markdown → Postgres; refreshes group membership + ACLs |
-| `kb-convert` | `kbindexer` | (no socket)         | office/PDF binaries → hidden read-only `.md` sidecars (see [converted-documents.md](converted-documents.md)) |
+| `kb-convert` | `kbindexer` | (no socket)         | office/PDF binaries → hidden read-only `.md` sidecars; each parse in a throwaway child (see [converted-documents.md](converted-documents.md)) |
 | PostgreSQL   | `postgres`  | local unix socket   | disposable index (`kb` schema, RLS) + per-user schemas (`u_<user>`) |
+| `kb-heartbeat.timer` | **root** | (timer, 5 min) | functional health check — outcomes, not processes; logs, never pushes (see [monitoring.md](monitoring.md)) |
+| `kb-maintenance.timer` | **root** | (timer, daily) | triages the logs via a headless agent with a harness-enforced tool allowlist; the only on-box thing that may notify |
 
 Only `kb-hub` and `kb-syncd` run as root, and they do only auth/proxy/merge —
 the minimal audited surface.

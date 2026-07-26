@@ -31,7 +31,7 @@ check serves it as a live read-only document in the editor.
 | Source | Result |
 |---|---|
 | `.docx` `.pptx` `.pdf` | full text via markitdown (slides include speaker notes) |
-| `.xlsx` | markdown tables, capped at 500 rows per sheet with a truncation note |
+| `.xlsx` | a **sample** of each sheet, read lazily: 500 rows per sheet, 40 columns, 120 000 characters overall — whichever binds first |
 | scanned `.pdf` (no text layer) | `status: empty` stub — OCR is not attempted |
 | `.doc` `.ppt` `.xls` (legacy) | `status: unsupported` stub suggesting a re-save as the modern format |
 | anything over 100 MB | `status: too-large` stub |
@@ -41,6 +41,34 @@ re-conversion idempotent), `converted_at`, `converter`, and `status`
 (`ok | empty | failed | unsupported | too-large`). A failed conversion is a
 visible stub with the error, not a silent gap — and it retries only when the
 source actually changes.
+
+## One bad document cannot take the service down
+
+Parsers allocate in proportion to *decompressed* content, so file size is a poor
+predictor of memory use. Two independent guardrails follow from that:
+
+**Spreadsheets are read lazily and stopped early.** `.xlsx` bypasses markitdown
+entirely for openpyxl's streaming reader, so `iter_rows` pulls one row at a time
+and stops at the caps above. Peak memory is a function of the cap, not the file:
+a 5 MB sheet and a 500 MB sheet cost the same. This replaced trimming the
+markdown *after* the parse, which was always too late — the memory was already
+spent. A sidecar exists so search and agents know a file's shape and vocabulary;
+nobody ever needed the whole table, and the original is one click away.
+
+**Every parse runs in a child process** (`kb_platform/convert_extract.py`) that
+pins its own `oom_score_adj` to the maximum. If a document blows the unit's
+`MemoryMax`, the kernel reaps the child and the parent survives to write
+`status: failed` explaining why — stamped with the source hash, so the file is
+attempted once per version, not once per sweep. There is a 30-minute wall-clock
+budget as a runaway guard.
+
+This is why `kb-convert.service` sets **`OOMPolicy=continue`**. systemd's default
+(`stop`) treats any process in the cgroup being OOM-killed as the unit failing,
+which would defeat the isolation entirely. Before this design, one 54 MB
+spreadsheet OOM-killed the service every 15 minutes, and because each restart
+re-swept the tree in the same order it died on the same file forever — leaving
+**31 documents behind it in walk order with no sidecar at all**, invisible to
+search and to every agent, while the phone filled with identical alerts.
 
 ## When it runs
 

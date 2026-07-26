@@ -1,0 +1,32 @@
+[Unit]
+Description=KB maintenance triage (agent reads the logs, decides what is real)
+Documentation=file:/opt/kb-platform/scripts/kb-maintenance-policy.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+# Deliberately NO OnFailure=kb-alert@%n here. This unit's whole job is to
+# decide what deserves a notification; wiring it to the blunt per-failure
+# alerter would let it spam on its own behalf — exactly the pattern it exists
+# to end. A failed run reports itself through its own report file, and the
+# next successful run sees the gap.
+
+[Service]
+Type=oneshot
+# Root, because collecting evidence means reading the journal, every unit's
+# state, and postgres. The agent itself is then dropped to the operator's
+# account (runuser) with a harness-enforced tool allowlist — see the script.
+User=root
+EnvironmentFile=-/etc/kb/kb.env
+ExecStart=/opt/kb-platform/scripts/kb-maintenance.sh
+StateDirectory=kb-monitor
+# Its own budget. The script already times the agent out at KB_MAINT_TIMEOUT;
+# this is the backstop for the wrapper itself wedging.
+TimeoutStartSec=1800
+# Maintenance must never compete with the platform it is inspecting.
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
