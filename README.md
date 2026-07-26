@@ -153,6 +153,9 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
         │  RLS = Unix      │    refreshes group membership, honors POSIX ACLs.
         │  read + traverse │    Disposable · rebuildable · pgvector + FTS.
         └──────────────────┘
+                                kb-convert (same user): office/PDF binaries →
+                                hidden read-only .md sidecars, so their text is
+                                searchable and agent-readable like any doc.
 ```
 
 The two root services (`kb-hub`, `kb-syncd`) do only auth, proxying, and the
@@ -188,11 +191,11 @@ ollsoft-company-os/
 │   ├── bounce_backends.py  restart per-user backends after a deploy
 │   ├── schema.sql          Postgres schema, RLS functions, grants
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
-├── systemd/                kb-hub / kb-syncd / kb-indexer units + tmpfiles
+├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-convert units + tmpfiles
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright) + torture/
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · dictation · remote-access
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · dictation · remote-access · converted-documents
 ```
 
 **Created on the box by the installer** (not in this repo):
@@ -200,6 +203,7 @@ ollsoft-company-os/
 ```
 /opt/kb-platform      code, world-readable (so per-user backends can run it)
 /opt/kb-venv          the Python venv, world-executable
+/opt/kb-convert-venv  kb-convert's parser venv — heavy deps, kept separate on purpose
 /srv/kb               the knowledgebase: git repo of markdown + attachments
 /etc/kb/kb.env        runtime configuration read by the systemd units
 /etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it
@@ -223,7 +227,7 @@ Everything the services need lives in `/etc/kb/kb.env`, written by the installer
 | `KB_PLATFORM_ROOT` | `/opt/kb-platform` | Deployed code |
 | `KB_VENV_PY` | `/opt/kb-venv/bin/python` | Interpreter for per-user backends |
 
-After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer`.
+After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer kb-convert`.
 
 ---
 
@@ -231,8 +235,8 @@ After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer`.
 
 ```bash
 # status and logs
-systemctl status kb-hub kb-syncd kb-indexer
-journalctl -u kb-hub -u kb-syncd -u kb-indexer -f
+systemctl status kb-hub kb-syncd kb-indexer kb-convert
+journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert -f
 
 # redeploy after editing code (reads /etc/kb/kb.env for paths)
 sudo bash scripts/deploy.sh
@@ -242,6 +246,9 @@ sudo bash scripts/deploy.sh
 
 # the index is disposable — rebuild it from the markdown at any time
 sudo systemctl restart kb-indexer
+
+# office/PDF → markdown sidecars are equally disposable — force a resweep
+sudo systemctl restart kb-convert
 ```
 
 ### Running the tests

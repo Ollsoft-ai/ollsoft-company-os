@@ -51,7 +51,10 @@ database equal your OS identity, with no password anywhere.
 - `kbindexer` — a `nologin` system account that owns the `kb` schema and is the
   only writer to it. It joins `kb-users` and every project group, so it can index
   restricted folders. What it is deliberately *not* a member of is the `kb_users`
-  **Postgres** role — so it cannot read users' application data.
+  **Postgres** role — so it cannot read users' application data. `kb-convert`
+  runs as the same account for the same reason: what can be indexed is exactly
+  what can be converted (see
+  [converted-documents.md](converted-documents.md)).
 
 ### 3. The admin account
 
@@ -107,10 +110,12 @@ a list of names instead is the mistake it exists to prevent.
 
 ### 7. Configuration, units, start
 
-Writes `/etc/kb/kb.env` (read by all three units via `EnvironmentFile`), creates
+Writes `/etc/kb/kb.env` (read by all units via `EnvironmentFile`), creates
 `/etc/kb/session.key` (0600, root) if absent, installs the tmpfiles config and the
 systemd units with paths rewritten for your `--prefix`, then enables and starts
-`kb-syncd`, `kb-hub` and `kb-indexer`.
+`kb-syncd`, `kb-hub`, `kb-indexer` and `kb-convert` (the last one only when its
+venv was provisioned from `requirements-convert.txt` — the document parsers live
+in a separate `kb-convert-venv` next to the platform venv).
 
 ---
 
@@ -176,6 +181,12 @@ upgrades. See [remote-access.md](remote-access.md).
 **Search and to-dos are empty**
 `kb-indexer` is down, or the `vector` extension is missing. The index is
 disposable — `sudo systemctl restart kb-indexer` rebuilds it from the markdown.
+
+**An office file or PDF has no text in search**
+`kb-convert` is down, or the conversion failed — check
+`journalctl -u kb-convert` and the `status:` line in the hidden `.name.ext.md`
+sidecar next to the file. Sidecars are as disposable as the index:
+`sudo systemctl restart kb-convert` resweeps everything.
 
 **A user was added to a group but still cannot see the folder**
 Group membership is cached per process. The hub kills the user's backend on

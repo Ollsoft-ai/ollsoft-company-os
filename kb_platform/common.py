@@ -198,3 +198,31 @@ def is_secret_path(rel: str) -> bool:
     specially everywhere content could escape the permission check: git
     history, the search index, and the CRDT relay."""
     return "_secrets" in rel.strip("/").split("/")
+
+
+# --- Derived text sidecars ---------------------------------------------------
+# kb-convert (convert.py) shadows every office/PDF binary with a hidden,
+# read-only markdown extraction: `report.docx` -> `.report.docx.md`, in the
+# same directory. The dot prefix hides it wherever the platform already hides
+# dot-entries (tree, quick-open); these helpers carve out the ONE exception
+# that still lets sidecar CONTENT into the index and content search.
+DERIVED_SOURCE_SUFFIXES = (".docx", ".pptx", ".xlsx", ".pdf", ".doc", ".ppt", ".xls")
+
+
+def is_derived_sidecar(rel: str) -> bool:
+    """True for a kb-convert sidecar basename: `.<name>.<source-ext>.md`."""
+    name = rel.rstrip("/").rsplit("/", 1)[-1]
+    if not (name.startswith(".") and name.endswith(".md")):
+        return False
+    return name[1:-3].lower().endswith(DERIVED_SOURCE_SUFFIXES)
+
+
+def is_hidden_rel(rel: str) -> bool:
+    """True for paths the index must skip as machinery: anything under a
+    dot-DIRECTORY (.claude/, .git/) and any dot-FILE — except derived sidecars,
+    which are dot-files precisely so the tree hides them while their content
+    stays searchable."""
+    parts = rel.strip("/").split("/")
+    if any(seg.startswith(".") for seg in parts[:-1]):
+        return True
+    return parts[-1].startswith(".") and not is_derived_sidecar(rel)

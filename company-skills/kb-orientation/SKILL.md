@@ -33,6 +33,20 @@ Just edit the `.md` files with your normal file tools. You don't need any specia
 
 Write markdown normally. Tasks are `- [ ] todo` / `- [x] done`. Headings with `#`. Keep files human-readable.
 
+# Reading office files and PDFs
+
+You cannot read a `.docx`/`.pptx`/`.xlsx`/`.pdf` directly — but you don't have
+to. The platform keeps a **hidden, read-only markdown sidecar** next to every
+such binary with its extracted text: `report.docx` → `.report.docx.md` (same
+folder, dot-prefixed). Two things to know:
+
+- `rg` and most search tools **skip dotfiles by default** — pass `--hidden`,
+  or query `kb.blocks` in Postgres, where sidecar content IS indexed.
+- Sidecars are regenerated whenever the source changes. Never edit one (the
+  kernel will refuse anyway); if the text looks stale or wrong, check the
+  `status:` line in its frontmatter — `failed`/`empty`/`unsupported` explain
+  themselves.
+
 # What else you can do (see the other skills)
 
 - **`kb-database`** — query the shared index (respects permissions automatically) and create your own private tables.

@@ -1,0 +1,6 @@
+# kb-convert dependencies. Installed into a SEPARATE venv (/opt/kb-convert-venv
+# by default) by scripts/install.sh: the document parsers (pandas, pdfminer,
+# onnx-based type detection, …) are heavy and must never bloat or version-pin
+# the platform venv. kb_platform/convert.py is the only consumer.
+markitdown[docx,pptx,xlsx,pdf]>=0.1.1
+watchfiles>=0.24

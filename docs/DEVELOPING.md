@@ -10,8 +10,9 @@ change:
 
 ```bash
 # backend change:
-sudo bash scripts/deploy.sh                       # rsync code to /opt (keeps the venv)
+sudo bash scripts/deploy.sh                       # rsync code to /opt (keeps the venvs)
 sudo systemctl restart kb-hub kb-syncd kb-indexer # restart what you changed
+sudo systemctl restart kb-convert                 # only for convert.py / common.py changes
 sudo rm -f /run/kb/users/*/backend.sock           # drop cached per-user backends so they respawn with new code
 
 # frontend change:

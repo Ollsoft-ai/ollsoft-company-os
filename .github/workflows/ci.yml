@@ -29,7 +29,7 @@ jobs:
 
       - name: Services came up
         run: |
-          for s in kb-syncd kb-hub kb-indexer; do
+          for s in kb-syncd kb-hub kb-indexer kb-convert; do
             systemctl is-active --quiet "$s" || {
               echo "::error::$s is not active"; sudo journalctl -u "$s" -n 60 --no-pager; exit 1; }
           done
@@ -96,7 +96,7 @@ jobs:
         if: failure()
         run: |
           echo '--- service state ---'
-          systemctl is-active kb-hub kb-syncd kb-indexer || true
+          systemctl is-active kb-hub kb-syncd kb-indexer kb-convert || true
           echo '--- indexer log (its own unit only; the others flood with runuser noise) ---'
           sudo journalctl -u kb-indexer -n 80 --no-pager || true
           echo '--- seeded file ownership and modes ---'
