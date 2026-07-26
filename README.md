@@ -60,7 +60,9 @@ ssh -L 8300:127.0.0.1:8300 you@your-box
 ```
 
 See **[docs/remote-access.md](docs/remote-access.md)** before exposing it to a
-network — it needs a TLS front door and an identity layer.
+network — it needs a TLS front door and an identity layer. To work on the
+knowledgebase from Explorer — open and save Office files as if it were a
+network share — see **[docs/windows-drive.md](docs/windows-drive.md)**.
 
 ### Options
 
@@ -195,7 +197,7 @@ ollsoft-company-os/
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright) + torture/
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · dictation · remote-access · converted-documents
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · dictation · remote-access · converted-documents · windows-drive
 ```
 
 **Created on the box by the installer** (not in this repo):

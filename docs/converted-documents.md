@@ -1,7 +1,8 @@
 # Converted documents — office/PDF binaries as searchable, agent-readable text
 
 A knowledgebase fills up with `.docx`, `.pptx`, `.xlsx` and `.pdf` the moment
-real people use it — uploads, network-drive saves, OneDrive syncs. Those files
+real people use it — uploads, network-drive saves ([windows-drive.md](windows-drive.md)),
+OneDrive syncs. Those files
 are opaque to everything the platform is good at: agents' file tools read
 text, ripgrep reads text, the indexer parses only markdown. **kb-convert**
 closes that gap by shadowing every such binary with a machine-extracted
