@@ -1,0 +1,28 @@
+[Unit]
+Description=KB convert (office/pdf -> hidden read-only markdown sidecars)
+After=network.target
+
+OnFailure=kb-alert@%n.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=kbindexer
+EnvironmentFile=-/etc/kb/kb.env
+Environment=PYTHONPATH=/opt/kb-platform
+Environment=KB_REPO=/srv/kb
+Environment=KB_RUN=/run/kb
+Environment=KB_ETC=/etc/kb
+# Its own venv: the document parsers are heavy and version-churny, and have no
+# business inside the platform venv. Created by scripts/install.sh from
+# requirements-convert.txt.
+ExecStart=/opt/kb-convert-venv/bin/python -m kb_platform.convert
+Restart=on-failure
+RestartSec=3
+# Parsing a fat pptx is the one CPU/RAM-hungry thing on this box — keep it polite.
+Nice=10
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

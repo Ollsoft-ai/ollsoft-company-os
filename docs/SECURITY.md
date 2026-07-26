@@ -97,6 +97,13 @@ the group entry) — sharing now skips dirs the grantee can already traverse.
   encryption at rest: root, and anyone who can read the file, can read the
   secret. Full-disk encryption and a real encrypted store (see the roadmap in
   [DEVELOPING.md](DEVELOPING.md)) are still worth having.
+- **`kb-convert` parses untrusted binaries.** Anything a user uploads (docx,
+  pptx, xlsx, pdf) is fed to third-party parsers. It runs as the non-root
+  `kbindexer` in its own venv with a memory cap, so a parser exploit is
+  contained to what that account can do: read shared content it already indexes
+  and write the disposable index/sidecars — no root, no user application data
+  (`kbindexer` is not in the `kb_users` Postgres role). Sandboxing it further
+  (seccomp, a throwaway namespace) is a reasonable hardening step.
 - **`kb-hub`/`kb-syncd` run as root.** Acceptable for a localhost single box given
   how small/audited they are; a hardening pass (dropping capabilities, seccomp)
   is a reasonable next step for higher-assurance deployments.

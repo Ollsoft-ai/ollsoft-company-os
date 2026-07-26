@@ -157,6 +157,8 @@ if [ ! -f "$REPO/.gitignore" ]; then
 !.claude/*.json
 # secrets NEVER enter history (belt; the wall is in root-owned syncd code)
 **/_secrets/**
+# kb-convert's derived sidecars (.name.docx.md …) are regenerable machinery
+.*.md
 IGN
   chown root:kb-users "$REPO/.gitignore"; chmod 644 "$REPO/.gitignore"
 fi
@@ -213,6 +215,15 @@ fi
 "$VENV/bin/python" -m pip install --upgrade -q pip
 "$VENV/bin/pip" install -q -r "$SRC/requirements.txt"
 
+# kb-convert gets its own venv: heavy document parsers, zero overlap with the
+# platform's dependency set (see requirements-convert.txt).
+CVENV="${VENV%/*}/kb-convert-venv"
+if [ -f "$SRC/requirements-convert.txt" ]; then
+  [ -x "$CVENV/bin/python" ] || python3 -m venv "$CVENV"
+  "$CVENV/bin/python" -m pip install --upgrade -q pip
+  "$CVENV/bin/pip" install -q -r "$SRC/requirements-convert.txt"
+fi
+
 # ---------------------------------------------------------------------------
 say "frontend bundle"
 # ---------------------------------------------------------------------------
@@ -238,6 +249,10 @@ cp "$SRC/requirements.txt" "$PREFIX/" 2>/dev/null || true
 # World-readable + executable: per-user backends run this code as their own uid.
 chown -R root:root "$PREFIX" "$VENV"
 chmod -R a+rX "$PREFIX" "$VENV"
+if [ -d "$CVENV" ]; then
+  chown -R root:root "$CVENV"
+  chmod -R a+rX "$CVENV"
+fi
 
 # ---------------------------------------------------------------------------
 say "postgres"
@@ -294,7 +309,7 @@ done
 
 cat > /etc/kb/kb.env <<ENV
 # Ollsoft Company OS runtime configuration. Read by the systemd units.
-# Changing anything here requires: systemctl restart kb-hub kb-syncd kb-indexer
+# Changing anything here requires: systemctl restart kb-hub kb-syncd kb-indexer kb-convert
 KB_REPO=$REPO
 KB_RUN=/run/kb
 KB_ETC=/etc/kb
@@ -321,9 +336,12 @@ say "systemd units"
 cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
 for u in "$SRC"/systemd/kb-*.service; do
   # Point ExecStart/venv at the chosen prefix.
-  # Tokenise both defaults BEFORE expanding either, or a --prefix that contains
-  # the other default gets substituted twice (e.g. /opt/kb-platform/kb-venv).
-  sed -e "s|/opt/kb-venv|@@VENV@@|g"   -e "s|/opt/kb-platform|@@PREFIX@@|g" \
+  # Tokenise all defaults BEFORE expanding any, or a --prefix that contains
+  # another default gets substituted twice (e.g. /opt/kb-platform/kb-venv).
+  # The convert venv goes first: longest path, must not be chewed by the others.
+  sed -e "s|/opt/kb-convert-venv|@@CVENV@@|g" \
+      -e "s|/opt/kb-venv|@@VENV@@|g"   -e "s|/opt/kb-platform|@@PREFIX@@|g" \
+      -e "s|@@CVENV@@|$CVENV|g" \
       -e "s|@@VENV@@|$VENV|g"          -e "s|@@PREFIX@@|$PREFIX|g" \
       "$u" > "/etc/systemd/system/$(basename "$u")"
 done
@@ -335,14 +353,18 @@ systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
 systemctl daemon-reload
 
 FAILED=0
+UNITS="kb-syncd kb-hub kb-indexer"
+[ -x "$CVENV/bin/python" ] && UNITS="$UNITS kb-convert"
 if [ "$DO_START" -eq 1 ]; then
-  systemctl enable kb-syncd kb-hub kb-indexer >/dev/null 2>&1
+  # shellcheck disable=SC2086  # UNITS is a deliberate word list
+  systemctl enable $UNITS >/dev/null 2>&1
   systemctl enable --now kb-heartbeat.timer >/dev/null 2>&1 || true
   # restart, not just start: on an upgrade the units are already running and
   # would otherwise keep executing the previous code and environment.
-  systemctl restart kb-syncd kb-hub kb-indexer
+  # shellcheck disable=SC2086
+  systemctl restart $UNITS
   sleep 3
-  for unit in kb-syncd kb-hub kb-indexer; do
+  for unit in $UNITS; do
     st="$(systemctl is-active "$unit")"
     printf '  %-12s %s\n' "$unit" "$st"
     [ "$st" = "active" ] || FAILED=1
@@ -350,7 +372,7 @@ if [ "$DO_START" -eq 1 ]; then
   if [ "$FAILED" -ne 0 ]; then
     echo
     echo "ERROR: a service failed to start. Diagnose with:" >&2
-    echo "  journalctl -u kb-hub -u kb-syncd -u kb-indexer -n 50 --no-pager" >&2
+    echo "  journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert -n 50 --no-pager" >&2
     exit 1
   fi
 else
@@ -369,7 +391,7 @@ Ollsoft Company OS is installed.
 $( [ -f "$CREDS" ] && echo "  Password    in $CREDS (delete it once you've logged in)" )
   Repo        $REPO
   Config      /etc/kb/kb.env
-  Logs        journalctl -u kb-hub -u kb-syncd -u kb-indexer -f
+  Logs        journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert -f
 
 Optional: populate a sample company to explore the permission model —
   sudo bash scripts/seed-demo.sh

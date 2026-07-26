@@ -11,9 +11,9 @@
 # systemd's default KillMode=control-group, and the per-user backends (plus their
 # login shells) are spawned by the hub and therefore live in its cgroup. Check for
 # live work first — `systemctl status kb-hub | sed -n '/CGroup/,$p'` — and pass
-# --no-restart if someone is mid-session. kb-syncd and kb-indexer contain only
-# themselves, so those restarts are safe; a kb-syncd restart can however lose
-# CRDT edits that have not yet been flushed to disk.
+# --no-restart if someone is mid-session. kb-syncd, kb-indexer and kb-convert
+# contain only themselves, so those restarts are safe; a kb-syncd restart can
+# however lose CRDT edits that have not yet been flushed to disk.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,10 +50,13 @@ chown -R root:root "$PREFIX"
 chmod -R a+rX "$PREFIX"
 
 echo "== systemd units =="
+CVENV="${VENV%/*}/kb-convert-venv"
 cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
 for u in "$SRC"/systemd/kb-*.service "$SRC"/systemd/kb-*.timer; do
   [ -e "$u" ] || continue
-  sed -e "s|/opt/kb-venv|$VENV|g" -e "s|/opt/kb-platform|$PREFIX|g" \
+  # convert-venv first: longest path, must not be chewed by the shorter rules
+  sed -e "s|/opt/kb-convert-venv|$CVENV|g" \
+      -e "s|/opt/kb-venv|$VENV|g" -e "s|/opt/kb-platform|$PREFIX|g" \
       "$u" > "/etc/systemd/system/$(basename "$u")"
 done
 systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
@@ -63,9 +66,13 @@ systemctl enable --now kb-heartbeat.timer 2>/dev/null || true
 
 if [ "$RESTART" -eq 1 ]; then
   echo "== restart =="
-  systemctl restart kb-syncd kb-hub kb-indexer
+  UNITS="kb-syncd kb-hub kb-indexer"
+  # kb-convert only exists where its venv was provisioned (scripts/install.sh)
+  [ -x "$CVENV/bin/python" ] && UNITS="$UNITS kb-convert"
+  # shellcheck disable=SC2086  # UNITS is a deliberate word list
+  systemctl restart $UNITS
   sleep 2
-  for s in kb-syncd kb-hub kb-indexer; do
+  for s in $UNITS; do
     printf '  %-12s %s\n' "$s" "$(systemctl is-active "$s")"
   done
 fi

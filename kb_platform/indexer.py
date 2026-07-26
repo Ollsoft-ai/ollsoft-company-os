@@ -172,9 +172,9 @@ class Indexer:
             rel = self.rel(p)
         except (ValueError, OSError):
             return
-        if rel.startswith(".") or "/." in rel:   # skip config trees (.claude, .git)
-            return
-        if common.is_secret_path(rel):           # secrets never enter the index
+        if common.is_hidden_rel(rel):            # skip dot machinery (.claude, .git) — but
+            return                               # NOT derived sidecars (.x.docx.md), which
+        if common.is_secret_path(rel):           # are the one indexable dot-file
             return
         try:
             text = p.read_text(errors="replace")
@@ -304,14 +304,14 @@ class Indexer:
         async for changes in awatch(self.root, recursive=True, ignore_permission_denied=True):
             for _change, fspath in changes:
                 p = Path(fspath)
-                if p.name.startswith(".") or p.name.endswith(".kbtmp"):
+                if p.name.endswith(".kbtmp"):
                     continue
                 try:
                     rel = self.rel(p)
                 except (ValueError, OSError):
                     continue
-                if rel.startswith(".") or "/." in rel:   # ignore .claude/.git subtrees
-                    continue
+                if common.is_hidden_rel(rel):   # .claude/.git subtrees and dot-files —
+                    continue                    # except derived sidecars, which index
                 if common.is_secret_path(rel):           # secrets stay out entirely
                     continue
                 try:

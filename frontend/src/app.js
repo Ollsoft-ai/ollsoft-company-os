@@ -1281,6 +1281,7 @@ async function loadWhoami() {
   $("#whoami-m").textContent = j.user + " · uid " + j.uid;
   $("#term-user").textContent = j.user;
   window.__kbuser = j.user;
+  restoreTreeState();   // before the first loadTree() render (boot awaits us first)
   if (!canShell) {
     $("#toggleterm").hidden = true;
     $("#cron-btn").hidden = true;
@@ -1389,6 +1390,43 @@ function toggleFoldAll() {
 }
 function cssEsc(s) { return s.replace(/["\\]/g, "\\$&"); }
 const collapsed = new Set();  // folder paths the user has collapsed
+
+// ---- persisted tree state ----
+// Which folders are open/collapsed survives a reload (per browser, like the
+// other kb* prefs). The snapshot is tagged with the login it belongs to: a
+// different user on the same browser starts from the defaults instead of
+// inheriting — or leaking — the previous user's folder layout.
+let _treeSaveTimer = null;
+function saveTreeStateSoon() {
+  clearTimeout(_treeSaveTimer);
+  _treeSaveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem("kbTreeState", JSON.stringify({
+        user: window.__kbuser || "",
+        collapsed: [...collapsed].slice(0, 3000),
+        seen: [..._seenDirs].slice(0, 3000),
+      }));
+    } catch (e) { /* private mode */ }
+  }, 250);
+}
+// Every mutation persists — wrapping the Set beats chasing every call site
+// (caret clicks, fold-all, reveal-on-open, ghosts, default collapse).
+for (const m of ["add", "delete", "clear"]) {
+  const orig = collapsed[m].bind(collapsed);
+  collapsed[m] = (...a) => { const r = orig(...a); saveTreeStateSoon(); return r; };
+}
+// Called from loadWhoami — after the username is known, before the first tree
+// render. Restoring `seen` too keeps applyDefaultCollapse from re-collapsing
+// a _files/ or .claude/ the user deliberately opened in an earlier session.
+function restoreTreeState() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem("kbTreeState") || "null"); }
+  catch (e) { /* private mode */ }
+  if (!s || s.user !== (window.__kbuser || "") ||
+      !Array.isArray(s.collapsed) || !Array.isArray(s.seen)) return;
+  for (const p of s.seen) if (typeof p === "string") _seenDirs.add(p);
+  for (const p of s.collapsed) if (typeof p === "string") collapsed.add(p);
+}
 
 function mkBtn(html, title, fn) {
   const b = document.createElement("button");
