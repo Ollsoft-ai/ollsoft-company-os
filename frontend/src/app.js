@@ -456,6 +456,10 @@ const tableField = StateField.define({
 
 function resolveMediaUrl(dir, url) {
   if (/^(https?:|data:|\/)/.test(url)) return url;
+  // Markdown link targets are percent-encoded ("image%20%281%29.png"); the
+  // filesystem knows the raw name. Decode BEFORE re-encoding for the query
+  // string, or the API looks up a file literally named "image%20%281%29.png".
+  try { url = decodeURIComponent(url); } catch (e) { /* literal % in the name */ }
   return "/api/attachment?path=" + encodeURIComponent((dir ? dir + "/" : "") + url);
 }
 
@@ -597,7 +601,9 @@ function livePreview(dir) {
         const url = view.state.sliceDoc(u.from, u.to);
         // repo-internal link to a secret -> the masked viewer, not a download
         if (!/^(https?:|data:)/.test(url)) {
-          const rel = (url.startsWith("/") ? url.slice(1) : (dir ? dir + "/" : "") + url)
+          let raw = url;                       // percent-encoded md target -> raw path
+          try { raw = decodeURIComponent(url); } catch (e) { /* literal % */ }
+          const rel = (raw.startsWith("/") ? raw.slice(1) : (dir ? dir + "/" : "") + raw)
             .replace(/^\.\//, "");
           if (isSecretPath(rel)) { openPath(rel, "secret"); return true; }
         }
