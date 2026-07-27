@@ -289,11 +289,18 @@ def test_terminal_touch_fling_and_jump_keys(browser):
     page.keyboard.type("seq 1 800")
     page.keyboard.press("Enter")
     assert wait_for_text(page, "800")
-    swipe(page, cdp, 0.25, 0.85, steps=8, dt=0.012)     # a flick, not a drag
-    at_end = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
-    page.wait_for_timeout(700)
-    glided = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
-    assert glided < at_end, f"the flick must keep scrolling after it ends ({at_end} -> {glided})"
+    # The flick's velocity is measured from real event timestamps, so a loaded
+    # CI box can deliver one too slowly to count as a flick (correctly — that's
+    # a drag). Flick until one takes; what must never happen is a glide-less UI.
+    glided = at_end = None
+    for _ in range(4):
+        swipe(page, cdp, 0.25, 0.85, steps=8, dt=0.012)
+        at_end = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+        page.wait_for_timeout(700)
+        glided = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+        if glided < at_end:
+            break
+    assert glided < at_end, f"no flick kept scrolling after touchend ({at_end} -> {glided})"
     # scrolled off the live output: the way back lights up
     assert page.locator("#tk-live.away").count() == 1
     page.click('#term-keys button[data-k="top"]')
@@ -381,4 +388,32 @@ def test_doc_header_shows_filename_only(browser):
     assert crumbs.nth(1).is_visible()
     assert page.locator("#modeswitch").is_visible()
     assert page.locator('[data-testid="mdbar"]').is_visible()
+    ctx.close()
+
+
+def test_drawer_opens_centred_on_the_active_file(browser):
+    """The open document is highlighted in the tree, and opening the drawer
+    scrolls to it — even when its folder was collapsed, which used to leave the
+    row unrendered and the highlight nowhere at all."""
+    ctx, page = m_login(browser)
+    page.click('.tree-item[data-path="company/overview.md"]')
+    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    assert not nav_open(page)
+    # collapse everything behind the drawer's back
+    page.click("#nav-btn")
+    page.click('[data-testid="tree-fold"]')
+    # collapsed rows stay in the DOM but are display:none — invisible highlight
+    assert not page.locator('.tree-item[data-path="company/overview.md"]').is_visible()
+    page.mouse.click(370, 500)                       # close via scrim
+    page.wait_for_function("() => !document.body.classList.contains('nav-open')")
+    # reopening the drawer finds the file again: expanded, highlighted, in view
+    page.click("#nav-btn")
+    row = page.locator('.tree-item[data-path="company/overview.md"]')
+    assert row.is_visible()
+    assert "active" in (row.get_attribute("class") or "")
+    page.wait_for_timeout(400)                       # drawer slide-in
+    rb = row.bounding_box()
+    sb = page.locator(".sidebar").bounding_box()
+    assert rb and sb and sb["y"] <= rb["y"] and \
+        rb["y"] + rb["height"] <= sb["y"] + sb["height"], (rb, sb)
     ctx.close()
