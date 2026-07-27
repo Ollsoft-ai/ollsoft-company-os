@@ -26,6 +26,56 @@ def nav_open(page):
     return page.evaluate("() => document.body.classList.contains('nav-open')")
 
 
+def term_box(page):
+    return page.evaluate("""() => { const r = document.querySelector('.term-content')
+        .getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height}; }""")
+
+
+def swipe(page, cdp, frac_from, frac_to, steps=12, dt=0.016, release=True):
+    """A REAL touch swipe, dispatched through the browser's input pipeline.
+
+    Synthetic TouchEvents are useless here: the bug this guards against is that
+    xterm's DOM renderer detaches the element under the finger, after which the
+    browser's own touch events stop reaching any ancestor listener. Only real
+    input exercises that path (and the pointer capture that survives it).
+    Fractions are of the terminal's height; larger = further down the screen."""
+    b = term_box(page)
+    x, y0, y1 = b["x"] + b["w"] / 2, b["y"] + b["h"] * frac_from, b["y"] + b["h"] * frac_to
+    cdp.send("Input.dispatchTouchEvent",
+             {"type": "touchStart", "touchPoints": [{"x": x, "y": y0}]})
+    for i in range(1, steps + 1):
+        time.sleep(dt)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove",
+                 "touchPoints": [{"x": x, "y": y0 + (y1 - y0) * i / steps}]})
+    if release:
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    return abs(y1 - y0)
+
+
+def rows_for(page, px):
+    """How many terminal rows that many pixels of finger travel is worth."""
+    return page.evaluate("""(px) => { const el = document.querySelector('.term-content');
+        return Math.round(px / Math.max(8, el.clientHeight / window.__kbterm.rows)); }""", px)
+
+
+def open_terminal(page):
+    page.click("#more-btn")
+    page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#terminal-panel:not([hidden])")
+    deadline = time.time() + 8
+    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
+        page.wait_for_timeout(150)
+
+
+def wait_for_text(page, needle, secs=8):
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        if needle in page.inner_text("#terminal"):
+            return True
+        page.wait_for_timeout(150)
+    return False
+
+
 def test_drawer_boots_open_and_closes_on_file_open(browser):
     ctx, page = m_login(browser)
     # the file list is the mobile home screen
@@ -152,73 +202,78 @@ def test_terminal_keybar_sends_keys(browser):
 
 
 def test_terminal_touch_scrolls_scrollback(browser):
-    """xterm has no touch support of its own — our swipe handler must scroll
-    the buffer (finger down = look up into scrollback)."""
+    """xterm has no touch support worth having — our swipe handler must scroll
+    the buffer (finger down = look back into scrollback), and by exactly as many
+    rows as the finger crossed. It used to move roughly double, because xterm's
+    own touch handler scrolled its viewport as well."""
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
-    deadline = time.time() + 8
-    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
-    page.keyboard.type("seq 1 300")
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
+    page.keyboard.type("seq 1 400")
     page.keyboard.press("Enter")
-    deadline = time.time() + 6
-    while time.time() < deadline and "300" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
+    assert wait_for_text(page, "400")
     base = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
-    assert base > 0, "seq 1 300 must have produced scrollback"
-    moved = page.evaluate("""() => {
-      const el = document.querySelector('.term-content');
-      const mk = (type, y) => new TouchEvent(type, {
-        bubbles: true, cancelable: true,
-        touches: [new Touch({ identifier: 1, target: el, clientX: 150, clientY: y })] });
-      el.dispatchEvent(mk('touchstart', 300));
-      el.dispatchEvent(mk('touchmove', 420));   // finger drags DOWN -> view scrolls UP
-      return window.__kbterm.buffer.active.viewportY;
-    }""")
-    assert moved < base, f"swipe must scroll into scrollback (was {base}, now {moved})"
+    assert base > 0, "seq 1 400 must have produced scrollback"
+    # no touchend: measure the swipe itself, before any momentum is added
+    px = swipe(page, cdp, 0.30, 0.75, release=False)
+    want = rows_for(page, px)
+    moved = base - page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    assert want > 8, want
+    assert abs(moved - want) <= 2, f"swipe moved {moved} rows, finger crossed {want}"
+    # A tap is not a swipe: it still hands the terminal the keyboard. The
+    # pointer is captured for the swipe's sake, so that focus is ours to give.
+    page.evaluate("() => document.activeElement.blur()")
+    b = term_box(page)
+    for kind in ("touchStart", "touchEnd"):
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind,
+            "touchPoints": [] if kind == "touchEnd" else
+                            [{"x": b["x"] + b["w"] / 2, "y": b["y"] + b["h"] / 2}]})
+    assert page.evaluate(
+        "() => document.activeElement.classList.contains('xterm-helper-textarea')")
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
     page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
     ctx.close()
 
 
-def test_terminal_touch_scroll_is_not_doubled_by_xterm(browser):
-    """xterm has touch scrolling of its own, bound to the .xterm element inside
-    ours. Both running meant every swipe moved the buffer roughly twice as far
-    as the finger, in fighting jumps. A swipe must move exactly the rows the
-    finger crossed — even when the touch starts on xterm's own DOM."""
+def test_terminal_touch_scroll_survives_a_repainting_screen(browser):
+    """THE mobile-terminal bug: a full-screen app that repaints while you swipe.
+
+    xterm's DOM renderer replaces the spans under the finger on every repaint,
+    and once that element leaves the document the browser's touch events stop
+    reaching any ancestor listener — the swipe delivered one move and went
+    silent (claude code, which repaints on every wheel report it answers, was
+    unusable). The gesture runs on a captured pointer for exactly this reason.
+    Emulated here by an alt-screen, mouse-tracking app that redraws at ~20fps."""
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
-    deadline = time.time() + 8
-    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
-    page.keyboard.type("seq 1 400")
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
+    page.keyboard.type(r"printf '\e[?1049h\e[?1003h\e[?1006h'; "
+                       r"while :; do printf '\e[H'; seq 1 40; sleep 0.05; done")
     page.keyboard.press("Enter")
-    deadline = time.time() + 6
-    while time.time() < deadline and "400" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
-    r = page.evaluate("""() => {
-      const t = window.__kbterm;
-      const el = document.querySelector('.term-content');
-      // the deepest xterm element under the finger: the event must bubble past
-      // xterm's own touch listeners on its way to ours
-      const target = el.querySelector('.xterm-screen') || el.querySelector('.xterm');
-      const mk = (type, y) => new TouchEvent(type, {
-        bubbles: true, cancelable: true,
-        touches: [new Touch({ identifier: 1, target, clientX: 150, clientY: y })] });
-      const rowH = Math.max(8, el.clientHeight / t.rows);
-      const before = t.buffer.active.viewportY;
-      target.dispatchEvent(mk('touchstart', 300));
-      target.dispatchEvent(mk('touchmove', 380));   // finger down 80px -> look back 80px
-      return { before, after: t.buffer.active.viewportY,
-               want: Math.trunc(80 / rowH) };
-    }""")
-    assert r["want"] > 2, r                                   # a meaningful swipe
-    assert r["before"] - r["after"] == r["want"], r           # exactly one handler ran
+    page.wait_for_function(
+        "() => window.__kbterm && window.__kbterm.buffer.active.type === 'alternate'",
+        timeout=8000)
+    page.wait_for_timeout(1500)
+    # count what the swipe actually sends to the pty
+    page.evaluate(r"""() => { const t = window.__kbterms[0];
+      window.__wheels = 0;
+      const send = t.ws.send.bind(t.ws);
+      t.ws.send = (d) => { try {
+        window.__wheels += (new TextDecoder().decode(d).match(/\x1b\[</g) || []).length;
+      } catch (e) { /* string frame */ } return send(d); }; }""")
+    px = swipe(page, cdp, 0.30, 0.75)
+    want = rows_for(page, px)
+    wheels = page.evaluate("() => window.__wheels")
+    assert want > 8, want
+    assert wheels >= want - 2, (
+        f"the repaint ate the swipe: {wheels} wheel reports for {want} rows of finger")
+    page.click('#term-keys button[data-k="cc"]')
+    page.keyboard.type(r"printf '\e[?1003l\e[?1049l'")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(400)
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
     page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
@@ -229,35 +284,16 @@ def test_terminal_touch_fling_and_jump_keys(browser):
     """A flick keeps gliding after the finger leaves (a 20 000-row scrollback is
     not reachable one swipe at a time), and the keybar's ⤒/⤓ jump to its ends."""
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
-    deadline = time.time() + 8
-    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
     page.keyboard.type("seq 1 800")
     page.keyboard.press("Enter")
-    deadline = time.time() + 8
-    while time.time() < deadline and "800" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
-    at_end = page.evaluate("""async () => {
-      const t = window.__kbterm;
-      const el = document.querySelector('.term-content');
-      const mk = (type, y, n) => new TouchEvent(type, {
-        bubbles: true, cancelable: true,
-        touches: n === 0 ? [] :
-          [new Touch({ identifier: 1, target: el, clientX: 150, clientY: y })] });
-      el.dispatchEvent(mk('touchstart', 200, 1));
-      for (let y = 240; y <= 400; y += 40) {          // a flick downward = back in time
-        await new Promise((r) => setTimeout(r, 16));
-        el.dispatchEvent(mk('touchmove', y, 1));
-      }
-      el.dispatchEvent(mk('touchend', 400, 0));
-      return t.buffer.active.viewportY;
-    }""")
-    page.wait_for_timeout(600)
+    assert wait_for_text(page, "800")
+    swipe(page, cdp, 0.25, 0.85, steps=8, dt=0.012)     # a flick, not a drag
+    at_end = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+    page.wait_for_timeout(700)
     glided = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
-    assert glided < at_end, f"the flick must keep scrolling after touchend ({at_end} -> {glided})"
+    assert glided < at_end, f"the flick must keep scrolling after it ends ({at_end} -> {glided})"
     # scrolled off the live output: the way back lights up
     assert page.locator("#tk-live.away").count() == 1
     page.click('#term-keys button[data-k="top"]')
@@ -306,25 +342,15 @@ def test_terminal_touch_swipe_sends_wheel_in_mouse_apps(browser):
     SGR mouse with printf and run cat — tty echo paints whatever bytes the swipe
     sends, so the SGR wheel-up report (button 64) must show up on screen."""
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
-    deadline = time.time() + 8
-    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
-        page.wait_for_timeout(150)
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
     page.keyboard.type(r"printf '\e[?1049h\e[?1003h\e[?1006h'; cat")
     page.keyboard.press("Enter")
     page.wait_for_function(
         "() => window.__kbterm && window.__kbterm.buffer.active.type === 'alternate'",
         timeout=8000)
     page.wait_for_timeout(300)
-    page.evaluate("""() => {
-      const el = document.querySelector('.term-content');
-      const mk = (type, y) => new TouchEvent(type, { bubbles: true, cancelable: true,
-        touches: [new Touch({ identifier: 1, target: el, clientX: 150, clientY: y })] });
-      el.dispatchEvent(mk('touchstart', 300));
-      el.dispatchEvent(mk('touchmove', 420));   // finger down -> wheel UP -> button 64
-    }""")
+    swipe(page, cdp, 0.30, 0.75)              # finger down -> wheel UP -> button 64
     deadline = time.time() + 5
     ok = False
     while time.time() < deadline:
