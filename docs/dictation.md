@@ -13,7 +13,13 @@ Two gestures, one key, no mode to remember:
 
 The indicator (bottom-right) shows a pulsing dot, a live input-level meter, and a
 **Stop** button, and it stays visible wherever focus is. A recording auto-stops
-after 90 seconds, and on window blur, tab switch or page hide.
+after 90 seconds. A **key-held** recording also ends on window blur (the keyup is
+gone for good), but a **latched** recording keeps running when the app leaves the
+screen — dictate while reading another app; the phone's mic indicator is then
+telling the truth. When nothing is recording, leaving the screen releases the
+microphone outright so that indicator never outlives the visible app. If a
+recording had to be finished off-screen (the cap, or the OS reclaiming the mic),
+returning to the app says so in a toast.
 
 ---
 

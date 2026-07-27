@@ -517,25 +517,64 @@ def test_dictation_is_in_the_command_palette(page):
     assert "dictate" in listing
 
 
-def test_leaving_the_app_releases_the_mic_and_explains_on_return(page):
-    """Pressing Home mid-recording: the recording finishes, and the microphone
-    is RELEASED, not idled — a disabled-but-live track still lights Android's
-    system-wide mic dot, and a green dot outliving the visible app reads as
-    eavesdropping. Coming back gets one toast saying what happened; silence
-    there made the auto-stop look like the feature quietly breaking."""
+HIDE = """(hidden) => {
+  Object.defineProperty(document, 'hidden', {value: hidden, configurable: true});
+  Object.defineProperty(document, 'visibilityState',
+                        {value: hidden ? 'hidden' : 'visible', configurable: true});
+  document.dispatchEvent(new Event('visibilitychange'));
+}"""
+
+
+def test_latched_recording_survives_going_home(page):
+    """A latched recording keeps running when the app leaves the screen —
+    dictating a note while reading another app is half the point of latching,
+    and the phone's mic-in-use dot is then telling the truth. No stop, no
+    spurious 'stopped' toast on return, and the second tap still finishes."""
     page.keyboard.press("F9")                    # tap → latched recording
     recording(page)
-    assert page.evaluate("() => window.__kbmicLive()")
-    hide = """(hidden) => {
-      Object.defineProperty(document, 'hidden', {value: hidden, configurable: true});
-      Object.defineProperty(document, 'visibilityState',
-                            {value: hidden ? 'hidden' : 'visible', configurable: true});
-      document.dispatchEvent(new Event('visibilitychange'));
-    }"""
-    page.evaluate(hide, True)
+    page.evaluate(HIDE, True)
+    page.wait_for_timeout(800)
+    assert page.locator('[data-testid="ptt"]').is_visible(), "hiding must not stop a latch"
+    assert page.evaluate("() => window.__kbmicLive()"), "the capture must stay open"
+    page.evaluate(HIDE, False)
+    page.wait_for_timeout(400)
+    toasts = page.locator('[data-testid="toast"]').all_inner_texts()
+    assert not any("left the screen" in t for t in toasts), toasts
+    assert page.locator('[data-testid="ptt"]').is_visible()
+    page.keyboard.press("F9")                    # finish normally
+    not_recording(page)
+
+
+def test_leaving_the_app_with_an_idle_mic_releases_it(page):
+    """When nothing is recording, the warm mic (kept for latency) is released
+    the moment the app leaves the screen — a live track lights Android's
+    system-wide mic dot even disabled, and a green dot with nothing recording
+    reads as eavesdropping."""
+    dictate(page)                                # a full recording, then idle
+    not_recording(page)
+    assert page.evaluate("() => window.__kbmicLive()"), "idle keeps the mic warm on screen"
+    page.evaluate(HIDE, True)
+    page.wait_for_function("() => !window.__kbmicLive()", timeout=8000)
+    page.evaluate(HIDE, False)
+
+
+def test_a_recording_killed_off_screen_explains_on_return(page):
+    """The bounded cases — the 90 s cap, or the OS reclaiming the microphone in
+    the background — finish the recording while nobody is looking. The finish
+    must release the mic, and the return to the app must say what happened:
+    a toast fired off-screen would have expired unseen. Emulated by ending the
+    tracks, exactly what the OS does when it takes the device."""
+    page.keyboard.press("F9")
+    recording(page)
+    page.evaluate(HIDE, True)
+    page.wait_for_timeout(300)
+    page.evaluate("""() => {                    /* the OS reclaims the mic */
+      window.__kbdictStream && window.__kbdictStream()
+        .getAudioTracks().forEach((t) => { t.stop(); t.dispatchEvent(new Event('ended')); });
+    }""")
     not_recording(page)
     page.wait_for_function("() => !window.__kbmicLive()", timeout=8000)
-    page.evaluate(hide, False)
+    page.evaluate(HIDE, False)
     page.wait_for_selector('[data-testid="toast"]', timeout=8000)
     toasts = page.locator('[data-testid="toast"]').all_inner_texts()
     assert any("left the screen" in t for t in toasts), toasts
