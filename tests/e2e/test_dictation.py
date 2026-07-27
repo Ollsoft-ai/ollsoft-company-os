@@ -430,6 +430,37 @@ def test_too_short_is_discarded_before_upload(page, doc):
     assert calls == [], "a sub-300ms recording should never be uploaded"
 
 
+# ---- the last 24 hours are recoverable --------------------------------------
+
+def test_transcript_lands_in_history(page, doc):
+    """Every transcript that comes back is kept for a day, so a deleted or
+    misrouted dictation is recoverable from the topbar's Dictation history."""
+    phrase = "recoverable " + uuid.uuid4().hex[:8]
+    stub(page, {"ok": True, "text": phrase})
+    open_doc(page, doc)
+    dictate(page)
+    not_recording(page)
+    page.wait_for_function(
+        "t => window.__kbview.state.doc.toString().includes(t)", arg=phrase, timeout=15000)
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"] .dh-item', timeout=6000)
+    assert phrase in page.locator('[data-testid="dh-list"]').inner_text()
+
+
+def test_history_expires_after_a_day(page):
+    """Entries older than 24 h are filtered on read — the store is a safety net,
+    not an archive."""
+    page.evaluate("""() => localStorage.setItem('kbDictHistory', JSON.stringify([
+      {t: Date.now() - 1000, text: 'fresh entry'},
+      {t: Date.now() - 25 * 3600 * 1000, text: 'stale entry'}]))""")
+    leave_terminal(page)
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"]', timeout=6000)
+    body = page.locator('[data-testid="dh-list"]').inner_text()
+    assert "fresh entry" in body
+    assert "stale entry" not in body
+
+
 # ---- documentation cannot drift from behaviour ------------------------------
 
 def test_shortcut_sheet_lists_dictation(page):

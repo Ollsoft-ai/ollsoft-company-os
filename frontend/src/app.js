@@ -906,6 +906,10 @@ function dictationTarget() {
 
 function insertDictation(target, text) {
   if (!text) { kbToast("Nothing was said", "err"); return; }
+  // Keep the transcript BEFORE routing it anywhere. Even a transcript that has
+  // nowhere to land — or lands somewhere and gets deleted by a stray swipe — is
+  // recoverable from the history for a day.
+  dictHistAdd(text);
   if (!target) {
     kbToast("Nowhere to put that — click into a document or the terminal first", "err");
     return;
@@ -960,6 +964,79 @@ function insertDictation(target, text) {
     userEvent: "input.paste",
     effects: EditorView.announce.of("Inserted " + text.length + " characters"),
   });
+}
+
+// ---- dictation history -----------------------------------------------------
+// A day's worth of transcripts, kept in this browser's localStorage. This is
+// the safety net for the two ways a transcript dies young: it landed somewhere
+// and got deleted by accident, or recording was cut short (backgrounding the
+// app on a phone finishes the recording — see the visibilitychange guard in
+// dictation.js) and the text went somewhere unexpected. Text only, never
+// audio: blobs would blow the quota, and the transcript is what you copy.
+const DICT_HIST_KEY = "kbDictHistory";
+const DICT_HIST_TTL = 24 * 3600 * 1000;
+const DICT_HIST_MAX = 200;                // a chatty day, not an unbounded log
+
+function dictHistLoad() {
+  let arr;
+  try { arr = JSON.parse(localStorage.getItem(DICT_HIST_KEY) || "[]"); }
+  catch (e) { return []; }
+  if (!Array.isArray(arr)) return [];
+  const cut = Date.now() - DICT_HIST_TTL;
+  return arr.filter((e) => e && typeof e.text === "string" && e.t > cut);
+}
+
+function dictHistAdd(text) {
+  const arr = dictHistLoad();               // load() already expired the old ones
+  arr.unshift({ t: Date.now(), text });
+  if (arr.length > DICT_HIST_MAX) arr.length = DICT_HIST_MAX;
+  try { localStorage.setItem(DICT_HIST_KEY, JSON.stringify(arr)); }
+  catch (e) { /* quota or private mode — dictation itself still works */ }
+}
+
+function dictHistAgo(t) {
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  return Math.round(s / 3600) + " h ago";
+}
+
+function openDictHistory() {
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.innerHTML = `
+    <div class="modal-head"><b>Dictation history</b>
+      <span class="muted">last 24 h, this browser only</span>
+      <button class="modal-x" title="Close">×</button></div>
+    <div class="dh-list" data-testid="dh-list"></div>
+    <div class="modal-foot"><button class="modal-close">Close</button></div>`;
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+  card.querySelector(".modal-x").addEventListener("click", () => ov.remove());
+  card.querySelector(".modal-close").addEventListener("click", () => ov.remove());
+
+  const list = card.querySelector(".dh-list");
+  const entries = dictHistLoad();
+  if (!entries.length) {
+    list.innerHTML = '<div class="muted">Nothing yet — every transcript you dictate is kept here for 24 hours, in case it lands in the wrong place or gets deleted.</div>';
+    return;
+  }
+  for (const e of entries) {
+    const row = document.createElement("div");
+    row.className = "dh-item";
+    row.innerHTML = `<div class="dh-text"></div>
+      <span class="dh-when">${dictHistAgo(e.t)}</span>
+      <button class="mini dh-copy" title="Copy this transcript">copy</button>`;
+    row.querySelector(".dh-text").textContent = e.text;
+    row.querySelector(".dh-copy").addEventListener("click", () => {
+      navigator.clipboard.writeText(e.text)
+        .then(() => kbToast("Copied", "ok"), () => kbToast("Clipboard blocked", "err"));
+    });
+    list.appendChild(row);
+  }
 }
 
 function tbInline(mark) {
@@ -3543,6 +3620,8 @@ const EXTRA_COMMANDS = [
   { id: "reload", label: "Reload the file tree", run: () => loadTree(true).then(() => kbToast("Tree reloaded", "ok")) },
   { id: "retryspeech", label: "Retry the last dictation", when: dictationReady,
     run: retryDictation },
+  { id: "dicthistory", label: "Dictation history — transcripts from the last 24 hours",
+    when: dictationReady, run: openDictHistory },
   // The mic is held open between utterances so the next one starts instantly and
   // the browser doesn't re-prompt. This hands it back without waiting out the
   // five-minute idle timer, for anyone who wants the recording indicator gone.
@@ -5043,11 +5122,14 @@ async function boot() {
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.
   const micBtn = $("#mic-btn");
+  const dhBtn = $("#dict-hist-btn");   // null-guarded: cached older app.html
   if (micBtn && dictationReady()) {
     initDictation({ resolveTarget: dictationTarget, insert: insertDictation,
                     toast: kbToast, button: micBtn });
+    if (dhBtn) dhBtn.addEventListener("click", openDictHistory);
   } else if (micBtn) {
     micBtn.hidden = true;
+    if (dhBtn) dhBtn.hidden = true;    // no mic here → the history would stay empty
     const mdMic = document.querySelector('#mdbar button[data-md="mic"]');
     if (mdMic) mdMic.hidden = true;
   }
