@@ -45,7 +45,7 @@ def mic_browser(browser):
 @pytest.fixture(scope="module")
 def api():
     c = httpx.Client(base_url=BASE, timeout=30)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": "krystof", "password": CREDS["krystof"]})
     yield c
 
 
@@ -63,8 +63,8 @@ def page(ctx):
     p = ctx.new_page()
     _serve_dev(p)
     p.goto(BASE + "/login")
-    p.fill('input[name="username"]', "alice")
-    p.fill('input[name="password"]', CREDS["alice"])
+    p.fill('input[name="username"]', "krystof")
+    p.fill('input[name="password"]', CREDS["krystof"])
     p.click('button[type="submit"]')
     p.wait_for_url(BASE + "/")
     p.wait_for_selector('[data-testid="tree"] .tree-item', timeout=15000)

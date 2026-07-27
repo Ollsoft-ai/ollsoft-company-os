@@ -46,6 +46,7 @@ let startedAt = 0, keyDown = false, latched = false, pressCode = null;
 let maxTimer = null, idleTimer = null, stopMeter = null;
 let lastBlob = null;        // kept for "Retry the last dictation"
 let reduceMotion = false;
+let stoppedOffScreen = false;   // a recording auto-finished because the app was left
 
 export function dictationReady() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
@@ -258,6 +259,12 @@ async function finishRecording(note) {
   if (stream) for (const t of stream.getAudioTracks()) t.enabled = false;
   armIdleRelease();
   rec = null; chunks = [];
+  // …unless the page just left the screen. A disabled-but-live track still
+  // lights Android's system-wide "microphone in use" dot, and a green dot that
+  // outlives the app being visible reads as eavesdropping. The blob is already
+  // collected, so the upload below loses nothing; the next recording re-opens
+  // the mic (at worst re-prompting — the honest trade).
+  if (document.hidden) releaseMicNow();
 
   if (note && hooks.toast) hooks.toast(note, "err");
 
@@ -372,6 +379,11 @@ export function toggleDictation() {
 // ---- wiring ----------------------------------------------------------------
 export function initDictation(h) {
   hooks = h;
+  // Test hook: is the microphone actually open (a LIVE track — what lights the
+  // OS mic indicator), as opposed to merely permitted? The stream is module-
+  // private, so the release-on-hide behaviour is unobservable without this.
+  window.__kbmicLive = () =>
+    !!(stream && stream.getAudioTracks().some((t) => t.readyState === "live"));
   const rm = window.matchMedia("(prefers-reduced-motion: reduce)");
   reduceMotion = rm.matches;
   rm.addEventListener("change", (e) => { reduceMotion = e.matches; });
@@ -428,10 +440,30 @@ export function initDictation(h) {
     if (wasKey && state === "recording") finishRecording();
   });
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) return;
+    if (!document.hidden) {
+      // Coming back to a recording that was finished for you looks like the
+      // feature silently died — say what happened, once, on return. (A toast
+      // fired while hidden would have expired long before anyone saw it.)
+      if (stoppedOffScreen) {
+        stoppedOffScreen = false;
+        // lastBlob is cleared on a successful transcription and kept on a
+        // failed one — it distinguishes "already in history" from "retry me".
+        if (hooks.toast) hooks.toast(
+          "Recording stopped when the app left the screen — " +
+          (lastBlob ? "run “Retry the last dictation” to transcribe it"
+                    : "the transcript is in the dictation history"));
+      }
+      return;
+    }
     keyDown = false; pressCode = null;
-    if (state === "recording") finishRecording();
-    else if (state === "idle") releaseMicNow();
+    if (state === "recording") {
+      stoppedOffScreen = true;
+      finishRecording();   // releases the mic itself: it sees document.hidden
+    } else {
+      // idle or sending: the blob (if any) is safe — give the device back so
+      // the phone's mic indicator dies with the app leaving the screen
+      releaseMicNow();
+    }
   });
   window.addEventListener("pagehide", releaseMicNow);
 
