@@ -259,12 +259,14 @@ async function finishRecording(note) {
   if (stream) for (const t of stream.getAudioTracks()) t.enabled = false;
   armIdleRelease();
   rec = null; chunks = [];
-  // …unless the page just left the screen. A disabled-but-live track still
-  // lights Android's system-wide "microphone in use" dot, and a green dot that
-  // outlives the app being visible reads as eavesdropping. The blob is already
-  // collected, so the upload below loses nothing; the next recording re-opens
-  // the mic (at worst re-prompting — the honest trade).
-  if (document.hidden) releaseMicNow();
+  // …unless this finish happened OFF-SCREEN (the 90 s cap, or the OS killing
+  // the capture): a disabled-but-live track still lights Android's system-wide
+  // "microphone in use" dot, and a green dot with nothing recording reads as
+  // eavesdropping. The blob is already collected, so the upload below loses
+  // nothing; the next recording re-opens the mic (at worst re-prompting — the
+  // honest trade). Flag it so the return to the app explains what happened —
+  // any toast fired now would expire unseen.
+  if (document.hidden) { stoppedOffScreen = true; releaseMicNow(); }
 
   if (note && hooks.toast) hooks.toast(note, "err");
 
@@ -384,6 +386,7 @@ export function initDictation(h) {
   // private, so the release-on-hide behaviour is unobservable without this.
   window.__kbmicLive = () =>
     !!(stream && stream.getAudioTracks().some((t) => t.readyState === "live"));
+  window.__kbdictStream = () => stream;   // test hook: to emulate the OS reclaiming the mic
   const rm = window.matchMedia("(prefers-reduced-motion: reduce)");
   reduceMotion = rm.matches;
   rm.addEventListener("change", (e) => { reduceMotion = e.matches; });
@@ -456,14 +459,20 @@ export function initDictation(h) {
       return;
     }
     keyDown = false; pressCode = null;
-    if (state === "recording") {
-      stoppedOffScreen = true;
-      finishRecording();   // releases the mic itself: it sees document.hidden
-    } else {
-      // idle or sending: the blob (if any) is safe — give the device back so
-      // the phone's mic indicator dies with the app leaving the screen
-      releaseMicNow();
-    }
+    // A recording deliberately KEEPS RUNNING off-screen — dictating a note
+    // while reading something in another app is half the point of latching,
+    // and the phone's mic dot is then telling the truth. (A key-held recording
+    // never gets here: switching apps blurs the window, and the blur handler
+    // above already finished it — its keyup is gone for good.) The recording
+    // stays bounded: the 90-second cap still fires off-screen, and if the OS
+    // or the browser kills the capture in the background, the track's "ended"
+    // guard finishes it — both land in finishRecording, which sees
+    // document.hidden, releases the mic, and queues the explanation below.
+    if (state === "recording") return;
+    // idle or sending: nothing is listening and the blob (if any) is already
+    // collected — give the device back so the phone's mic indicator dies with
+    // the app leaving the screen.
+    releaseMicNow();
   });
   window.addEventListener("pagehide", releaseMicNow);
 
