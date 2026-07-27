@@ -1362,8 +1362,12 @@ function kbToast(msg, kind) {
 // action buttons into a dropdown below 880px, so nothing here forks by device.
 function closeNav() { document.body.classList.remove("nav-open"); }
 function wireNav() {
-  $("#nav-btn").addEventListener("click", () =>
-    document.body.classList.toggle("nav-open"));
+  $("#nav-btn").addEventListener("click", () => {
+    const open = document.body.classList.toggle("nav-open");
+    // the drawer opens onto the file you are in, centred — not wherever the
+    // tree happened to be scrolled last time
+    if (open) revealActiveInTree(true);
+  });
   $("#scrim").addEventListener("click", closeNav);
   const menu = $("#topbar-actions"), more = $("#more-btn");
   more.addEventListener("click", (e) => {
@@ -2119,6 +2123,11 @@ function activateTab(t) {
   setAccessBadge(t ? t.access : null);
   document.querySelectorAll(".tree-item").forEach((e) =>
     e.classList.toggle("active", !!t && e.dataset.path === t.path));
+  // Keep the highlight real on a tree that is on screen: expand down to the
+  // file and follow it. A phone's drawer is closed right now — it reveals on
+  // open instead, so switching tabs never pops the drawer.
+  if (t && !isMobile() && !document.body.classList.contains("nav-hidden"))
+    revealActiveInTree(false);
   syncTestHooks();
   updateModeUI();
   renderPresence();
@@ -3742,8 +3751,11 @@ function cycleTab(d) {
 }
 function gotoTab(i) { if (tabs[i]) activateTab(tabs[i]); }
 function toggleSidebar() {
-  if (isMobile()) { document.body.classList.toggle("nav-open"); return; }
-  document.body.classList.toggle("nav-hidden");
+  if (isMobile()) {
+    if (document.body.classList.toggle("nav-open")) revealActiveInTree(true);
+    return;
+  }
+  if (!document.body.classList.toggle("nav-hidden")) revealActiveInTree(true);
 }
 function saveNow() {
   // Edits stream into the CRDT and land on disk within a second — there is no
@@ -3757,21 +3769,31 @@ function findInDoc() {
   v.focus();
   openSearchPanel(v);
 }
-function revealActive() {
+// Make the active tab's row visible: expand every folder above it (a row
+// inside a collapsed folder is display:none, so its highlight showed nothing
+// and scrollIntoView was a no-op), then scroll the tree to it.
+// "center" when the tree just came into view, "nearest" when it was already
+// on screen — recentring a visible tree on every tab switch is jumpy.
+function revealActiveInTree(center) {
   if (!active) return;
-  // open every folder on the way down, then scroll the row into view
   const parts = active.path.split("/");
-  let acc = "";
+  let acc = "", changed = false;
   for (let i = 0; i < parts.length - 1; i++) {
     acc = acc ? acc + "/" + parts[i] : parts[i];
-    collapsed.delete(acc);
+    if (collapsed.delete(acc)) changed = true;
   }
+  if (changed) rerenderTree();
+  const el = $("#tree").querySelector('.tree-item[data-path="' + cssEsc(active.path) + '"]');
+  if (el) el.scrollIntoView({ block: center ? "center" : "nearest" });
+}
+
+function revealActive() {
+  if (!active) return;
   if (isMobile()) document.body.classList.add("nav-open");
   document.body.classList.remove("nav-hidden");
-  rerenderTree();
+  revealActiveInTree(true);
   treeCursor = active.path;
-  const el = $("#tree").querySelector('.tree-item[data-path="' + cssEsc(active.path) + '"]');
-  if (el) { el.scrollIntoView({ block: "center" }); paintTreeCursor(); }
+  paintTreeCursor();
 }
 
 // ---- the file tree, from the keyboard --------------------------------------
