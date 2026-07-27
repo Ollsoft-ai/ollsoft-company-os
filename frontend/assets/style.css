@@ -659,6 +659,17 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .modal-foot button.primary { background: var(--accent-deep); border: 0; font-weight: 600; color: #fff; }
 .modal-foot button.primary:hover { background: var(--accent); }
 
+/* dictation history */
+.dh-list { display: flex; flex-direction: column; gap: .35rem; overflow: auto; min-height: 0;
+  padding: .2rem 0; }
+.dh-item { display: flex; align-items: flex-start; gap: .5rem; padding: .45rem .55rem;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.dh-text { flex: 1; font-size: .84rem; line-height: 1.4; white-space: pre-wrap;
+  overflow-wrap: anywhere; user-select: text; }
+.dh-when { color: var(--faint); font-size: .68rem; font-family: var(--mono);
+  white-space: nowrap; padding-top: .15rem; }
+.dh-copy { flex: 0 0 auto; }
+
 /* admin + cron shared table styling */
 .admin-card { width: min(760px, 94vw); }
 .admin-scroll { max-height: 34vh; overflow: auto; }

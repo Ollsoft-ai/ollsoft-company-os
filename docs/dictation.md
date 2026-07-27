@@ -35,6 +35,20 @@ at insertion. In order:
    editor is CRDT-backed, so it syncs to disk on its own — there is no save step.
 4. **Nothing suitable** → a toast saying so. The text is never silently dropped.
 
+### The last 24 hours are recoverable
+
+Every transcript that comes back is also kept client-side for 24 hours —
+**Dictation history** in the topbar (inside the ⋯ menu on phones) or in the
+command palette lists them, newest first, each with a copy button. This is the
+safety net for a transcript that landed in the wrong place, got deleted by a
+stray swipe, or was cut short when the app was backgrounded mid-recording.
+
+It lives in the browser's `localStorage` (`kbDictHistory`, capped at 200
+entries, expired on read), so it is per browser profile and never leaves the
+device — consistent with the server-side rule that `stt.log` records metadata
+but **never the transcript**. The flip side: anyone using the same browser
+profile can read it, same as anything else in that profile.
+
 The transcript is third-party text, so it is stripped of C0 control characters
 (including ESC) and NFC-normalized before it touches anything. That matters most
 for the terminal: without it, a hallucinated `\x1b[201~` in a transcript could
