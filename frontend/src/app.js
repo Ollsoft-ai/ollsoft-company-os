@@ -4314,6 +4314,7 @@ function setCtrlArmed(on) {
 }
 let _offlineNagAt = 0;
 function rawSend(t, s) {
+  if (t && t.stopFling) t.stopFling();   // typing lands at the bottom — stop any glide
   if (t && t.ws && t.ws.readyState === 1) {
     t.ws.send(new TextEncoder().encode(s));
     return;
@@ -4335,13 +4336,19 @@ function sendData(t, d) {
   }
   rawSend(t, d);
 }
-// xterm has no touch handling — on a phone the buffer simply cannot scroll
-// (desktop scrolls via wheel events). Translate vertical swipes ourselves:
-// scrollback in the normal buffer; arrow keys in the alternate screen, where
-// there is no scrollback and TUIs (less, vim, htop) scroll via cursor keys —
-// the convention mobile terminals like Termux use.
+// Touch scrolling. xterm ships a touch handler of its own, but a bad one for
+// this app: it pans its viewport element behind our back, and only when the
+// running program is not tracking the mouse — so on a phone every swipe moved
+// the buffer TWICE (once by xterm's pixels, once by our lines) in fighting
+// jumps, which is the "scrolling is unresponsive" people report. The gesture is
+// ours alone: these listeners run in the CAPTURE phase and stop the event
+// before it reaches xterm's own, which are bound to the .xterm element inside.
+// A swipe scrolls the scrollback in the normal buffer, and becomes arrow keys /
+// wheel reports in the alternate screen, where there is no scrollback and the
+// app scrolls itself — the convention mobile terminals like Termux use.
 function wireTouchScroll(t) {
   let lastY = null, lastX = 0, acc = 0;
+  let vel = 0, velAt = 0;                 // finger velocity (px/ms), for the fling
   // Pinch = text size, the gesture every phone user will try first. The
   // browser's own pinch-zoom never fires here (#terminal has touch-action:
   // none), so the gesture is ours to implement: scale the font by the ratio
@@ -4349,7 +4356,63 @@ function wireTouchScroll(t) {
   let pinchD = null, pinchBase = 0;
   const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
                                  e.touches[0].clientY - e.touches[1].clientY);
+  const rowH = () => Math.max(8, t.el.clientHeight / t.term.rows);
+
+  // Momentum: the buffer keeps gliding after the finger leaves, decaying like a
+  // native scroll view. Without it a long scrollback is a hundred swipes deep
+  // and simply never gets read to the top.
+  const stopFling = () => { if (t.fling) { cancelAnimationFrame(t.fling); t.fling = 0; } };
+  t.stopFling = stopFling;
+  const startFling = (v) => {
+    // Scrollback only: a fling in an alternate-screen app would machine-gun
+    // arrow keys (or wheel reports) at it long after the finger was lifted.
+    if (Math.abs(v) < 0.3 || t.term.buffer.active.type === "alternate") return;
+    v = Math.max(-6, Math.min(6, v));     // a bogus timestamp must not launch it into orbit
+    let carry = 0, prev = 0;
+    const step = (ts) => {
+      const dt = prev ? Math.min(50, ts - prev) : 16;
+      prev = ts;
+      carry += v * dt;
+      const h = rowH();
+      const lines = Math.trunc(carry / h);
+      if (lines) {
+        carry -= lines * h;
+        const was = t.term.buffer.active.viewportY;
+        t.term.scrollLines(lines);
+        if (t.term.buffer.active.viewportY === was) { t.fling = 0; return; }  // hit an end
+      }
+      v *= Math.pow(0.996, dt);           // frame-rate independent decay
+      if (Math.abs(v) < 0.02) { t.fling = 0; return; }
+      t.fling = requestAnimationFrame(step);
+    };
+    t.fling = requestAnimationFrame(step);
+  };
+
+  // One swipe step, in whole rows: down the scrollback, or into the app.
+  const scrollRows = (lines, x, y) => {
+    if (t.term.buffer.active.type !== "alternate") { t.term.scrollLines(lines); return; }
+    // Alternate screen = no scrollback; the app owns scrolling.
+    const n = Math.min(Math.abs(lines), 40);
+    const modes = t.term.modes || {};
+    if (modes.mouseTrackingMode && modes.mouseTrackingMode !== "none") {
+      // The app listens for the mouse (htop, some TUIs): forward the swipe as
+      // SGR wheel events — the same reports desktop wheel scrolling sends — and
+      // the app scrolls its own view.
+      const rect = t.el.getBoundingClientRect();
+      const col = Math.max(1, Math.min(t.term.cols,
+        Math.ceil((x - rect.left) / (rect.width / t.term.cols))));
+      const row = Math.max(1, Math.min(t.term.rows,
+        Math.ceil((y - rect.top) / (rect.height / t.term.rows))));
+      rawSend(t, `\x1b[<${lines > 0 ? 65 : 64};${col};${row}M`.repeat(n));
+    } else {
+      // No mouse support (plain less/vim): cursor keys — the Termux convention.
+      const app = modes.applicationCursorKeysMode;
+      rawSend(t, ((app ? "\x1bO" : "\x1b[") + (lines > 0 ? "B" : "A")).repeat(n));
+    }
+  };
+
   t.el.addEventListener("touchstart", (e) => {
+    stopFling();                          // a finger down stops the glide, as everywhere
     if (e.touches.length === 2) {
       lastY = null;                       // a pinch is never also a swipe
       pinchD = dist(e); pinchBase = termFontSize();
@@ -4358,11 +4421,19 @@ function wireTouchScroll(t) {
     pinchD = null;
     if (e.touches.length !== 1) { lastY = null; return; }
     lastY = e.touches[0].clientY; lastX = e.touches[0].clientX; acc = 0;
-  }, { passive: true });
+    vel = 0; velAt = e.timeStamp;
+  }, { passive: true, capture: true });
   t.el.addEventListener("touchend", (e) => {
     if (e.touches.length < 2) pinchD = null;
-  }, { passive: true });
+    if (lastY != null && e.touches.length === 0) {
+      // Let go mid-swipe → glide on. A finger that had already stopped moving
+      // (no touchmove for a moment) is a hold, not a flick.
+      if (e.timeStamp - velAt < 120) startFling(vel);
+      lastY = null;
+    }
+  }, { passive: true, capture: true });
   t.el.addEventListener("touchmove", (e) => {
+    e.stopPropagation();                  // xterm's own touch scrolling must not also run
     if (pinchD && e.touches.length === 2) {
       e.preventDefault();
       const n = Math.round(pinchBase * dist(e) / pinchD);
@@ -4372,36 +4443,19 @@ function wireTouchScroll(t) {
     if (lastY == null || e.touches.length !== 1) return;
     const y = e.touches[0].clientY;
     lastX = e.touches[0].clientX;
-    acc += lastY - y;
+    const dy = lastY - y;                 // finger up = positive = later output
+    acc += dy;
     lastY = y;
-    const rowH = Math.max(8, t.el.clientHeight / t.term.rows);
-    const lines = Math.trunc(acc / rowH);
+    // Smoothed, so one stuttery last frame does not decide the whole fling
+    vel = vel * 0.4 + (dy / Math.max(1, e.timeStamp - velAt)) * 0.6;
+    velAt = e.timeStamp;
+    const h = rowH();
+    const lines = Math.trunc(acc / h);
     if (!lines) return;
-    acc -= lines * rowH;
+    acc -= lines * h;
     e.preventDefault();
-    if (t.term.buffer.active.type !== "alternate") {
-      t.term.scrollLines(lines);
-      return;
-    }
-    // Alternate screen = no scrollback; the app owns scrolling.
-    const n = Math.min(Math.abs(lines), 40);
-    const modes = t.term.modes || {};
-    if (modes.mouseTrackingMode && modes.mouseTrackingMode !== "none") {
-      // The app listens for the mouse (claude code, htop…): forward the swipe
-      // as SGR wheel events — the same reports desktop wheel scrolling sends —
-      // and the app scrolls its own view (e.g. claude code's transcript).
-      const rect = t.el.getBoundingClientRect();
-      const col = Math.max(1, Math.min(t.term.cols,
-        Math.ceil((lastX - rect.left) / (rect.width / t.term.cols))));
-      const row = Math.max(1, Math.min(t.term.rows,
-        Math.ceil((y - rect.top) / (rect.height / t.term.rows))));
-      rawSend(t, `\x1b[<${lines > 0 ? 65 : 64};${col};${row}M`.repeat(n));
-    } else {
-      // No mouse support (plain less/vim): cursor keys — the Termux convention.
-      const app = modes.applicationCursorKeysMode;
-      rawSend(t, ((app ? "\x1bO" : "\x1b[") + (lines > 0 ? "B" : "A")).repeat(n));
-    }
-  }, { passive: false });
+    scrollRows(lines, lastX, y);
+  }, { passive: false, capture: true });
 }
 
 function wireTermKeys() {
@@ -4422,6 +4476,18 @@ function wireTermKeys() {
     }
     if (b.dataset.k === "fminus") { setTermFontSize(termFontSize() - 1); return; }
     if (b.dataset.k === "fplus")  { setTermFontSize(termFontSize() + 1); return; }
+    // Ends of the scrollback in one tap. Swiping there is fine for a screenful
+    // or two; the top of a long agent run is thousands of rows away.
+    if (b.dataset.k === "top" || b.dataset.k === "live") {
+      if (t.stopFling) t.stopFling();
+      if (t.term.buffer.active.type === "alternate") {
+        kbToast("This app draws its own screen — there is no scrollback to jump in", "err");
+        return;
+      }
+      if (b.dataset.k === "top") t.term.scrollToTop(); else t.term.scrollToBottom();
+      t.term.focus();
+      return;
+    }
     if (b.dataset.k === "copy") {
       const sel = t.term.getSelection();
       if (!sel) { kbToast("Nothing selected — long-press to select first", "err"); return; }
@@ -4635,8 +4701,9 @@ function newTerminal(cmd, sid, savedName) {
   const wasHidden = $("#terminal-panel").hidden;
   $("#terminal-panel").hidden = false;
   // Every door into the terminal honours the mobile mode, not just the toggle —
-  // launcher buttons and session restore land here too.
-  if (wasHidden && isMobile()) setTermMax(preferredTermMax());
+  // launcher buttons and session restore land here too, and each of them must
+  // also get the drawer out of the way (a full-screen terminal covers the ☰).
+  if (wasHidden && isMobile()) { closeNav(); setTermMax(preferredTermMax()); }
   const el = document.createElement("div");
   el.className = "term-content";
   $("#terminal").appendChild(el);
@@ -4647,7 +4714,10 @@ function newTerminal(cmd, sid, savedName) {
   const term = new Terminal({
     fontSize: termFontSize(),
     fontFamily: TERM_FONT, theme: TERM_THEME,
-                              scrollback: 5000,
+                              // deep enough to still hold the start of a long
+                              // agent run: a phone terminal is ~48 columns, so
+                              // output wraps to several rows per printed line
+                              scrollback: 20000,
                               // let Mac users Option+drag to select inside a
                               // mouse-tracking app (claude code) — otherwise no
                               // modifier can force a selection there on macOS
@@ -4667,6 +4737,7 @@ function newTerminal(cmd, sid, savedName) {
   wireTermClipboard(t);
   connectTerm(t);
   term.onData((d) => sendData(t, d));
+  term.onScroll(() => { if (t === activeTerm) paintTermLive(t); });
   terms.push(t);
   activateTerm(t, true);
   saveSession();
@@ -4784,11 +4855,22 @@ function retryTermsNow() {
   }
 }
 
+// The ⤓ key lights up whenever the view sits above the live output: on a phone
+// there is no scrollbar to say so, and a terminal that is merely scrolled up
+// otherwise reads as a terminal that has stopped producing anything.
+function paintTermLive(t) {
+  const b = $("#tk-live");
+  if (!b) return;
+  const buf = t && t.term.buffer.active;
+  b.classList.toggle("away", !!buf && buf.type === "normal" && buf.viewportY < buf.baseY);
+}
+
 function activateTerm(t, focus) {
   activeTerm = t;
   window.__kbterm = t ? t.term : null;   // test hook
   for (const o of terms) o.el.style.display = o === t ? "" : "none";
   renderTermTabs();
+  paintTermLive(t);
   saveSession();   // which terminal is active is part of "where you left off"
   // When the activation wasn't user-initiated (a background shell exited and a
   // neighbour got promoted), only take focus if it was already in the panel —
@@ -4806,6 +4888,7 @@ function killTerminal(t) {
   const i = terms.indexOf(t);
   if (i < 0) return;
   terms.splice(i, 1);
+  if (t.stopFling) t.stopFling();   // a glide outliving term.dispose() would throw
   t.ws.onclose = null;
   if (t.reTimer) { clearTimeout(t.reTimer); t.reTimer = null; }
   // explicit kill: end the SHELL, not just the connection (a plain close is a
@@ -4916,7 +4999,6 @@ async function boot() {
     const lbl = $("#search-label");
     if (lbl) lbl.textContent = "Search files and contents…  " + comboLabel("Mod+K");
   }
-  if (isMobile()) document.body.classList.add("nav-open");
   $("#cron-btn").addEventListener("click", openCron);
   // Show the Admin panel to platform admins (sudo group) — and, network-section
   // only, to users delegated write access on .claude/egress.json.
@@ -4946,6 +5028,12 @@ async function boot() {
   // deep link: a shared /company/….md URL wins over the restored active tab
   const deep = pathFromUrl();
   if (deep) await openDeepLink(deep);
+  // On a phone the file list is the home screen — but only when there is no
+  // home to come back to. Restoring a document or a terminal means the drawer
+  // would open ON TOP of it, which is decided here, after the restore, rather
+  // than opening it early and hoping something closes it again.
+  if (isMobile() && !tabs.length && $("#terminal-panel").hidden)
+    document.body.classList.add("nav-open");
   syncUrl(true);   // boot never adds a history entry, it just settles the URL
   window.addEventListener("popstate", () => {
     const p = pathFromUrl();

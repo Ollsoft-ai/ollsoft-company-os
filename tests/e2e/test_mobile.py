@@ -184,6 +184,122 @@ def test_terminal_touch_scrolls_scrollback(browser):
     ctx.close()
 
 
+def test_terminal_touch_scroll_is_not_doubled_by_xterm(browser):
+    """xterm has touch scrolling of its own, bound to the .xterm element inside
+    ours. Both running meant every swipe moved the buffer roughly twice as far
+    as the finger, in fighting jumps. A swipe must move exactly the rows the
+    finger crossed — even when the touch starts on xterm's own DOM."""
+    ctx, page = m_login(browser)
+    page.click("#more-btn")
+    page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#terminal-panel:not([hidden])")
+    deadline = time.time() + 8
+    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
+        page.wait_for_timeout(150)
+    page.keyboard.type("seq 1 400")
+    page.keyboard.press("Enter")
+    deadline = time.time() + 6
+    while time.time() < deadline and "400" not in page.inner_text("#terminal"):
+        page.wait_for_timeout(150)
+    r = page.evaluate("""() => {
+      const t = window.__kbterm;
+      const el = document.querySelector('.term-content');
+      // the deepest xterm element under the finger: the event must bubble past
+      // xterm's own touch listeners on its way to ours
+      const target = el.querySelector('.xterm-screen') || el.querySelector('.xterm');
+      const mk = (type, y) => new TouchEvent(type, {
+        bubbles: true, cancelable: true,
+        touches: [new Touch({ identifier: 1, target, clientX: 150, clientY: y })] });
+      const rowH = Math.max(8, el.clientHeight / t.rows);
+      const before = t.buffer.active.viewportY;
+      target.dispatchEvent(mk('touchstart', 300));
+      target.dispatchEvent(mk('touchmove', 380));   // finger down 80px -> look back 80px
+      return { before, after: t.buffer.active.viewportY,
+               want: Math.trunc(80 / rowH) };
+    }""")
+    assert r["want"] > 2, r                                   # a meaningful swipe
+    assert r["before"] - r["after"] == r["want"], r           # exactly one handler ran
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
+
+
+def test_terminal_touch_fling_and_jump_keys(browser):
+    """A flick keeps gliding after the finger leaves (a 20 000-row scrollback is
+    not reachable one swipe at a time), and the keybar's ⤒/⤓ jump to its ends."""
+    ctx, page = m_login(browser)
+    page.click("#more-btn")
+    page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#terminal-panel:not([hidden])")
+    deadline = time.time() + 8
+    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
+        page.wait_for_timeout(150)
+    page.keyboard.type("seq 1 800")
+    page.keyboard.press("Enter")
+    deadline = time.time() + 8
+    while time.time() < deadline and "800" not in page.inner_text("#terminal"):
+        page.wait_for_timeout(150)
+    at_end = page.evaluate("""async () => {
+      const t = window.__kbterm;
+      const el = document.querySelector('.term-content');
+      const mk = (type, y, n) => new TouchEvent(type, {
+        bubbles: true, cancelable: true,
+        touches: n === 0 ? [] :
+          [new Touch({ identifier: 1, target: el, clientX: 150, clientY: y })] });
+      el.dispatchEvent(mk('touchstart', 200, 1));
+      for (let y = 240; y <= 400; y += 40) {          // a flick downward = back in time
+        await new Promise((r) => setTimeout(r, 16));
+        el.dispatchEvent(mk('touchmove', y, 1));
+      }
+      el.dispatchEvent(mk('touchend', 400, 0));
+      return t.buffer.active.viewportY;
+    }""")
+    page.wait_for_timeout(600)
+    glided = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+    assert glided < at_end, f"the flick must keep scrolling after touchend ({at_end} -> {glided})"
+    # scrolled off the live output: the way back lights up
+    assert page.locator("#tk-live.away").count() == 1
+    page.click('#term-keys button[data-k="top"]')
+    assert page.evaluate("() => window.__kbterm.buffer.active.viewportY") == 0
+    page.click('#term-keys button[data-k="live"]')
+    assert page.evaluate(
+        "() => window.__kbterm.buffer.active.viewportY === window.__kbterm.buffer.active.baseY")
+    assert page.locator("#tk-live.away").count() == 0
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
+
+
+def test_drawer_never_traps_a_full_screen_terminal(browser):
+    """A full-screen terminal covers the topbar, so a drawer opened over it must
+    still be dismissable — and a restored terminal must not get one on top of it
+    in the first place."""
+    ctx, page = m_login(browser)
+    page.click("#more-btn")
+    page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#terminal-panel:not([hidden])")
+    assert page.evaluate("() => document.body.classList.contains('term-max')")
+    # the drawer opened the way "reveal in tree" opens it, over the terminal
+    page.evaluate("() => document.body.classList.add('nav-open')")
+    page.wait_for_timeout(300)                      # the slide-in transition
+    assert page.evaluate("() => document.elementFromPoint(370, 500).id") == "scrim"
+    page.mouse.click(370, 500)
+    page.wait_for_function("() => !document.body.classList.contains('nav-open')")
+    # …and a reload comes back to the terminal, not to the file list over it
+    page.reload()
+    page.wait_for_selector("#terminal-panel:not([hidden])")
+    page.wait_for_selector('[data-testid="tree"] .tree-item')
+    page.wait_for_timeout(300)
+    assert not nav_open(page)
+    page.evaluate("() => window.__kbterm.focus()")   # a restored terminal doesn't grab focus
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
+
+
 def test_terminal_touch_swipe_sends_wheel_in_mouse_apps(browser):
     """Alt-screen apps that enable mouse tracking (claude code, htop) scroll via
     wheel reports, not arrows. Emulate one: enter the alt screen + any-motion +

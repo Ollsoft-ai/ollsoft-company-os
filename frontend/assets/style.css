@@ -550,6 +550,8 @@ body { display: flex; flex-direction: column; }
     line-height: 1.2; }
   .term-keys button:active { background: var(--accent-deep); border-color: transparent; color: #fff; }
   .term-keys button.active { background: var(--accent-deep); border-color: transparent; color: #fff; }
+  /* scrolled off the live output — the way back is the one key that stands out */
+  .term-keys button.away { color: var(--warn); border-color: var(--warn); }
 }
 
 /* ── Command palette / go-to-file ─────────────────────────────────────────── */
@@ -914,6 +916,12 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
     background: rgba(4, 9, 18, .55); opacity: 0; pointer-events: none;
     transition: opacity .2s ease; }
   body.nav-open .scrim { opacity: 1; pointer-events: auto; }
+  /* A full-screen terminal covers the topbar — so a drawer opened over it (a
+     restored session, "reveal in tree") used to have no way out: the ☰ sits
+     under the panel, and so did the scrim. Lift both above the panel, and let
+     the scrim cover the whole screen since there is no visible topbar to spare. */
+  body.term-max .sidebar { top: 0; padding-top: max(.45rem, env(safe-area-inset-top)); }
+  body.term-max .scrim { inset: 0; z-index: 59; }
 
   /* doc header: just the filename, not the whole path */
   .doc-title-bar { gap: .5rem; padding: .42rem .6rem; }
