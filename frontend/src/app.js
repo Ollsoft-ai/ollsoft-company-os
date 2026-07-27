@@ -4336,26 +4336,37 @@ function sendData(t, d) {
   }
   rawSend(t, d);
 }
-// Touch scrolling. xterm ships a touch handler of its own, but a bad one for
-// this app: it pans its viewport element behind our back, and only when the
-// running program is not tracking the mouse — so on a phone every swipe moved
-// the buffer TWICE (once by xterm's pixels, once by our lines) in fighting
-// jumps, which is the "scrolling is unresponsive" people report. The gesture is
-// ours alone: these listeners run in the CAPTURE phase and stop the event
-// before it reaches xterm's own, which are bound to the .xterm element inside.
+// Touch scrolling, driven by POINTER events with setPointerCapture. Two things
+// make that necessary rather than fancy:
+//
+//   1. The finger's target keeps being destroyed under it. xterm's DOM renderer
+//      replaces the spans of every repainted row, and a touch event whose target
+//      has left the document never reaches an ancestor listener — so on a screen
+//      that repaints (claude code redraws on every wheel report it answers) a
+//      swipe delivered ONE touchmove and then went silent. That is the "swiping
+//      sometimes does nothing" bug. A captured pointer is delivered to this
+//      element no matter what the renderer does to its children.
+//   2. xterm ships its own touch handler, bound to the .xterm element inside
+//      ours and active whenever the program is not tracking the mouse. Left
+//      alone it pans its viewport behind our back and the buffer moves twice as
+//      far as the finger, in jumps — so touchmove is swallowed here.
+//
 // A swipe scrolls the scrollback in the normal buffer, and becomes arrow keys /
 // wheel reports in the alternate screen, where there is no scrollback and the
 // app scrolls itself — the convention mobile terminals like Termux use.
 function wireTouchScroll(t) {
-  let lastY = null, lastX = 0, acc = 0;
+  const pts = new Map();                  // live fingers: pointerId -> {x, y}
+  let panId = null, lastY = 0, lastX = 0, acc = 0, travel = 0;
   let vel = 0, velAt = 0;                 // finger velocity (px/ms), for the fling
   // Pinch = text size, the gesture every phone user will try first. The
   // browser's own pinch-zoom never fires here (#terminal has touch-action:
   // none), so the gesture is ours to implement: scale the font by the ratio
   // of the current finger distance to where the pinch started.
   let pinchD = null, pinchBase = 0;
-  const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                                 e.touches[0].clientY - e.touches[1].clientY);
+  const spread = () => {
+    const [a, b] = Array.from(pts.values());
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
   const rowH = () => Math.max(8, t.el.clientHeight / t.term.rows);
 
   // Momentum: the buffer keeps gliding after the finger leaves, decaying like a
@@ -4411,40 +4422,40 @@ function wireTouchScroll(t) {
     }
   };
 
-  t.el.addEventListener("touchstart", (e) => {
-    stopFling();                          // a finger down stops the glide, as everywhere
-    if (e.touches.length === 2) {
-      lastY = null;                       // a pinch is never also a swipe
-      pinchD = dist(e); pinchBase = termFontSize();
+  const startPan = (id, x, y, at) => {
+    panId = id; lastX = x; lastY = y;
+    acc = 0; travel = 0; vel = 0; velAt = at;
+  };
+
+  t.el.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch") return;   // a mouse drag belongs to xterm's selection
+    stopFling();                             // a finger down stops the glide, as everywhere
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // Capture immediately: the row this finger landed on may be replaced by the
+    // next repaint, and an uncaptured pointer would go with it.
+    try { t.el.setPointerCapture(e.pointerId); } catch (err) { /* already gone */ }
+    if (pts.size === 2) {                    // a pinch is never also a swipe
+      panId = null; pinchD = spread(); pinchBase = termFontSize();
       return;
     }
     pinchD = null;
-    if (e.touches.length !== 1) { lastY = null; return; }
-    lastY = e.touches[0].clientY; lastX = e.touches[0].clientX; acc = 0;
-    vel = 0; velAt = e.timeStamp;
-  }, { passive: true, capture: true });
-  t.el.addEventListener("touchend", (e) => {
-    if (e.touches.length < 2) pinchD = null;
-    if (lastY != null && e.touches.length === 0) {
-      // Let go mid-swipe → glide on. A finger that had already stopped moving
-      // (no touchmove for a moment) is a hold, not a flick.
-      if (e.timeStamp - velAt < 120) startFling(vel);
-      lastY = null;
-    }
-  }, { passive: true, capture: true });
-  t.el.addEventListener("touchmove", (e) => {
-    e.stopPropagation();                  // xterm's own touch scrolling must not also run
-    if (pinchD && e.touches.length === 2) {
-      e.preventDefault();
-      const n = Math.round(pinchBase * dist(e) / pinchD);
+    if (pts.size > 2) { panId = null; return; }
+    startPan(e.pointerId, e.clientX, e.clientY, e.timeStamp);
+  });
+
+  t.el.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "touch" || !pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinchD && pts.size === 2) {
+      const n = Math.round(pinchBase * spread() / pinchD);
       if (n !== termFontSize()) setTermFontSize(n);
       return;
     }
-    if (lastY == null || e.touches.length !== 1) return;
-    const y = e.touches[0].clientY;
-    lastX = e.touches[0].clientX;
+    if (e.pointerId !== panId) return;
+    const y = e.clientY;
+    lastX = e.clientX;
     const dy = lastY - y;                 // finger up = positive = later output
-    acc += dy;
+    acc += dy; travel += Math.abs(dy);
     lastY = y;
     // Smoothed, so one stuttery last frame does not decide the whole fling
     vel = vel * 0.4 + (dy / Math.max(1, e.timeStamp - velAt)) * 0.6;
@@ -4453,8 +4464,37 @@ function wireTouchScroll(t) {
     const lines = Math.trunc(acc / h);
     if (!lines) return;
     acc -= lines * h;
-    e.preventDefault();
     scrollRows(lines, lastX, y);
+  });
+
+  const lift = (e) => {
+    if (e.pointerType !== "touch") return;
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinchD = null;
+    if (e.pointerId === panId) {
+      panId = null;
+      // A tap is not a swipe: hand it the keyboard. (We capture the pointer, so
+      // the tap-to-focus the browser would have done itself is ours to do.)
+      if (travel < 8) t.term.focus();
+      // Let go mid-swipe → glide on. A finger that had already stopped moving
+      // (no move for a moment) is a hold, not a flick.
+      else if (e.timeStamp - velAt < 120) startFling(vel);
+    }
+    // one finger lifted off a pinch: the other one goes back to panning
+    if (pts.size === 1 && panId === null) {
+      const id = Array.from(pts.keys())[0], p = pts.get(id);
+      startPan(id, p.x, p.y, e.timeStamp);
+      travel = 99;                        // it was a pinch — releasing it is no tap
+    }
+  };
+  t.el.addEventListener("pointerup", lift);
+  t.el.addEventListener("pointercancel", lift);
+
+  // The gesture is handled above; this only stops xterm's own touch scrolling
+  // (bound to .xterm inside us) and any browser panning from also running.
+  t.el.addEventListener("touchmove", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
   }, { passive: false, capture: true });
 }
 
