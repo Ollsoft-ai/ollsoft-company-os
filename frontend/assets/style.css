@@ -893,6 +893,9 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .search { flex: 1 1 auto; min-width: 0; margin-left: .15rem; }
   #newdoc .btn-label { display: none; }
   #newdoc::before { content: "＋"; font-size: 1rem; line-height: 1; }
+  /* the mic sits in the bar itself (not the ⋯ menu): icon-only, finger-sized */
+  #mic-btn { padding: .45rem .6rem; }
+  #mic-btn .btn-label { display: none; }
 
   /* the topbar actions become a dropdown menu under ⋯ */
   .topbar-actions { display: none; position: fixed; top: calc(var(--tbh) + .4rem);

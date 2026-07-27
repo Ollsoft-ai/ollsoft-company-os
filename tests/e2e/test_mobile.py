@@ -417,3 +417,59 @@ def test_drawer_opens_centred_on_the_active_file(browser):
     assert rb and sb and sb["y"] <= rb["y"] and \
         rb["y"] + rb["height"] <= sb["y"] + sb["height"], (rb, sb)
     ctx.close()
+
+
+def test_toolbar_tap_keeps_editor_focus_and_selection(browser):
+    """A phone tap on a toolbar button (bold, mic, …) must not blur the editor —
+    blurring closed the soft keyboard and dropped the visible selection. The
+    proof is end-to-end: select a word, tap B through the touch pipeline, and
+    the word gets wrapped — which only works if the selection survived."""
+    ctx, page = m_login(browser)
+    cdp = ctx.new_cdp_session(page)
+    page.click('.tree-item[data-path="company/overview.md"]')
+    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    page.click(".cm-content")
+    # select the first word of the document body programmatically
+    start, end = page.evaluate("""() => {
+      const doc = window.__kbview.state.doc.toString();
+      const m = /[A-Za-z]{4,}/.exec(doc);
+      window.__kbview.dispatch({selection: {anchor: m.index, head: m.index + m[0].length}});
+      window.__kbview.focus();
+      return [m.index, m.index + m[0].length];
+    }""")
+    word = page.evaluate(f"() => window.__kbview.state.doc.sliceString({start}, {end})")
+    b = page.locator('#mdbar button[data-md="bold"]').bounding_box()
+    x, y = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    page.wait_for_function(
+        f"() => window.__kbview.state.doc.toString().includes('**' + "
+        f"window.__kbview.state.doc.sliceString({start + 2}, {end + 2}) + '**')",
+        timeout=5000)
+    assert page.evaluate(
+        "() => !!document.activeElement.closest('.cm-editor')"), "the tap blurred the editor"
+    # undo so the shared demo doc is left as found
+    page.evaluate("() => window.__kbview.dispatch({changes: {from: %d, to: %d + 4, "
+                  "insert: window.__kbview.state.doc.sliceString(%d + 2, %d + 2)}})"
+                  % (start, end, start, end))
+    ctx.close()
+
+
+def test_mic_is_one_tap_away_and_steals_no_focus(browser):
+    """Dictation's point is reaching it without leaving what you're typing in:
+    the mic sits in the topbar (not behind ⋯), and pressing it must not blur
+    the editor — that closed the phone keyboard and dropped the selection."""
+    ctx, page = m_login(browser)
+    assert page.locator("#mic-btn").is_visible()       # no ⋯ menu needed
+    assert not page.locator("#topbar-actions").is_visible()
+    page.click('.tree-item[data-path="company/overview.md"]')
+    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    page.click(".cm-content")
+    page.wait_for_timeout(200)
+    in_editor = "() => !!(document.activeElement && document.activeElement.closest('.cm-editor'))"
+    assert page.evaluate(in_editor)
+    box = page.locator("#mic-btn").bounding_box()
+    page.touchscreen.tap(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(300)
+    assert page.evaluate(in_editor), "a mic tap must leave the editor focused"
+    ctx.close()

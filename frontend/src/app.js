@@ -1150,6 +1150,10 @@ function wireMdBar() {
     };
     input.click();
   };
+  // Like the terminal keybar: pressing a toolbar button must not take focus.
+  // Without this a phone tap on B / mic / any button blurs the editor, which
+  // drops the visible selection and closes the soft keyboard mid-edit.
+  $("#mdbar").addEventListener("pointerdown", (e) => e.preventDefault());
   $("#mdbar").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-md]");
     if (!b) return;
