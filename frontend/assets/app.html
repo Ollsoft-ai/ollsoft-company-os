@@ -21,6 +21,11 @@
             aria-label="Search files and contents"><span id="search-label">Search files and contents…</span></button>
     <span class="spacer"></span>
     <button id="newdoc" data-testid="newdoc" aria-label="New document"><span class="btn-label">New doc</span></button>
+    <!-- The mic lives in the BAR, not the ⋯ menu: dictation's point is reaching
+         it without leaving what you are typing in, and the trip through the
+         menu blurred the editor (closing the phone keyboard) and cost a tap. -->
+    <button id="mic-btn" class="icon-btn" data-testid="mic-btn" aria-label="Dictate" aria-pressed="false"
+            title="Dictate (F9) — hold to talk, or tap and tap again. The text lands wherever you were typing, including the terminal. Audio goes to ElevenLabs for transcription and is not stored there."><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg><span class="btn-label">Dictate</span></button>
     <button id="more-btn" class="morebtn" data-testid="more-btn" aria-label="Menu" aria-haspopup="true">⋯</button>
     <nav id="topbar-actions" class="topbar-actions">
       <span id="whoami-m" class="menu-id" aria-hidden="true"></span>
@@ -30,8 +35,6 @@
            the title attribute is the hover tooltip -->
       <button id="cron-btn" class="icon-btn" data-testid="cron-btn" aria-label="Cron"
               title="Cron — your scheduled jobs"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg><span class="btn-label">Cron</span></button>
-      <button id="mic-btn" class="icon-btn" data-testid="mic-btn" aria-label="Dictate" aria-pressed="false"
-              title="Dictate (F9) — hold to talk, or tap and tap again. The text lands wherever you were typing, including the terminal. Audio goes to ElevenLabs for transcription and is not stored there."><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg><span class="btn-label">Dictate</span></button>
       <button id="dict-hist-btn" class="icon-btn" data-testid="dict-hist-btn" aria-label="Dictation history"
               title="Dictation history — every transcript from the last 24 hours, kept in this browser, ready to copy"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg><span class="btn-label">Dictation history</span></button>
       <button id="toggleterm" class="icon-btn" data-testid="toggle-term" aria-label="Terminal"

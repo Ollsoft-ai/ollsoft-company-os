@@ -264,6 +264,38 @@ def test_blur_stops_a_stranded_recording(page):
     page.keyboard.up("F9")
 
 
+def test_blur_does_not_stop_a_latched_recording(page):
+    """Mobile browsers blur the window for their own chrome — Firefox for
+    Android does it for the mic-permission doorhanger and its "recording"
+    notification, moments after recording starts. Only a KEY-held recording
+    (the stranded-keyup case) may end on blur; a latched one keeps going."""
+    page.keyboard.press("F9")               # tap -> latched
+    recording(page)
+    page.evaluate("window.dispatchEvent(new Event('blur'))")
+    page.wait_for_timeout(600)
+    assert page.locator('[data-testid="ptt"]').is_visible(), "blur killed a latched recording"
+    page.keyboard.press("F9")               # second tap finishes
+    not_recording(page)
+
+
+def test_late_duplicate_release_does_not_stop_a_latch(page):
+    """A touch tap on the mic delivers pointerup AND lostpointercapture — and
+    Firefox for Android can deliver the second one late, >450 ms after the
+    press, where it used to read as a hold ending and stopped the recording an
+    instant after the tap latched it. A release must count exactly once."""
+    b = page.locator('[data-testid="mic-btn"]')
+    b.dispatch_event("pointerdown")
+    b.dispatch_event("pointerup")           # a real tap: released immediately
+    recording(page)
+    page.wait_for_timeout(700)              # well past the 450 ms hold threshold
+    b.dispatch_event("lostpointercapture")  # the straggler
+    page.wait_for_timeout(400)
+    assert page.locator('[data-testid="ptt"]').is_visible(), \
+        "a duplicate release ended the latched recording"
+    page.keyboard.press("F9")
+    not_recording(page)
+
+
 def test_alt_k_alias_survives_releasing_the_modifier_first(page):
     """Alt released before K delivers a keyup with altKey already false. Matching
     the keyup on the physical code rather than re-testing the combo is what keeps

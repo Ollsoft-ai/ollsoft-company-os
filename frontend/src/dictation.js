@@ -330,18 +330,30 @@ export async function retryDictation() {
 // ---- the two gestures -------------------------------------------------------
 // Called on the FIRST keydown (auto-repeat is filtered by `keyDown`) and on
 // pointerdown on the mic button.
+//
+// `pressLive` makes each press's release count exactly ONCE. A touch tap on the
+// button delivers pointerup AND (implicit pointer capture) lostpointercapture —
+// and Firefox for Android can deliver the second one late, after the menu that
+// held the button has closed. A duplicate release measured >450 ms after the
+// press reads as a hold ending, which finished the recording an instant after
+// the tap had latched it — "recording stops by itself on Firefox".
+let pressLive = false;
+
 export function startPress() {
   if (!dictationReady()) return;
   if (state === "sending") return;                 // a transcript is in flight
   if (state === "recording") { finishRecording(); return; }   // second tap ends a latch
   latched = false;
+  pressLive = true;
   beginRecording();
 }
 
 // Called on keyup / pointerup. `abort` short-circuits the hold logic.
 export function stopPress(abort) {
-  if (state !== "recording") return;
+  if (state !== "recording") { pressLive = false; return; }
   if (abort) { finishRecording(); return; }
+  if (!pressLive) return;                          // duplicate release of the same press
+  pressLive = false;
   const held = Date.now() - startedAt;
   if (held >= HOLD_MS) {
     finishRecording();                             // it was a hold: release ends it
@@ -404,9 +416,16 @@ export function initDictation(h) {
 
   // Every way a keyup can fail to arrive. Each one strands a recording, so each
   // one gets a guard rather than a comment.
+  //
+  // blur ends only a KEY-held recording (the stranded-keyup case it exists
+  // for). A latched recording survives it: mobile browsers blur the window for
+  // their own chrome — Firefox for Android does it for the mic-permission
+  // doorhanger and its "recording" notification, i.e. moments after recording
+  // starts — and the tab going properly hidden is handled below.
   window.addEventListener("blur", () => {
+    const wasKey = keyDown;
     keyDown = false; pressCode = null;
-    if (state === "recording") finishRecording();
+    if (wasKey && state === "recording") finishRecording();
   });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) return;
