@@ -285,3 +285,44 @@ def test_fenced_code_block_renders_with_copy_button(browser):
     finally:
         cleanup([doc])
         ctx.close()
+
+
+def test_internal_md_link_opens_a_tab_not_a_download(browser):
+    """Following a link to another note must OPEN it. Every internal link used
+    to go to /api/attachment, so a phone offered to download the markdown
+    instead of opening it — and ../ was never resolved, so a sibling link could
+    not have found the file anyway."""
+    stamp = int(time.time())
+    folder = f"company/linkdir_{stamp}"
+    target = f"company/linked note {stamp}.md"          # a space -> %20 in the link
+    doc = f"{folder}/linkfrom_{stamp}.md"
+    api("alice").post("/api/fs/mkdir", json={"path": folder})
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, target)
+        set_source(page, "# The linked note\n")
+        new_doc(page, doc)
+        # links the way an agent writes them: relative, ../, percent-encoded
+        href = f"../linked%20note%20{stamp}.md"
+        set_source(page, f"see [the note]({href}) and "
+                         f"[its folder](../linkdir_{stamp})\n")
+        move_cursor(page, len(source(page)))
+        page.wait_for_timeout(300)
+        page.dblclick(".cm-md-link >> nth=0")
+        page.wait_for_function(f'() => window.__kbpath === "{target}"', timeout=8000)
+        assert page.locator(f'.tab[data-path="{target}"]').count() == 1
+        assert page.evaluate("() => window.__kbkind") == "doc"
+        # a link to a folder shows it in the tree instead of doing nothing
+        page.click(f'.tab[data-path="{doc}"]')
+        page.wait_for_function(f'() => window.__kbpath === "{doc}"')
+        # the click left the cursor inside the first link, which reveals its raw
+        # syntax — step off it so both links are rendered again
+        move_cursor(page, len(source(page)))
+        page.wait_for_timeout(300)
+        page.dblclick(".cm-md-link >> nth=1")
+        page.wait_for_selector(f'.tree-item[data-path="{folder}"]', timeout=5000)
+        assert page.evaluate("() => window.__kbpath") == doc   # no navigation away
+    finally:
+        cleanup([doc, target, folder])
+        ctx.close()

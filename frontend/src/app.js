@@ -454,6 +454,29 @@ const tableField = StateField.define({
   ],
 });
 
+// A link target that leaves this app: a real scheme (https:, mailto:, …), a
+// pure #fragment, or one of our own raw-file endpoints. Everything else names
+// something in the knowledgebase.
+function isExternalUrl(url) {
+  return /^([a-z][a-z0-9+.-]*:|#|\/\/|\/api\/)/i.test(url);
+}
+
+// Where a markdown link inside `dir` actually points, as a knowledgebase path:
+// percent-decoded, query/fragment dropped, and "." / ".." resolved — a sibling
+// link written as "../notes/plan.md" has to end up at the file the tree knows.
+function resolveDocPath(dir, url) {
+  let raw = url.split("#")[0].split("?")[0];
+  try { raw = decodeURIComponent(raw); } catch (e) { /* literal % in the name */ }
+  raw = raw.startsWith("/") ? raw.slice(1) : (dir ? dir + "/" : "") + raw;
+  const out = [];
+  for (const seg of raw.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+}
+
 function resolveMediaUrl(dir, url) {
   if (/^(https?:|data:|\/)/.test(url)) return url;
   // Markdown link targets are percent-encoded ("image%20%281%29.png"); the
@@ -599,15 +622,18 @@ function livePreview(dir) {
         const u = n.getChild("URL");
         if (!u) return false;
         const url = view.state.sliceDoc(u.from, u.to);
-        // repo-internal link to a secret -> the masked viewer, not a download
-        if (!/^(https?:|data:)/.test(url)) {
-          let raw = url;                       // percent-encoded md target -> raw path
-          try { raw = decodeURIComponent(url); } catch (e) { /* literal % */ }
-          const rel = (raw.startsWith("/") ? raw.slice(1) : (dir ? dir + "/" : "") + raw)
-            .replace(/^\.\//, "");
-          if (isSecretPath(rel)) { openPath(rel, "secret"); return true; }
+        if (isExternalUrl(url)) {
+          if (url.startsWith("#")) return true;   // an in-page anchor goes nowhere
+          window.open(url, "_blank");
+          return true;
         }
-        window.open(resolveMediaUrl(dir, url), "_blank");
+        // A link into the knowledgebase opens the way the tree opens it: a
+        // document becomes a TAB, an artifact runs, a secret is masked. Only a
+        // binary (image, pdf, docx) is handed to the browser — which is what
+        // every one of these used to do, so following a link to another note
+        // downloaded the markdown instead of opening it.
+        const rel = resolveDocPath(dir, url);
+        if (rel) openDeepLink(rel);
         return true;
       }
     }
@@ -1965,7 +1991,9 @@ async function openDeepLink(p) {
     window.open("/api/attachment?path=" + encodeURIComponent(p), "_blank");
     if (active) syncUrl(true); else window.history.replaceState({}, "", "/");
   }
-  // extension-less paths are folders — the tree is already on screen
+  // An extension-less path is a folder: show it in the tree — which on a phone
+  // means opening the drawer, since the tree is not otherwise on screen.
+  else revealFolder(p);
 }
 
 function syncTestHooks() {
