@@ -78,7 +78,14 @@ For a colleague to use your dashboard, BOTH must be true — and if you forget o
 1. **File access** — they must be able to read the `.html` file. Put it in a folder they can read (e.g. `company/` for everyone), or grant them specifically with an ACL:
    ```bash
    setfacl -m u:bob:r users/<you>/mychart.html   # share this one file with bob
+   getfacl -cpE users/<you>/mychart.html         # verify: no "#effective:" downgrade
+   sudo -u bob test -r users/<you>/mychart.html && echo "bob can open it"
    ```
+   Verify with `getfacl`, not `ls`: on a file that has an ACL, the group column
+   in `ls -l` shows the ACL *mask*. If the mask is narrower than the grant,
+   `getfacl` marks the entry `#effective:---` and the share is real but inert.
+   A file created 0600 (the usual cause — `mkstemp`, a rename-into-place) needs
+   `chmod 660` before any grant on it means anything.
 2. **Data access** — grant them the database access the artifact's queries need (see **kb-database**):
    ```sql
    -- everyone at the company (new hires included — use this whenever the answer is "everyone"):
