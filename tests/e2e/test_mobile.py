@@ -558,3 +558,110 @@ def test_finger_sliding_off_the_panel_leaves_no_phantom_touch(browser):
     page.keyboard.press("Enter")
     page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
     ctx.close()
+
+
+def find_word_pt(page, word):
+    """Centre of `word` in the terminal OUTPUT: search bottom-up and skip
+    prompt/command rows — a long command WRAPS, and its continuation row
+    contains the word without the telltale 'echo'."""
+    return page.evaluate("""(word) => { const t = window.__kbterm, b = t.buffer.active;
+      const el = document.querySelector('.term-content');
+      const r = el.getBoundingClientRect(), rowH = el.clientHeight / t.rows;
+      for (let i = t.rows - 1; i >= 0; i--) {
+        const l = (b.getLine(b.viewportY + i) || {translateToString: () => ''})
+          .translateToString(true);
+        const c = l.indexOf(word);
+        if (c >= 0 && !l.includes('echo') && !l.includes('printf') && !l.includes('$'))
+          return {x: r.x + (c + word.length / 2) * (r.width / t.cols),
+                  y: r.y + (i + 0.5) * rowH, cw: r.width / t.cols};
+      }
+      return null; }""", word)
+
+
+def long_press(page, cdp, x, y, hold_ms=650, drag_to=None):
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart",
+             "touchPoints": [{"x": x, "y": y}]})
+    page.wait_for_timeout(hold_ms)
+    if drag_to:
+        for i in range(1, 7):
+            time.sleep(0.02)
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove",
+                     "touchPoints": [{"x": x + (drag_to[0] - x) * i / 6,
+                                       "y": y + (drag_to[1] - y) * i / 6}]})
+        page.wait_for_timeout(150)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+
+def test_long_press_selects_and_lifting_copies(browser):
+    """The phone's selection gesture, ours end to end: hold a finger on a word
+    and it is selected; drag and the selection extends; lift and it is COPIED.
+    Native long-press never worked (the rows are user-select:none), and inside
+    a mouse-tracking app taps belong to the app — so this must not depend on
+    the browser's selection or on xterm's mouse pipeline at all."""
+    ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"], **MOBILE)
+    page = ctx.new_page()
+    page.goto(BASE + "/login")
+    page.fill('input[name="username"]', "alice")
+    page.fill('input[name="password"]', CREDS["alice"])
+    page.click('button[type="submit"]')
+    page.wait_for_url(BASE + "/")
+    page.wait_for_selector('[data-testid="tree"] .tree-item')
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
+    page.keyboard.type("echo pick_me_up now_extend_here")
+    page.keyboard.press("Enter")
+    assert wait_for_text(page, "pick_me_up")
+    pt = find_word_pt(page, "pick_me_up")
+    assert pt, "echoed words not on screen"
+    # hold on the first word: it gets selected without any drag
+    long_press(page, cdp, pt["x"], pt["y"])
+    page.wait_for_timeout(400)
+    assert page.evaluate("() => window.__kbterm.getSelection()") == "pick_me_up"
+    # …and the lift copied it
+    assert page.evaluate("async () => await navigator.clipboard.readText()") == "pick_me_up"
+    # hold again, drag to the right: the selection grows past the anchor word
+    pt2 = find_word_pt(page, "now_extend_here")
+    # the selection is character-precise, so aim the finger at the word's END
+    long_press(page, cdp, pt["x"], pt["y"],
+               drag_to=(pt2["x"] + 8 * pt2["cw"], pt2["y"]))
+    page.wait_for_timeout(400)
+    sel = page.evaluate("() => window.__kbterm.getSelection()")
+    assert sel.startswith("pick_me_up") and sel.endswith("here"), sel
+    assert page.evaluate("async () => await navigator.clipboard.readText()") == sel
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
+
+
+def test_long_press_selects_inside_a_mouse_tracking_app(browser):
+    """Where it matters most: an alt-screen app that owns the mouse (claude
+    code). Taps become click reports for the app, so xterm's own selection can
+    never fire — the long-press path is the ONLY way to copy from such a
+    screen on a phone. It must also send the app nothing: tty echo under cat
+    would paint any stray bytes."""
+    ctx, page = m_login(browser)
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
+    page.keyboard.type(r"printf '\e[?1049h\e[?1003h\e[?1006h'; echo grab_in_altscreen; cat")
+    page.keyboard.press("Enter")
+    page.wait_for_function(
+        "() => window.__kbterm && window.__kbterm.buffer.active.type === 'alternate'",
+        timeout=8000)
+    assert wait_for_text(page, "grab_in_altscreen")
+    before = page.inner_text("#terminal")
+    pt = find_word_pt(page, "grab_in_altscreen")
+    assert pt
+    long_press(page, cdp, pt["x"], pt["y"])
+    page.wait_for_timeout(400)
+    assert page.evaluate("() => window.__kbterm.getSelection()") == "grab_in_altscreen"
+    assert page.inner_text("#terminal") == before, \
+        "a selection gesture must send the app nothing (cat echoed stray bytes)"
+    page.click('#term-keys button[data-k="cc"]')
+    page.keyboard.type(r"printf '\e[?1003l\e[?1049l'")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(400)
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
