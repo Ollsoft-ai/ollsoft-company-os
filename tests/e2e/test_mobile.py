@@ -520,3 +520,41 @@ def test_terminal_double_tap_selects_a_word_for_copy(browser):
     page.keyboard.press("Enter")
     page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
     ctx.close()
+
+
+def test_finger_sliding_off_the_panel_leaves_no_phantom_touch(browser):
+    """A sub-slop touch is deliberately uncaptured, so its pointerup lands
+    wherever the finger ends — including OUTSIDE the panel. That lift must
+    still clean up: a phantom entry made every later one-finger swipe count as
+    half a pinch (scrolling dead, font resizing at random, until reload)."""
+    ctx, page = m_login(browser)
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
+    page.keyboard.type("seq 1 300")
+    page.keyboard.press("Enter")
+    assert wait_for_text(page, "300")
+    font = page.evaluate("() => window.__kbterm.options.fontSize")
+    b = term_box(page)
+    # finger down just inside the bottom edge, slide OUT (8px — under the
+    # 10px slop), lift outside the panel
+    x, y = b["x"] + b["w"] / 2, b["y"] + b["h"] - 3
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart",
+             "touchPoints": [{"x": x, "y": y}]})
+    time.sleep(0.03)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchMove",
+             "touchPoints": [{"x": x, "y": y + 8}]})
+    time.sleep(0.03)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    page.wait_for_timeout(200)
+    # the next one-finger swipe must SCROLL — not pinch, not nothing
+    before = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+    swipe(page, cdp, 0.30, 0.75)
+    page.wait_for_timeout(300)
+    after = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+    assert after < before, f"swipe after a stray lift must still scroll ({before} -> {after})"
+    assert page.evaluate("() => window.__kbterm.options.fontSize") == font, \
+        "a one-finger swipe must never resize the font"
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
