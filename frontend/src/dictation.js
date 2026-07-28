@@ -18,9 +18,15 @@
 //   • hold → push-to-talk. Recording ends the moment you let go.
 
 const HOLD_MS = 450;        // held longer than this and the release ends it
-const MAX_MS = 90_000;      // hard cap: nobody meant to record for two minutes
+// The cap exists so an accidentally-latched mic cannot run forever, not to
+// bound how long a thought is allowed to be. Ten minutes, because the audio is
+// vaulted to IndexedDB second by second while recording (see the vault below)
+// — a long dictation risks nothing — and ten minutes of 32 kbps opus is ~2.4 MB,
+// far under the server's 12 MiB limit.
+const MAX_MS = 600_000;
 const MIN_MS = 300;         // shorter than this was a mis-hit, not speech
 const MIN_BYTES = 1024;     // ditto, measured after encoding
+const SLICE_MS = 1000;      // MediaRecorder timeslice: how much a tab crash can lose
 const IDLE_RELEASE_MS = 5 * 60_000;   // drop the mic so the browser's in-use dot goes away
 const STOP_GRACE_MS = 1500;           // MediaRecorder.onstop watchdog
 
@@ -45,6 +51,8 @@ let target = null;          // resolved at record START and stashed — see belo
 let startedAt = 0, keyDown = false, latched = false, pressCode = null;
 let maxTimer = null, idleTimer = null, stopMeter = null;
 let lastBlob = null;        // kept for "Retry the last dictation"
+let lastRecId = null;       // its vault id, so a retry updates the same record
+let recId = null, chunkSeq = 0;   // the vault identity of the CURRENT recording
 let reduceMotion = false;
 let stoppedOffScreen = false;   // a recording auto-finished because the app was left
 
@@ -54,6 +62,134 @@ export function dictationReady() {
 }
 
 export function dictationState() { return state; }
+
+// ---- the audio vault --------------------------------------------------------
+// The recording is the only part of a dictation that cannot be re-created:
+// the transcript can be re-requested, but five minutes of speech cannot be
+// re-spoken. So the audio is written to IndexedDB WHILE recording — one chunk
+// per second — and only ever deleted deliberately. Whatever fails afterwards
+// (the upload, the STT service, the network, this tab), the audio is on disk,
+// listed in Dictation history with download / transcribe-again buttons.
+//
+// Two stores rather than one growing blob: re-putting the whole recording on
+// every slice would write O(n²) bytes over a long dictation (~700 MB of flash
+// traffic for ten minutes). Appending each 4 KB slice under a [recId, seq] key
+// keeps writes linear, and IndexedDB returns the range in key order, so the
+// blob is just `new Blob(getAll(range))` — opus/webm slices from one
+// MediaRecorder concatenate into a valid stream.
+//
+// Every vault call is best-effort and swallows its errors: dictation must keep
+// working in a browser with IndexedDB unavailable (Firefox private windows);
+// it just loses the safety net, same as the localStorage transcript history.
+const VAULT_DB = "kbDictAudio";
+const VAULT_TTL_DONE = 24 * 3600 * 1000;      // transcribed: kept a day, like the text
+const VAULT_TTL_KEPT = 7 * 24 * 3600 * 1000;  // NOT transcribed: a week to rescue it
+const VAULT_MAX = 100;                        // count cap; transcribed evict first
+
+let vaultDbP = null;
+function vaultOpen() {
+  if (vaultDbP) return vaultDbP;
+  vaultDbP = new Promise((resolve, reject) => {
+    let req;
+    try { req = indexedDB.open(VAULT_DB, 1); } catch (e) { reject(e); return; }
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore("recs", { keyPath: "id" });
+      req.result.createObjectStore("chunks", { keyPath: ["rid", "seq"] });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error("blocked"));
+  });
+  // A failed open must not be cached forever — a transient lock (another tab
+  // upgrading) would otherwise disable the vault for the whole session.
+  vaultDbP.catch(() => { vaultDbP = null; });
+  return vaultDbP;
+}
+
+function vaultReq(store, mode, fn) {
+  return vaultOpen().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(store, mode);
+    const r = fn(tx.objectStore(store));
+    tx.oncomplete = () => resolve(r ? r.result : undefined);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  })).catch(() => null);
+}
+
+const chunkRange = (rid) => IDBKeyRange.bound([rid, -Infinity], [rid, Infinity]);
+const vaultPutMeta = (m) => vaultReq("recs", "readwrite", (s) => s.put(m));
+const vaultGetMeta = (id) => vaultReq("recs", "readonly", (s) => s.get(id));
+const vaultAllMeta = () =>
+  vaultReq("recs", "readonly", (s) => s.getAll()).then((a) => (Array.isArray(a) ? a : []));
+const vaultAddChunk = (rid, seq, data) =>
+  vaultReq("chunks", "readwrite", (s) => s.put({ rid, seq, data }));
+const vaultChunks = (rid) =>
+  vaultReq("chunks", "readonly", (s) => s.getAll(chunkRange(rid)))
+    .then((a) => (Array.isArray(a) ? a : []));
+
+async function vaultDelete(id) {
+  await vaultReq("recs", "readwrite", (s) => s.delete(id));
+  await vaultReq("chunks", "readwrite", (s) => s.delete(chunkRange(id)));
+}
+
+async function vaultMark(id, status) {
+  if (!id) return;
+  const m = await vaultGetMeta(id);
+  if (m && m.status !== status) { m.status = status; await vaultPutMeta(m); }
+}
+
+async function vaultBlob(id) {
+  const m = await vaultGetMeta(id);
+  if (!m) return null;
+  const parts = await vaultChunks(id);
+  if (!parts.length) return null;
+  return new Blob(parts.map((c) => c.data), { type: m.mime || "audio/webm" });
+}
+
+// Runs once per page load. A record still marked "recording" is a tab that
+// crashed or was killed mid-dictation — the chunks that made it to disk ARE
+// the recording, so it is promoted to "interrupted" (rescuable), never dropped.
+async function vaultSweep() {
+  const all = await vaultAllMeta();
+  const now = Date.now();
+  const live = [];
+  for (const m of all) {
+    if (m.status === "recording") { m.status = "interrupted"; await vaultPutMeta(m); }
+    const ttl = m.status === "done" ? VAULT_TTL_DONE : VAULT_TTL_KEPT;
+    if (now - m.t > ttl) await vaultDelete(m.id); else live.push(m);
+  }
+  // Over the count cap, transcribed recordings go first — their text is safe
+  // in the history; un-transcribed audio is the last thing to evict.
+  live.sort((a, b) => (a.status === "done") - (b.status === "done") || b.t - a.t);
+  for (const m of live.slice(VAULT_MAX)) await vaultDelete(m.id);
+}
+
+// ---- the vault's public face (Dictation history in app.js) ------------------
+export async function listRecordings() {
+  const all = await vaultAllMeta();
+  const out = [];
+  for (const m of all.sort((a, b) => b.t - a.t)) {
+    const parts = await vaultChunks(m.id);
+    out.push({ id: m.id, t: m.t, mime: m.mime, status: m.status, ms: m.ms || 0,
+               bytes: parts.reduce((n, c) => n + ((c.data && c.data.size) || 0), 0) });
+  }
+  return out;
+}
+
+export function recordingBlob(id) { return vaultBlob(id); }
+
+export function deleteRecording(id) { return vaultDelete(id); }
+
+export async function transcribeRecording(id) {
+  if (state !== "idle") return false;
+  const blob = await vaultBlob(id);
+  if (!blob) { if (hooks && hooks.toast) hooks.toast("That recording is gone", "err"); return false; }
+  // Resolved NOW, same rule as recording start: the words land where the user
+  // is working at the moment they act, not where they were minutes ago.
+  target = hooks.resolveTarget ? hooks.resolveTarget() : null;
+  await transcribeAndInsert(blob, id);
+  return true;
+}
 
 // ---- UI: a fixed overlay, because dictation fires while focus is elsewhere ---
 const $ = (s) => document.querySelector(s);
@@ -210,22 +346,36 @@ async function beginRecording() {
   // Trust what the recorder actually produced, never what we asked for.
   recMime = (rec.mimeType || want || "audio/webm").split(";")[0].trim() || "audio/webm";
   chunks = [];
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  rec.start();   // no timeslice: one blob, delivered on stop
+  startedAt = Date.now();
+  recId = "d" + startedAt.toString(36) + Math.random().toString(36).slice(2, 8);
+  chunkSeq = 0;
+  const rid = recId;
+  vaultPutMeta({ id: rid, t: startedAt, mime: recMime, status: "recording", ms: 0 });
+  rec.ondataavailable = (e) => {
+    if (!(e.data && e.data.size)) return;
+    chunks.push(e.data);
+    // Persist every slice the moment it exists. From here on, a crash, a killed
+    // tab or a dead battery costs at most the last second of speech — the rest
+    // is already on disk and shows up in Dictation history as "interrupted".
+    vaultAddChunk(rid, chunkSeq++, e.data);
+  };
+  // A recorder that dies mid-capture (codec failure, device yanked at the wrong
+  // moment) must finish like any other stop: the vaulted chunks are the recording.
+  rec.onerror = () => { if (state === "recording") finishRecording("Recording error — saved what was captured"); };
+  rec.start(SLICE_MS);   // timeslice: chunks stream into the vault as they exist
 
   state = "recording";
-  startedAt = Date.now();
   stopMeter = startMeter();
   paint(latched ? "Listening… press again to finish" : "Listening…");
   clearTimeout(maxTimer);
   maxTimer = setTimeout(() => {
-    if (state === "recording") { finishRecording("Stopped after 90 seconds"); }
+    if (state === "recording") { finishRecording("Stopped after 10 minutes"); }
   }, MAX_MS);
   return true;
 }
 
-// The blob only exists once `onstop` has fired. Reading it synchronously after
-// stop() loses 100% of the audio when there is no timeslice — this is the single
+// The final slice only exists once `onstop` has fired. Reading the chunks
+// synchronously after stop() loses the tail of the audio — this is the single
 // most likely bug in the whole feature, so it is structured to be impossible.
 function collectBlob() {
   return new Promise((resolve) => {
@@ -259,7 +409,7 @@ async function finishRecording(note) {
   if (stream) for (const t of stream.getAudioTracks()) t.enabled = false;
   armIdleRelease();
   rec = null; chunks = [];
-  // …unless this finish happened OFF-SCREEN (the 90 s cap, or the OS killing
+  // …unless this finish happened OFF-SCREEN (the 10 min cap, or the OS killing
   // the capture): a disabled-but-live track still lights Android's system-wide
   // "microphone in use" dot, and a green dot with nothing recording reads as
   // eavesdropping. The blob is already collected, so the upload below loses
@@ -270,16 +420,25 @@ async function finishRecording(note) {
 
   if (note && hooks.toast) hooks.toast(note, "err");
 
+  const id = recId; recId = null;
   if (!blob || blob.size < MIN_BYTES || elapsed < MIN_MS) {
+    if (id) vaultDelete(id);   // a mis-hit, not speech — not worth vault space
     state = "idle"; paint("");
     if (hooks.toast) hooks.toast("Too short — hold the key while you speak", "err");
     return;
   }
+  // Record how long it was while we know; history shows it next to the size.
+  vaultGetMeta(id).then((m) => { if (m) { m.ms = elapsed; return vaultPutMeta(m); } });
   lastBlob = blob;
-  await transcribeAndInsert(blob);
+  lastRecId = id;
+  await transcribeAndInsert(blob, id);
 }
 
-async function transcribeAndInsert(blob) {
+// Any exit that is not a confirmed transcript marks the vault record "failed":
+// still listed in Dictation history, still downloadable, still one click from
+// another attempt. The audio is only ever released by success (kept a day),
+// expiry, or an explicit delete.
+async function transcribeAndInsert(blob, id) {
   state = "sending"; paint("Transcribing…");
   let j = null;
   try {
@@ -290,29 +449,37 @@ async function transcribeAndInsert(blob) {
                                  body: blob });
     j = await r.json().catch(() => null);
     if (!r.ok) {
+      vaultMark(id, "failed");
       state = "idle"; paint("");
       fail((j && j.error) || "Transcription failed (HTTP " + r.status + ")");
-      if (r.status !== 503 && r.status !== 429) hintRetry();
+      hintRetry();
       return;
     }
   } catch (e) {
+    vaultMark(id, "failed");
     state = "idle"; paint("");
-    fail("Could not reach the server — your recording is kept, run “Retry the last dictation”.");
+    fail("Could not reach the server.");
+    hintRetry();
     return;
   }
   state = "idle"; paint("");
 
   const text = sanitize((j && j.text) || "");
   if (!text) {
-    if (hooks.toast) hooks.toast("Nothing was said", "err");
+    // An empty transcript from real speech is a failure of the STT, not of the
+    // speaker — keep the audio so it can be downloaded or tried again.
+    vaultMark(id, "failed");
+    if (hooks.toast) hooks.toast("Nothing was said — the audio is kept in Dictation history", "err");
     return;
   }
-  lastBlob = null;
-  hooks.insert(target, text);
+  vaultMark(id, "done");
+  lastBlob = null; lastRecId = null;
+  hooks.insert(target, text, id);
 }
 
 function hintRetry() {
-  if (hooks.toast) hooks.toast("Your recording is kept — run “Retry the last dictation”.", "err");
+  if (hooks.toast) hooks.toast(
+    "The recording is safe in Dictation history — download it or transcribe it again from there.", "err");
 }
 
 // The transcript is third-party text on its way to a shell. Everything hostile it
@@ -331,9 +498,14 @@ export function sanitize(text) {
 }
 
 export async function retryDictation() {
-  if (!lastBlob) { if (hooks && hooks.toast) hooks.toast("Nothing to retry", "err"); return; }
   if (state !== "idle") return;
-  await transcribeAndInsert(lastBlob);
+  if (lastBlob) { await transcribeAndInsert(lastBlob, lastRecId); return; }
+  // After a reload the in-memory blob is gone, but the vault is not: retry the
+  // most recent recording that never produced a transcript.
+  const all = await vaultAllMeta();
+  const cand = all.filter((m) => m.status !== "done").sort((a, b) => b.t - a.t)[0];
+  if (!cand) { if (hooks && hooks.toast) hooks.toast("Nothing to retry", "err"); return; }
+  await transcribeRecording(cand.id);
 }
 
 // ---- the two gestures -------------------------------------------------------
@@ -381,6 +553,9 @@ export function toggleDictation() {
 // ---- wiring ----------------------------------------------------------------
 export function initDictation(h) {
   hooks = h;
+  // Rescue first: recordings stranded by a crash become "interrupted" (listed
+  // in history with transcribe/download), and expired audio is cleared out.
+  vaultSweep();
   // Test hook: is the microphone actually open (a LIVE track — what lights the
   // OS mic indicator), as opposed to merely permitted? The stream is module-
   // private, so the release-on-hide behaviour is unobservable without this.
@@ -421,7 +596,7 @@ export function initDictation(h) {
   // Match the keyup on the PHYSICAL key that started the press and nothing else.
   // Alt+K released as Alt-then-K delivers a keyup with altKey already false, so
   // re-running isDictateKey() here would miss it — and a missed keyup is a
-  // recording that runs until the 90 s cap.
+  // recording that runs until the 10-minute cap.
   window.addEventListener("keyup", (e) => {
     if (!keyDown || e.code !== pressCode) return;
     keyDown = false;
@@ -453,7 +628,7 @@ export function initDictation(h) {
         // failed one — it distinguishes "already in history" from "retry me".
         if (hooks.toast) hooks.toast(
           "Recording stopped when the app left the screen — " +
-          (lastBlob ? "run “Retry the last dictation” to transcribe it"
+          (lastBlob ? "it is saved in Dictation history; transcribe it from there"
                     : "the transcript is in the dictation history"));
       }
       return;
@@ -464,7 +639,7 @@ export function initDictation(h) {
     // and the phone's mic dot is then telling the truth. (A key-held recording
     // never gets here: switching apps blurs the window, and the blur handler
     // above already finished it — its keyup is gone for good.) The recording
-    // stays bounded: the 90-second cap still fires off-screen, and if the OS
+    // stays bounded: the 10-minute cap still fires off-screen, and if the OS
     // or the browser kills the capture in the background, the track's "ended"
     // guard finishes it — both land in finishRecording, which sees
     // document.hidden, releases the mic, and queues the explanation below.
