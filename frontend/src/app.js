@@ -4497,8 +4497,8 @@ function sendData(t, d) {
 function wireTouchScroll(t) {
   const SLOP = 10;                        // px of travel before a touch is a pan
   const pts = new Map();                  // live fingers: pointerId -> {x, y}
-  let panId = null, panning = false;
-  let lastY = 0, lastX = 0, acc = 0, travel = 0;
+  let panId = null, panning = false, panPrimed = false;
+  let downX = 0, downY = 0, lastY = 0, lastX = 0, acc = 0;
   let vel = 0, velAt = 0;                 // finger velocity (px/ms), for the fling
   let pinchD = null, pinchBase = 0;
   const spread = () => {
@@ -4547,7 +4547,10 @@ function wireTouchScroll(t) {
   // long after the finger stopped.
   let altPend = 0, altTimer = 0, altAt = null;
   const flushAlt = () => {
-    altTimer = 0;
+    // A direct call (queueAlt's leading edge, lift's trailing flush) may land
+    // while the 45ms timer is still pending — clear it, or the orphan fires
+    // later and queueAlt re-arms beside it, doubling the flush cadence.
+    if (altTimer) { clearTimeout(altTimer); altTimer = 0; }
     if (!altPend || !terms.includes(t)) return;
     if (t.term.buffer.active.type !== "alternate") { altPend = 0; return; }
     const lines = altPend;
@@ -4599,9 +4602,10 @@ function wireTouchScroll(t) {
     }
     pinchD = null;
     if (pts.size > 2) { panId = null; panning = false; return; }
-    panId = e.pointerId; panning = false;
+    panId = e.pointerId; panning = false; panPrimed = false;
+    downX = e.clientX; downY = e.clientY;
     lastX = e.clientX; lastY = e.clientY;
-    acc = 0; travel = 0; vel = 0; velAt = e.timeStamp;
+    acc = 0; vel = 0; velAt = e.timeStamp;
   });
 
   t.el.addEventListener("pointermove", (e) => {
@@ -4614,7 +4618,6 @@ function wireTouchScroll(t) {
     }
     if (e.pointerId !== panId) return;
     const dy = lastY - e.clientY;           // finger up = positive = later output
-    travel += Math.abs(dy) + Math.abs(e.clientX - lastX);
     lastX = e.clientX;
     if (!panning) {
       // Below the slop nothing is decided; past it, it is a pan — however long
@@ -4622,7 +4625,13 @@ function wireTouchScroll(t) {
       // are user-select:none, so there is no native selection-drag to yield
       // to, and a touch-hesitate-then-drag that scrolls nothing is exactly
       // the "swiping sometimes does nothing" feel this file exists to kill.)
-      if (travel < SLOP) { lastY = e.clientY; velAt = e.timeStamp; return; }
+      // Slop is DISPLACEMENT from the touch origin, not path length — an hour
+      // of hold-jitter must never add up to a pan.
+      if (!panPrimed &&
+          Math.hypot(e.clientX - downX, e.clientY - downY) < SLOP) {
+        lastY = e.clientY; velAt = e.timeStamp;
+        return;
+      }
       beginPan(e);
     }
     acc += dy;
@@ -4639,7 +4648,8 @@ function wireTouchScroll(t) {
   });
 
   const lift = (e) => {
-    if (e.pointerType !== "touch") return;
+    if (e.pointerType !== "touch" || !pts.has(e.pointerId)) return;
+    const wasPinch = !!pinchD;
     pts.delete(e.pointerId);
     if (pts.size < 2) pinchD = null;
     if (e.pointerId === panId) {
@@ -4655,9 +4665,27 @@ function wireTouchScroll(t) {
       // existed — doing anything here would only break that again.
       panId = null; panning = false;
     }
+    // One finger off a pinch: the survivor pans, effective immediately (it was
+    // already mid-gesture — making it wait out the slop again reads as dead).
+    if (wasPinch && pts.size === 1) {
+      const id = Array.from(pts.keys())[0], p = pts.get(id);
+      panId = id; panning = false; panPrimed = true;
+      lastX = p.x; lastY = p.y;
+      acc = 0; vel = 0; velAt = e.timeStamp;
+    }
   };
-  t.el.addEventListener("pointerup", lift);
-  t.el.addEventListener("pointercancel", lift);
+  // On the WINDOW, not t.el: an uncaptured (sub-slop) pointer that slides off
+  // the panel delivers its pointerup wherever it ends, and a lift t.el never
+  // hears leaves a phantom entry in pts — after which every one-finger swipe
+  // counts as half a pinch: scrolling dead, font resizing at random.
+  window.addEventListener("pointerup", lift, true);
+  window.addEventListener("pointercancel", lift, true);
+  t.unwireTouchScroll = () => {           // killTerminal calls this — window
+    window.removeEventListener("pointerup", lift, true);      // listeners must
+    window.removeEventListener("pointercancel", lift, true);  // not outlive t
+    stopFling();
+    if (altTimer) { clearTimeout(altTimer); altTimer = 0; altPend = 0; }
+  };
 
   // xterm's own touch scrolling (bound to .xterm inside us) must never also
   // run — but the browser's NATIVE handling stands down only while a pan or a
@@ -5100,7 +5128,7 @@ function killTerminal(t) {
   const i = terms.indexOf(t);
   if (i < 0) return;
   terms.splice(i, 1);
-  if (t.stopFling) t.stopFling();   // a glide outliving term.dispose() would throw
+  if (t.unwireTouchScroll) t.unwireTouchScroll();   // window listeners + fling + timers
   t.ws.onclose = null;
   if (t.reTimer) { clearTimeout(t.reTimer); t.reTimer = null; }
   // explicit kill: end the SHELL, not just the connection (a plain close is a
