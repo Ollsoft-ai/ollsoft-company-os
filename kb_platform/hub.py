@@ -139,19 +139,14 @@ def _uid_gids(user: str) -> tuple[int, list[int]]:
 
 
 def _fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
-    """Evaluate a user's Unix read/write access to path (root can't rely on os.access)."""
+    """Evaluate a user's Unix read/write access to path (root can't rely on
+    os.access). Kernel-exact including POSIX ACLs — the platform's own share
+    feature grants by ACL, so bare mode bits routinely lie here."""
     try:
-        st = os.lstat(path)
+        st, entries = common.stat_and_acl(path)   # one pinned inode; symlink -> ELOOP
     except OSError:
         return False
-    m = st.st_mode
-    if st.st_uid == uid:
-        bits = (m >> 6) & 7
-    elif st.st_gid in gids:
-        bits = (m >> 3) & 7
-    else:
-        bits = m & 7
-    return bool(bits & (2 if need_write else 4))
+    return common.unix_access(st, entries, uid, gids, 2 if need_write else 4)
 
 
 def _is_admin(user: str) -> bool:
@@ -191,20 +186,43 @@ def _parse_acl(path: Path) -> list[dict]:
     return entries
 
 
-def _dir_traversable(st: os.stat_result, flag: str, name: str) -> bool:
-    """Does user/group `name` already have execute (traverse) on a dir with this
-    stat, via owner/group/other mode bits? (Used to avoid a downgrading ACL.)"""
-    m = st.st_mode
+def _dir_traversable(dfd: int, st: os.stat_result, flag: str, name: str) -> bool:
+    """Does user/group `name` already have execute (traverse) on the dir open
+    at `dfd`? ACL-aware: named entries, the mask, and the real group:: entry all
+    change the answer vs. bare mode bits. (Used to avoid a downgrading ACL.)"""
+    entries = common.acl_entries(dfd)
     if flag == "u":
         e = pwd.getpwnam(name)
-        if st.st_uid == e.pw_uid:
-            return bool((m >> 6) & 1)
-        if st.st_gid in os.getgrouplist(name, e.pw_gid):
+        return common.unix_access(st, entries, e.pw_uid,
+                                  os.getgrouplist(name, e.pw_gid), 1)
+    gid = grp.getgrnam(name).gr_gid
+    m = st.st_mode
+    if entries is None:
+        if st.st_gid == gid:
             return bool((m >> 3) & 1)
         return bool(m & 1)
-    if st.st_gid == grp.getgrnam(name).gr_gid:
-        return bool((m >> 3) & 1)
-    return bool(m & 1)
+    # Mirror the kernel for a hypothetical user whose only relevant group is
+    # `name`: EVERY matching group-class entry contributes and any grant wins
+    # (a named entry for the owning group is legal and must be unioned, not
+    # shadowed); if no group-class entry matches, `other` decides.
+    group_obj, mask, named_g, other = 0, 7, {}, m & 7
+    for tag, perm, qual in entries:
+        if tag == common._ACL_GROUP_OBJ:
+            group_obj = perm
+        elif tag == common._ACL_GROUP:
+            named_g[qual] = perm
+        elif tag == common._ACL_MASK:
+            mask = perm
+        elif tag == common._ACL_OTHER:
+            other = perm
+    granted, matched = 0, False
+    if st.st_gid == gid:
+        granted, matched = granted | group_obj, True
+    if gid in named_g:
+        granted, matched = granted | named_g[gid], True
+    if matched:
+        return bool(granted & mask & 1)
+    return bool(other & 1)
 
 
 def _grp_ok(gid: int) -> bool:
@@ -578,14 +596,18 @@ class Hub:
             return web.json_response({"error": "unauthenticated"}, status=401)
         data = await request.json()
         rel = data.get("path", "")
-        secret = common.is_secret_path(rel)
-        if not secret and not (rel.endswith(".md") or rel.endswith(".html")):
-            return web.json_response({"error": "name must end in .md or .html"}, status=400)
         p = common.resolve_repo_path(rel)
         if p is None:
             return web.json_response({"error": "bad path"}, status=400)
         if p.exists():
             return web.json_response({"error": "already exists"}, status=409)
+        # Classify the RESOLVED path, never the raw string: `_secrets/../x.sh`
+        # would otherwise skip the extension check, and a path reaching a
+        # _secrets dir through a symlink would miss the born-private rule.
+        rel_resolved = str(p.relative_to(common.REPO_ROOT.resolve()))
+        secret = common.is_secret_path(rel_resolved)
+        if not secret and not (rel_resolved.endswith(".md") or rel_resolved.endswith(".html")):
+            return web.json_response({"error": "name must end in .md or .html"}, status=400)
         uid, gids = _uid_gids(user)
         if not p.parent.is_dir() or not _fs_can(p.parent, uid, gids, need_write=True):
             return web.json_response({"error": "no write access to folder"}, status=403)
@@ -758,7 +780,7 @@ class Hub:
             try:
                 st = os.fstat(dfd)
                 for flag, name in entries:
-                    if _dir_traversable(st, flag, name):
+                    if _dir_traversable(dfd, st, flag, name):
                         continue   # already reachable — adding an ACL would downgrade
                     _acl_apply_fd(dfd, False, ["-m", f"{flag}:{name}:x"])  # access ACL only
                     if parent not in granted:
