@@ -233,7 +233,7 @@ def _reset_audience(dst: Path) -> None:
         except OSError:
             pass                       # no ACL to strip, or not permitted
         try:
-            os.chmod(p, common.birth_mode(p.parent, is_dir))
+            os.chmod(p, common.birth_mode(p.parent, is_dir, str(p)))
         except OSError:
             pass
     fix(dst, dst.is_dir())
@@ -368,7 +368,7 @@ async def upload(request: web.Request) -> web.Response:
                 size += len(chunk)
                 f.write(chunk)
         # An attachment must be as readable as the folder it was uploaded into.
-        os.chmod(target, common.birth_mode(files_dir, False))
+        os.chmod(target, common.birth_mode(files_dir, False, str(target)))
     except PermissionError:
         return web.json_response({"error": "forbidden"}, status=403)
     except OSError as e:

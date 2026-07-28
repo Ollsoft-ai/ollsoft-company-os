@@ -304,7 +304,7 @@ def unix_access(st, entries, uid: int, gids, want: int) -> bool:
     return (other & want) == want
 
 
-def birth_mode(parent, is_dir: bool) -> int:
+def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:
     """The mode a newly created child of `parent` should end up with: the same
     audience as the folder it lands in.
 
@@ -315,7 +315,13 @@ def birth_mode(parent, is_dir: bool) -> int:
     indexer, silently cannot read it. Mirror the parent's group/other bits
     instead (execute stripped for files, setgid kept for directories) so the
     audience of a document is the audience of its folder, ACLs or not.
+
+    Secrets are the one exception and are born owner-only regardless of where
+    they sit: `_secrets/` folders are themselves listable by the team, so
+    inheriting their mode would publish the very thing that must not be.
     """
+    if is_secret_path(str(child if child is not None else parent)):
+        return 0o700 if is_dir else 0o600
     try:
         pm = stat_mod.S_IMODE(os.stat(parent).st_mode)
     except OSError:
@@ -334,7 +340,7 @@ def create_with_mode(path, data: bytes | None = None, *, exclusive: bool = False
     try:
         if data:
             os.write(fd, data)
-        os.fchmod(fd, birth_mode(os.path.dirname(str(path)) or ".", False))
+        os.fchmod(fd, birth_mode(os.path.dirname(str(path)) or ".", False, str(path)))
     finally:
         os.close(fd)
 
@@ -342,7 +348,7 @@ def create_with_mode(path, data: bytes | None = None, *, exclusive: bool = False
 def mkdir_with_mode(path) -> None:
     """mkdir as this user with birth_mode() — see create_with_mode."""
     os.mkdir(path, 0o700)
-    os.chmod(path, birth_mode(os.path.dirname(str(path)) or ".", True))
+    os.chmod(path, birth_mode(os.path.dirname(str(path)) or ".", True, str(path)))
 
 
 # --- Derived text sidecars ---------------------------------------------------
