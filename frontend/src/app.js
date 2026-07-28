@@ -4571,8 +4571,65 @@ function wireTouchScroll(t) {
     if (!altTimer) { flushAlt(); altTimer = setTimeout(flushAlt, 45); }
   };
 
+  // ── Long-press = select ────────────────────────────────────────────────────
+  // The phone's missing selection gesture, done OURSELVES through xterm's
+  // select() API: hold a finger still, the word under it is selected; drag to
+  // extend; lift, and it is copied. Programmatic selection sidesteps the mouse
+  // pipeline entirely — which is the whole point: inside a mouse-tracking app
+  // (claude code) taps become click reports for the app and xterm's own
+  // selection can never fire, so on a phone there was NO way to select there
+  // at all. (Native long-press never worked either: the rows are
+  // user-select:none.)
+  const LP_MS = 420;   // under Chrome Android's ~500 ms contextmenu long-press
+  let lpTimer = 0, selecting = false, selA = null, selEndAt = 0;
+  const cellAt = (x, y) => {
+    const rect = t.el.getBoundingClientRect();
+    return {
+      col: Math.max(0, Math.min(t.term.cols - 1,
+        Math.floor((x - rect.left) / (rect.width / t.term.cols)))),
+      row: t.term.buffer.active.viewportY + Math.max(0, Math.min(t.term.rows - 1,
+        Math.floor((y - rect.top) / (rect.height / t.term.rows)))),
+    };
+  };
+  const wordAt = (cell) => {
+    const line = t.term.buffer.active.getLine(cell.row);
+    const s = line ? line.translateToString(true) : "";
+    let c = Math.min(cell.col, Math.max(0, s.length - 1));
+    if (!s || /\s/.test(s[c] || " ")) return { row: cell.row, c1: cell.col, c2: cell.col };
+    let a = c, b = c;
+    while (a > 0 && !/\s/.test(s[a - 1])) a--;
+    while (b < s.length - 1 && !/\s/.test(s[b + 1])) b++;
+    return { row: cell.row, c1: a, c2: b };
+  };
+  const applySel = (lo, hi) => {          // absolute cell indices, inclusive
+    const cols = t.term.cols;
+    t.term.select(lo % cols, Math.floor(lo / cols), hi - lo + 1);
+  };
+  const extendSel = (x, y) => {
+    const cols = t.term.cols, head = cellAt(x, y);
+    const hp = head.row * cols + head.col;
+    const a1 = selA.row * cols + selA.c1, a2 = selA.row * cols + selA.c2;
+    // the anchor WORD stays whole; the selection grows from whichever end
+    if (hp > a2) applySel(a1, hp);
+    else if (hp < a1) applySel(hp, a2);
+    else applySel(a1, a2);
+  };
+  const armLongPress = (e) => {
+    clearTimeout(lpTimer);
+    const id = e.pointerId;
+    lpTimer = setTimeout(() => {
+      if (panning || pinchD || selecting || pts.size !== 1 || !pts.has(id)) return;
+      const p = pts.get(id);
+      selecting = true;
+      selA = wordAt(cellAt(p.x, p.y));
+      try { t.el.setPointerCapture(id); } catch (err) { /* gone */ }
+      applySel(selA.row * t.term.cols + selA.c1, selA.row * t.term.cols + selA.c2);
+    }, LP_MS);
+  };
+
   const beginPan = (e) => {
     panning = true;
+    clearTimeout(lpTimer);
     // NOW the browser's own gestures are out of the running — claim the
     // pointer so an xterm repaint under the finger cannot end the pan.
     try { t.el.setPointerCapture(e.pointerId); } catch (err) { /* finger already gone */ }
@@ -4593,6 +4650,7 @@ function wireTouchScroll(t) {
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 2) {                    // a pinch is never also a pan
       panId = null; panning = false;
+      clearTimeout(lpTimer); selecting = false;
       pinchD = spread(); pinchBase = termFontSize();
       // multi-touch synthesizes no mouse events — capturing costs nothing here
       for (const id of pts.keys()) {
@@ -4606,6 +4664,8 @@ function wireTouchScroll(t) {
     downX = e.clientX; downY = e.clientY;
     lastX = e.clientX; lastY = e.clientY;
     acc = 0; vel = 0; velAt = e.timeStamp;
+    selecting = false;
+    armLongPress(e);
   });
 
   t.el.addEventListener("pointermove", (e) => {
@@ -4617,6 +4677,7 @@ function wireTouchScroll(t) {
       return;
     }
     if (e.pointerId !== panId) return;
+    if (selecting) { extendSel(e.clientX, e.clientY); return; }
     const dy = lastY - e.clientY;           // finger up = positive = later output
     lastX = e.clientX;
     if (!panning) {
@@ -4652,6 +4713,17 @@ function wireTouchScroll(t) {
     const wasPinch = !!pinchD;
     pts.delete(e.pointerId);
     if (pts.size < 2) pinchD = null;
+    clearTimeout(lpTimer);
+    if (selecting && e.pointerId === panId) {
+      // Lifting off a long-press selection COPIES it — "when I highlight
+      // something, I want it copied". The selection stays painted; the
+      // touchend suppression below keeps the browser's synthesized mousedown
+      // from immediately clearing it.
+      selecting = false; selEndAt = Date.now();
+      if (t.term.hasSelection()) copyTermSelection(t);
+      panId = null; panning = false;
+      return;
+    }
     if (e.pointerId === panId) {
       if (panning) {
         flushAlt();                         // don't sit on a queued remainder
@@ -4684,8 +4756,30 @@ function wireTouchScroll(t) {
     window.removeEventListener("pointerup", lift, true);      // listeners must
     window.removeEventListener("pointercancel", lift, true);  // not outlive t
     stopFling();
+    clearTimeout(lpTimer);
     if (altTimer) { clearTimeout(altTimer); altTimer = 0; altPend = 0; }
   };
+  // A long-press ends in browser follow-ups that would undo the selection the
+  // instant it was made: SYNTHESIZED mouse events (xterm clears its selection
+  // on mousedown — observed eating the selection within a frame of the lift)
+  // and the contextmenu. preventDefault on touchend cannot stop them here,
+  // because setPointerCapture makes Chrome CANCEL the touch stream (the lift
+  // arrives as pointerup + compat mouse events, with no touchend at all) — so
+  // the mouse events themselves are swallowed, exactly while a selection
+  // gesture is live or just finished. Never for plain taps: those must keep
+  // focusing xterm and driving double-tap selection.
+  const squelch = (e) => {
+    if (selecting || Date.now() - selEndAt < 500) { e.preventDefault(); e.stopPropagation(); }
+  };
+  t.el.addEventListener("touchend", squelch, { passive: false, capture: true });
+  // mousemove is on the list for the mouse-tracking case: a synthesized move
+  // becomes a motion report to the app, and xterm treats its own outgoing
+  // data as typing — which clears the selection it just made.
+  for (const ty of ["mousedown", "mouseup", "mousemove", "click"])
+    t.el.addEventListener(ty, squelch, true);
+  t.el.addEventListener("contextmenu", (e) => {
+    if (selecting || Date.now() - selEndAt < 500) e.preventDefault();
+  });
 
   // xterm's own touch scrolling (bound to .xterm inside us) must never also
   // run — but the browser's NATIVE handling stands down only while a pan or a
@@ -4694,7 +4788,7 @@ function wireTouchScroll(t) {
   // "the page owns this".
   t.el.addEventListener("touchmove", (e) => {
     e.stopPropagation();
-    if (panning || pinchD) e.preventDefault();
+    if (panning || pinchD || selecting) e.preventDefault();
   }, { passive: false, capture: true });
 }
 
@@ -4730,7 +4824,7 @@ function wireTermKeys() {
     }
     if (b.dataset.k === "copy") {
       const sel = t.term.getSelection();
-      if (!sel) { kbToast("Nothing selected — double-tap a word to select it", "err"); return; }
+      if (!sel) { kbToast("Nothing selected — long-press a word (drag to extend)", "err"); return; }
       navigator.clipboard.writeText(sel)
         .then(() => kbToast("Copied"))
         .catch(() => kbToast("Clipboard blocked by the browser", "err"));
