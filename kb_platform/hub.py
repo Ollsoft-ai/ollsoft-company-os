@@ -611,7 +611,7 @@ class Hub:
         uid, gids = _uid_gids(user)
         if not p.parent.is_dir() or not _fs_can(p.parent, uid, gids, need_write=True):
             return web.json_response({"error": "no write access to folder"}, status=403)
-        rel_clean = str(p.relative_to(common.REPO_ROOT.resolve()))
+        rel_clean = rel_resolved
         try:
             # secrets are born private: creator-owned, 0600 — shared deliberately
             owner = self._create_inheriting(
@@ -622,7 +622,8 @@ class Hub:
             return web.json_response({"error": "already exists"}, status=409)
         except OSError as e:
             return web.json_response({"error": str(e)}, status=500)
-        return web.json_response({"ok": True, "path": rel, "owner": owner})
+        # report the canonical path we actually created, not the raw request
+        return web.json_response({"ok": True, "path": rel_clean, "owner": owner})
 
     async def fs_upload(self, request: web.Request) -> web.Response:
         user = self.current_user(request)
@@ -782,7 +783,11 @@ class Hub:
                 for flag, name in entries:
                     if _dir_traversable(dfd, st, flag, name):
                         continue   # already reachable — adding an ACL would downgrade
-                    _acl_apply_fd(dfd, False, ["-m", f"{flag}:{name}:x"])  # access ACL only
+                    # -n: do NOT recalculate the mask. setfacl would otherwise
+                    # widen it to the union of every group-class entry, quietly
+                    # restoring grants that a narrowed mask had revoked — a
+                    # share of one file must not re-open a folder's other ACLs.
+                    _acl_apply_fd(dfd, False, ["-n", "-m", f"{flag}:{name}:x"])
                     if parent not in granted:
                         granted.append(parent)
             except (OSError, KeyError, subprocess.SubprocessError):

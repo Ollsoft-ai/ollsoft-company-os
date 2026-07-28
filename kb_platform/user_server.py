@@ -351,6 +351,7 @@ async def upload(request: web.Request) -> web.Response:
         if not files_dir.exists():
             common.mkdir_with_mode(files_dir)
         target = files_dir / filename
+        existed = target.exists()
         size = 0
         with open(target, "wb") as f:
             while True:
@@ -359,8 +360,15 @@ async def upload(request: web.Request) -> web.Response:
                     break
                 size += len(chunk)
                 f.write(chunk)
-        # An attachment must be as readable as the folder it was uploaded into.
-        os.chmod(target, common.birth_mode(files_dir, False, str(target)))
+        # A NEW attachment must be as readable as the folder it landed in. An
+        # existing one keeps its own permissions: overwriting a teammate's file
+        # is allowed by the group bits, but chmod-ing it is not — doing so
+        # unconditionally turned a completed upload into a 403.
+        if not existed:
+            try:
+                os.chmod(target, common.birth_mode(files_dir, False, str(target)))
+            except OSError:
+                pass
     except PermissionError:
         return web.json_response({"error": "forbidden"}, status=403)
     except OSError as e:
