@@ -5,10 +5,12 @@ backend, syncd, indexer) can import it without pulling heavy deps.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import json
 import os
+import stat as stat_mod
 import time
 from pathlib import Path
 
@@ -198,6 +200,130 @@ def is_secret_path(rel: str) -> bool:
     specially everywhere content could escape the permission check: git
     history, the search index, and the CRDT relay."""
     return "_secrets" in rel.strip("/").split("/")
+
+
+# --- Kernel-exact access evaluation (for ROOT daemons only) ------------------
+# hub and syncd run as root but act on behalf of users; the kernel won't answer
+# "may THIS user read that?" for them (os.access answers for root), so they must
+# re-derive it. Mode bits alone are NOT enough: POSIX ACLs grant access that
+# never shows in st_mode, and on ACL-bearing files st_mode's group bits are the
+# ACL *mask*, so bare bits both under-grant (a named u:alice:rw entry) and
+# over-grant (mask rwx over a real group::--- entry). These two functions mirror
+# the kernel's algorithm — acl(5) "ACCESS CHECK ALGORITHM" — exactly.
+ACL_XATTR = "system.posix_acl_access"
+_ACL_USER_OBJ, _ACL_USER, _ACL_GROUP_OBJ, _ACL_GROUP, _ACL_MASK, _ACL_OTHER = (
+    0x01, 0x02, 0x04, 0x08, 0x10, 0x20)
+
+
+def acl_entries(target) -> list[tuple[int, int, int]] | None:
+    """Parsed `system.posix_acl_access` xattr as [(tag, perms, qualifier)], or
+    None when the file has no extended ACL (evaluate classic mode bits then).
+    `target` is a path (symlinks not followed) or an open fd. On an unexpected
+    read error returns [] — evaluating with empty entries can only under-grant.
+    """
+    try:
+        if isinstance(target, int):
+            raw = os.getxattr(target, ACL_XATTR)
+        else:
+            raw = os.getxattr(target, ACL_XATTR, follow_symlinks=False)
+    except OSError as e:
+        if e.errno in (errno.ENODATA, errno.ENOTSUP):
+            return None
+        return []
+    if len(raw) < 4 or int.from_bytes(raw[:4], "little") != 2:
+        return None
+    return [(int.from_bytes(raw[o:o + 2], "little"),
+             int.from_bytes(raw[o + 2:o + 4], "little"),
+             int.from_bytes(raw[o + 4:o + 8], "little"))
+            for o in range(4, len(raw) - 7, 8)]
+
+
+def unix_access(st, entries, uid: int, gids, want: int) -> bool:
+    """May the user (uid + supplementary gids) perform `want` (an R=4/W=2/X=1
+    bitmask) on a file with this lstat result and these acl_entries()? Pure
+    function; ancestor traversal is the caller's job. Owner and other are never
+    capped by the mask; named users, the owning group and named groups are; a
+    user who matches ANY group-class entry never falls through to other."""
+    mode = stat_mod.S_IMODE(st.st_mode)
+    if entries is None:
+        if st.st_uid == uid:
+            bits = mode >> 6
+        elif st.st_gid in gids:
+            bits = mode >> 3
+        else:
+            bits = mode
+        return (bits & want) == want
+    owner, group_obj, mask, other = (mode >> 6) & 7, 0, 7, mode & 7
+    named_u, named_g = {}, {}
+    for tag, perm, qual in entries:
+        if tag == _ACL_USER_OBJ:
+            owner = perm
+        elif tag == _ACL_USER:
+            named_u[qual] = perm
+        elif tag == _ACL_GROUP_OBJ:
+            group_obj = perm
+        elif tag == _ACL_GROUP:
+            named_g[qual] = perm
+        elif tag == _ACL_MASK:
+            mask = perm
+        elif tag == _ACL_OTHER:
+            other = perm
+    if st.st_uid == uid:
+        return (owner & want) == want
+    if uid in named_u:
+        return (named_u[uid] & mask & want) == want
+    in_group_class = st.st_gid in gids
+    if in_group_class and (group_obj & mask & want) == want:
+        return True
+    for gid, perm in named_g.items():
+        if gid in gids:
+            in_group_class = True
+            if (perm & mask & want) == want:
+                return True
+    if in_group_class:
+        return False
+    return (other & want) == want
+
+
+def birth_mode(parent, is_dir: bool) -> int:
+    """The mode a newly created child of `parent` should end up with: the same
+    audience as the folder it lands in.
+
+    A process-wide restrictive umask is NOT enough. It used to be safe because
+    every shared folder carried a default ACL that re-granted the group, but a
+    group-owned folder (chgrp + setgid, no ACL) has no default ACL — so a new
+    file there is born 0600 and the team it was written for, plus the search
+    indexer, silently cannot read it. Mirror the parent's group/other bits
+    instead (execute stripped for files, setgid kept for directories) so the
+    audience of a document is the audience of its folder, ACLs or not.
+    """
+    try:
+        pm = stat_mod.S_IMODE(os.stat(parent).st_mode)
+    except OSError:
+        return 0o700 if is_dir else 0o600
+    if is_dir:
+        return (pm & 0o2777) | 0o700          # keep setgid; owner always full
+    return (pm & 0o666) | 0o600               # rw for whoever the folder is for
+
+
+def create_with_mode(path, data: bytes | None = None, *, exclusive: bool = False):
+    """Create `path` as this (unprivileged) user with birth_mode(). Separate
+    chmod after creation, because the process umask would mask an open() mode.
+    The brief window between the two is more restrictive, never less."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    try:
+        if data:
+            os.write(fd, data)
+        os.fchmod(fd, birth_mode(os.path.dirname(str(path)) or ".", False))
+    finally:
+        os.close(fd)
+
+
+def mkdir_with_mode(path) -> None:
+    """mkdir as this user with birth_mode() — see create_with_mode."""
+    os.mkdir(path, 0o700)
+    os.chmod(path, birth_mode(os.path.dirname(str(path)) or ".", True))
 
 
 # --- Derived text sidecars ---------------------------------------------------

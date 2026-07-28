@@ -151,7 +151,7 @@ async def create_file(request: web.Request) -> web.Response:
         p.parent.mkdir(parents=True, exist_ok=True)
         if p.exists():
             return web.json_response({"error": "exists"}, status=409)
-        p.write_text("")
+        common.create_with_mode(p, exclusive=True)   # audience of its folder
         common.write_attrib_hint("create", rel)
         return web.json_response({"ok": True, "path": rel})
     except PermissionError:
@@ -161,9 +161,10 @@ async def create_file(request: web.Request) -> web.Response:
 
 
 async def fs_mkdir(request: web.Request) -> web.Response:
-    """Create a folder AS the user. Kernel decides (write+x on the parent);
-    setgid + default ACLs on shared trees give the right group perms, and the
-    0077 umask keeps folders in private trees private."""
+    """Create a folder AS the user. Kernel decides (write+x on the parent); the
+    new folder inherits its parent's audience (birth_mode), so a subfolder of a
+    team folder is readable by that team whether the sharing is by owning group
+    or by default ACL."""
     data = await request.json()
     p = common.resolve_repo_path(str(data.get("path", "")))
     if p is None:
@@ -174,7 +175,7 @@ async def fs_mkdir(request: web.Request) -> web.Response:
         # so guard them inside the same try, not just the mkdir.
         if os.path.lexists(p):
             return web.json_response({"error": "already exists"}, status=409)
-        p.mkdir(mode=0o777)  # default ACL masks this on shared trees; umask elsewhere
+        common.mkdir_with_mode(p)
     except PermissionError:
         return web.json_response({"error": "no write access to the parent folder"}, status=403)
     except FileExistsError:
@@ -218,6 +219,30 @@ async def fs_delete(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=400)
     common.write_attrib_hint("delete", *touched)
     return web.json_response({"ok": True, "deleted": rel, "was_dir": is_dir})
+
+
+def _reset_audience(dst: Path) -> None:
+    """Give a freshly copied tree the DESTINATION's audience: strip any access
+    ACL inherited from the source and set each object's mode from its parent
+    (see common.birth_mode). Best-effort — a copy that lands with slightly tight
+    permissions is recoverable; one that stays private in a team folder, or that
+    carries a stranger's ACL grant into it, is the bug we are preventing."""
+    def fix(p: Path, is_dir: bool):
+        try:
+            os.removexattr(p, common.ACL_XATTR, follow_symlinks=False)
+        except OSError:
+            pass                       # no ACL to strip, or not permitted
+        try:
+            os.chmod(p, common.birth_mode(p.parent, is_dir))
+        except OSError:
+            pass
+    fix(dst, dst.is_dir())
+    if dst.is_dir():
+        for dirpath, dirnames, filenames in os.walk(dst):
+            for n in dirnames:
+                fix(Path(dirpath) / n, True)
+            for n in filenames:
+                fix(Path(dirpath) / n, False)
 
 
 def _fs_pair(data: dict) -> tuple[Path, Path, str, str] | web.Response:
@@ -298,11 +323,19 @@ async def fs_copy(request: web.Request) -> web.Response:
             return web.json_response({"error": "destination folder does not exist"}, status=400)
         # copytree/copy2 can run long for a big folder — do the I/O off the event
         # loop so this backend keeps serving the user's terminal, tree and docs.
+        # copy2/copystat would carry the SOURCE's mode and POSIX ACL to the
+        # destination — a private file copied into a team folder would stay
+        # unreadable to that team (and to the indexer), and a file carrying
+        # `u:someone:r` would smuggle that grant into a folder with a different
+        # audience. Content moves; the audience is the destination's.
         if stat.S_ISDIR(st.st_mode):
             await asyncio.to_thread(shutil.copytree, src, dst, symlinks=False,
+                                    copy_function=shutil.copy,
                                     ignore=shutil.ignore_patterns(".git", "*.kbtmp"))
+            await asyncio.to_thread(_reset_audience, dst)
         else:
-            await asyncio.to_thread(shutil.copy2, src, dst)
+            await asyncio.to_thread(shutil.copy, src, dst)
+            await asyncio.to_thread(_reset_audience, dst)
     except PermissionError:
         return web.json_response({"error": "permission denied"}, status=403)
     except shutil.Error as e:
@@ -323,7 +356,8 @@ async def upload(request: web.Request) -> web.Response:
     files_dir = dest_dir / "_files"
     filename = os.path.basename(field.filename or "upload.bin")
     try:
-        files_dir.mkdir(exist_ok=True)
+        if not files_dir.exists():
+            common.mkdir_with_mode(files_dir)
         target = files_dir / filename
         size = 0
         with open(target, "wb") as f:
@@ -333,6 +367,8 @@ async def upload(request: web.Request) -> web.Response:
                     break
                 size += len(chunk)
                 f.write(chunk)
+        # An attachment must be as readable as the folder it was uploaded into.
+        os.chmod(target, common.birth_mode(files_dir, False))
     except PermissionError:
         return web.json_response({"error": "forbidden"}, status=403)
     except OSError as e:
@@ -743,7 +779,11 @@ async def artifact_write(request: web.Request) -> web.Response:
     if not p.parent.is_dir():
         return web.json_response({"error": "parent folder does not exist"}, status=400)
     try:
-        p.write_text(content)
+        existed = p.exists()
+        if existed:
+            p.write_text(content)           # overwrite in place: keep its perms
+        else:
+            common.create_with_mode(p, content.encode())
     except PermissionError:
         return web.json_response({"error": "forbidden"}, status=403)
     except OSError as e:
