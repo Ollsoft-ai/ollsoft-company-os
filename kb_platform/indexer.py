@@ -437,10 +437,25 @@ class Indexer:
                     self._forget(path)
                     continue
                 except OSError as e:
-                    # EACCES and friends: the file may well still exist —
-                    # deleting the row would silently drop real content from
-                    # the index (and cascade its blocks). Keep it and complain.
+                    # EACCES and friends: the file may well still exist, so
+                    # deleting the row would drop real content (and cascade its
+                    # blocks) over what might be a momentary loss of access.
+                    # But its permission columns are now UNVERIFIABLE, and RLS
+                    # trusts them as current — leaving them would keep serving
+                    # a file in search under the access rules it had BEFORE it
+                    # was locked down. So keep the row and seal it: mode 0 with
+                    # no ACL grants denies everyone, including the owner, until
+                    # a later sweep can stat it again and publish real values.
                     self._note_failure(path, e)
+                    if mode != 0 or au or ag or axu or axg:
+                        cur.execute(
+                            "UPDATE kb.files SET mode=0, acl_users='{}', acl_groups='{}', "
+                            "acl_x_users='{}', acl_x_groups='{}', updated_at=now() "
+                            "WHERE path=%s", (path,))
+                        log.warning("sealed %s in the index (cannot verify its "
+                                    "permissions); it is hidden from search until "
+                                    "it is readable again", path)
+                        self._sig.pop(path, None)
                     continue
                 sig = (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), st.st_ctime_ns)
                 content_pending = path in self._retry_after
