@@ -53,18 +53,12 @@ CREATE INDEX IF NOT EXISTS blocks_tags_idx      ON kb.blocks USING gin (tags);
 CREATE INDEX IF NOT EXISTS blocks_emb_idx   ON kb.blocks USING hnsw (embedding vector_cosine_ops);
 
 -- Does user u hold permission `nbit` (4=read, 1=exec/traverse) on a file row's mode?
--- The kernel picks exactly ONE class — owner, else group, else other — and a
--- denial by the applicable class is FINAL. ORing the three (the old shape) let
--- `other` rescue a user their own class had denied: mode 0604 root:kb-users is
--- unreadable to a kb-users member on disk, but was readable through the index.
 CREATE OR REPLACE FUNCTION kb._has(mode int, owner_name text, group_name text, u text, nbit int)
 RETURNS bool LANGUAGE sql STABLE AS $$
-    SELECT CASE
-        WHEN owner_name = u THEN (mode & (nbit << 6)) <> 0
-        WHEN EXISTS (SELECT 1 FROM kb.user_groups g WHERE g.usr = u AND g.grp = group_name)
-            THEN (mode & (nbit << 3)) <> 0
-        ELSE (mode & nbit) <> 0
-    END;
+    SELECT (owner_name = u AND (mode & (nbit << 6)) <> 0)
+        OR ((mode & nbit) <> 0)
+        OR ((mode & (nbit << 3)) <> 0
+            AND EXISTS (SELECT 1 FROM kb.user_groups g WHERE g.usr = u AND g.grp = group_name));
 $$;
 REVOKE EXECUTE ON FUNCTION kb._has(int,text,text,text,int) FROM PUBLIC;
 

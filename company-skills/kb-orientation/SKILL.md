@@ -47,36 +47,6 @@ folder, dot-prefixed). Two things to know:
   `status:` line in its frontmatter — `failed`/`empty`/`unsupported` explain
   themselves.
 
-# Sharing a folder with teammates — use a group, NEVER per-user ACLs
-
-Learned the hard way (July 2026, the Nextcloud-collectives migration): folders
-were shared with `setfacl -m u:<name>:rwx` and it *looked* right — `ls`, the
-file tree, search and even a kernel-level read test all worked — but the
-granted colleagues still could not open a single document. The live-editor
-daemon (syncd) and the hub's create/upload checks evaluate **only the classic
-owner/group/other mode bits**; they never read ACLs. And because an extended
-ACL makes `ls`'s group bits show the ACL *mask*, a folder can even look
-group-accessible when the real group entry is `---` — so the editor can
-falsely admit people a restricted folder was never shared with.
-
-The only sharing mechanism that works end-to-end is the folder's **owning
-group** (the pattern of `proj-olingo`):
-
-1. A dedicated OS group per audience, e.g. `proj-<name>` / `team-<name>`,
-   with **`kbindexer` as a member** (so the search index can read it) —
-   creating groups needs an admin, so ask krystof.
-2. `chgrp -R <group> <folder>`; `chmod -R g+rwX,o-rwx <folder>`; `chmod g+s`
-   on every directory (so new files inherit the group).
-3. Strip any leftover extended ACLs: `setfacl -R -b <folder>` (skip the
-   read-only `.*.md` sidecars — kb-convert manages those itself).
-4. Whole-company audience = the existing `kb-users` group; no new group, and
-   new hires inherit access automatically — same reasoning as `kb_users` in
-   **kb-database**.
-
-Per-user ACLs remain fine for exactly one case: read-sharing a single
-non-editor file, e.g. an artifact `.html` (see **kb-artifacts**). Never use
-them on folders or `.md` documents.
-
 # What else you can do (see the other skills)
 
 - **`kb-database`** — query the shared index (respects permissions automatically) and create your own private tables.
