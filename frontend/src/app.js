@@ -15,7 +15,8 @@ import { yCollab } from "y-codemirror.next";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { initDictation, toggleDictation, dictationReady, retryDictation,
-         releaseMicNow } from "./dictation.js";
+         releaseMicNow, listRecordings, recordingBlob, deleteRecording,
+         transcribeRecording } from "./dictation.js";
 
 // Markdown on the Ollsoft palette: content stays ink; the machinery (marks,
 // urls, code) recedes into blues so the words lead.
@@ -904,12 +905,12 @@ function dictationTarget() {
   return target;
 }
 
-function insertDictation(target, text) {
+function insertDictation(target, text, audioId) {
   if (!text) { kbToast("Nothing was said", "err"); return; }
   // Keep the transcript BEFORE routing it anywhere. Even a transcript that has
   // nowhere to land — or lands somewhere and gets deleted by a stray swipe — is
   // recoverable from the history for a day.
-  dictHistAdd(text);
+  dictHistAdd(text, audioId);
   if (!target) {
     kbToast("Nowhere to put that — click into a document or the terminal first", "err");
     return;
@@ -971,8 +972,10 @@ function insertDictation(target, text) {
 // the safety net for the two ways a transcript dies young: it landed somewhere
 // and got deleted by accident, or recording was cut short (backgrounding the
 // app on a phone finishes the recording — see the visibilitychange guard in
-// dictation.js) and the text went somewhere unexpected. Text only, never
-// audio: blobs would blow the quota, and the transcript is what you copy.
+// dictation.js) and the text went somewhere unexpected. Text in localStorage
+// (blobs would blow its quota); the AUDIO lives in dictation.js's IndexedDB
+// vault, and `a` on an entry is the vault id that produced it — while that
+// recording is still vaulted, the entry offers a download of the original audio.
 const DICT_HIST_KEY = "kbDictHistory";
 const DICT_HIST_TTL = 24 * 3600 * 1000;
 const DICT_HIST_MAX = 200;                // a chatty day, not an unbounded log
@@ -986,12 +989,26 @@ function dictHistLoad() {
   return arr.filter((e) => e && typeof e.text === "string" && e.t > cut);
 }
 
-function dictHistAdd(text) {
+function dictHistAdd(text, audioId) {
   const arr = dictHistLoad();               // load() already expired the old ones
-  arr.unshift({ t: Date.now(), text });
+  arr.unshift(audioId ? { t: Date.now(), text, a: audioId } : { t: Date.now(), text });
   if (arr.length > DICT_HIST_MAX) arr.length = DICT_HIST_MAX;
   try { localStorage.setItem(DICT_HIST_KEY, JSON.stringify(arr)); }
   catch (e) { /* quota or private mode — dictation itself still works */ }
+}
+
+async function dictAudioDownload(id, t, mime) {
+  const blob = await recordingBlob(id);
+  if (!blob) { kbToast("That recording is gone", "err"); return; }
+  const stamp = new Date(t).toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "dictation-" + stamp + ((mime || "").includes("ogg") ? ".ogg" : ".webm");
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Not immediately: the click starts the download, revoking too early aborts it.
+  setTimeout(() => URL.revokeObjectURL(a.href), 30_000);
 }
 
 function dictHistAgo(t) {
@@ -1001,7 +1018,7 @@ function dictHistAgo(t) {
   return Math.round(s / 3600) + " h ago";
 }
 
-function openDictHistory() {
+async function openDictHistory() {
   const ov = document.createElement("div");
   ov.className = "modal-overlay";
   ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
@@ -1009,7 +1026,7 @@ function openDictHistory() {
   card.className = "modal-card";
   card.innerHTML = `
     <div class="modal-head"><b>Dictation history</b>
-      <span class="muted">last 24 h, this browser only</span>
+      <span class="muted">this browser only</span>
       <button class="modal-x" title="Close">×</button></div>
     <div class="dh-list" data-testid="dh-list"></div>
     <div class="modal-foot"><button class="modal-close">Close</button></div>`;
@@ -1019,22 +1036,73 @@ function openDictHistory() {
   card.querySelector(".modal-close").addEventListener("click", () => ov.remove());
 
   const list = card.querySelector(".dh-list");
-  const entries = dictHistLoad();
-  if (!entries.length) {
-    list.innerHTML = '<div class="muted">Nothing yet — every transcript you dictate is kept here for 24 hours, in case it lands in the wrong place or gets deleted.</div>';
+  const recs = await listRecordings();          // the audio vault (dictation.js)
+  const entries = dictHistLoad();               // the transcripts (localStorage)
+  const vaulted = new Set(recs.map((r) => r.id));
+
+  // Recordings that never became a transcript come FIRST — they are the ones
+  // that need an action (transcribe again, download, or discard), and burying
+  // them under a day of successful dictations would hide exactly the thing
+  // this history exists to rescue.
+  const stranded = recs.filter((r) => r.status !== "done");
+  if (!stranded.length && !entries.length) {
+    list.innerHTML = '<div class="muted">Nothing yet — every dictation is kept here: '
+      + 'the transcript for 24 hours, and the audio of anything that failed to '
+      + 'transcribe for 7 days, ready to download or try again.</div>';
     return;
+  }
+  const fmtLen = (r) => {
+    const secs = r.ms ? Math.round(r.ms / 1000) : 0;
+    const dur = secs ? Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0") + ", " : "";
+    return dur + (r.bytes >= 1024 ? Math.round(r.bytes / 1024) + " KB" : r.bytes + " B");
+  };
+  for (const r of stranded) {
+    const row = document.createElement("div");
+    row.className = "dh-item dh-rec";
+    row.innerHTML = `<div class="dh-text"></div>
+      <span class="dh-when">${dictHistAgo(r.t)}</span>
+      <span class="dh-actions">
+        <button class="mini dh-transcribe" data-testid="dh-transcribe"
+                title="Send this recording for transcription again">transcribe</button>
+        <button class="mini dh-download" data-testid="dh-download"
+                title="Download the audio">download</button>
+        <button class="mini dh-delete" title="Discard this recording">✕</button>
+      </span>`;
+    row.querySelector(".dh-text").textContent =
+      (r.status === "interrupted" ? "Recording interrupted — not transcribed"
+                                  : "Recording not transcribed") + " (" + fmtLen(r) + ")";
+    row.querySelector(".dh-transcribe").addEventListener("click", () => {
+      ov.remove();               // so the words land where the user was working
+      transcribeRecording(r.id);
+    });
+    row.querySelector(".dh-download").addEventListener("click",
+      () => dictAudioDownload(r.id, r.t, r.mime));
+    row.querySelector(".dh-delete").addEventListener("click", () => {
+      deleteRecording(r.id);
+      row.remove();
+    });
+    list.appendChild(row);
   }
   for (const e of entries) {
     const row = document.createElement("div");
     row.className = "dh-item";
+    const hasAudio = e.a && vaulted.has(e.a);
     row.innerHTML = `<div class="dh-text"></div>
       <span class="dh-when">${dictHistAgo(e.t)}</span>
-      <button class="mini dh-copy" title="Copy this transcript">copy</button>`;
+      <span class="dh-actions">
+        ${hasAudio ? '<button class="mini dh-download" title="Download the original audio">audio</button>' : ""}
+        <button class="mini dh-copy" title="Copy this transcript">copy</button>
+      </span>`;
     row.querySelector(".dh-text").textContent = e.text;
     row.querySelector(".dh-copy").addEventListener("click", () => {
       navigator.clipboard.writeText(e.text)
         .then(() => kbToast("Copied", "ok"), () => kbToast("Clipboard blocked", "err"));
     });
+    if (hasAudio) {
+      const r = recs.find((x) => x.id === e.a);
+      row.querySelector(".dh-download").addEventListener("click",
+        () => dictAudioDownload(r.id, r.t, r.mime));
+    }
     list.appendChild(row);
   }
 }
@@ -3633,7 +3701,7 @@ const EXTRA_COMMANDS = [
   { id: "reload", label: "Reload the file tree", run: () => loadTree(true).then(() => kbToast("Tree reloaded", "ok")) },
   { id: "retryspeech", label: "Retry the last dictation", when: dictationReady,
     run: retryDictation },
-  { id: "dicthistory", label: "Dictation history — transcripts from the last 24 hours",
+  { id: "dicthistory", label: "Dictation history — recent transcripts and saved recordings",
     when: dictationReady, run: openDictHistory },
   // The mic is held open between utterances so the next one starts instantly and
   // the browser doesn't re-prompt. This hands it back without waiting out the

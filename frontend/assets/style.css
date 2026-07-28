@@ -668,7 +668,8 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   overflow-wrap: anywhere; user-select: text; }
 .dh-when { color: var(--faint); font-size: .68rem; font-family: var(--mono);
   white-space: nowrap; padding-top: .15rem; }
-.dh-copy { flex: 0 0 auto; }
+.dh-actions { flex: 0 0 auto; display: flex; gap: .3rem; }
+.dh-rec .dh-text { color: var(--muted); font-style: italic; }
 
 /* admin + cron shared table styling */
 .admin-card { width: min(760px, 94vw); }

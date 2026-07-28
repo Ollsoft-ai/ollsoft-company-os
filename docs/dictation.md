@@ -13,7 +13,9 @@ Two gestures, one key, no mode to remember:
 
 The indicator (bottom-right) shows a pulsing dot, a live input-level meter, and a
 **Stop** button, and it stays visible wherever focus is. A recording auto-stops
-after 90 seconds. A **key-held** recording also ends on window blur (the keyup is
+after 10 minutes (a brake against an accidentally-latched mic, not a limit on how
+long a thought may be — the audio is already safe on disk long before it fires,
+see below). A **key-held** recording also ends on window blur (the keyup is
 gone for good), but a **latched** recording keeps running when the app leaves the
 screen — dictate while reading another app; the phone's mic indicator is then
 telling the truth. When nothing is recording, leaving the screen releases the
@@ -41,19 +43,39 @@ at insertion. In order:
    editor is CRDT-backed, so it syncs to disk on its own — there is no save step.
 4. **Nothing suitable** → a toast saying so. The text is never silently dropped.
 
-### The last 24 hours are recoverable
+### Nothing you said is ever lost
 
-Every transcript that comes back is also kept client-side for 24 hours —
-**Dictation history** in the topbar (inside the ⋯ menu on phones) or in the
-command palette lists them, newest first, each with a copy button. This is the
-safety net for a transcript that landed in the wrong place, got deleted by a
-stray swipe, or was cut short when the app was backgrounded mid-recording.
+The recording is the one part of a dictation that cannot be re-created — the
+transcript can be re-requested, but five minutes of speech cannot be re-spoken.
+So the audio is written to the browser's IndexedDB (`kbDictAudio`) **while
+recording**, one one-second opus slice at a time. From the first second on,
+every failure mode leaves the audio recoverable in **Dictation history** (topbar,
+inside the ⋯ menu on phones, or the command palette):
 
-It lives in the browser's `localStorage` (`kbDictHistory`, capped at 200
-entries, expired on read), so it is per browser profile and never leaves the
-device — consistent with the server-side rule that `stt.log` records metadata
-but **never the transcript**. The flip side: anyone using the same browser
-profile can read it, same as anything else in that profile.
+| what went wrong | what you see |
+|---|---|
+| `/stt` errors, quota hit, network gone | toast + the recording listed with **transcribe** / **download** / ✕ buttons |
+| empty transcript from real speech | same — the audio is kept, try again or download it |
+| tab crashed / browser killed mid-recording | on next load it appears as *"Recording interrupted"*, at most one second short |
+| recording auto-finished off-screen | a toast on return points at the history |
+
+**transcribe** sends the same audio again (the words land wherever you're
+working at that moment); **download** saves the original `.webm`/`.ogg` file.
+"Retry the last dictation" in the palette also survives a reload — it falls
+back to the newest un-transcribed recording in the vault.
+
+Retention: un-transcribed audio is kept **7 days**; once transcribed, the audio
+is kept another 24 hours (each transcript row offers an **audio** download while
+it lasts) and the vault is capped at 100 recordings, evicting transcribed ones
+first. Sub-300 ms mis-taps are never vaulted.
+
+Transcripts themselves are kept for 24 hours in `localStorage` (`kbDictHistory`,
+capped at 200 entries, expired on read), each with a copy button — the safety
+net for a transcript that landed in the wrong place or got deleted by a stray
+swipe. Both stores are per browser profile and never leave the device —
+consistent with the server-side rule that `stt.log` records metadata but
+**never the transcript**. The flip side: anyone using the same browser profile
+can read (and hear) it, same as anything else in that profile.
 
 The transcript is third-party text, so it is stripped of C0 control characters
 (including ESC) and NFC-normalized before it touches anything. That matters most
@@ -143,6 +165,7 @@ premise is that the kernel is the boundary. The mic button's tooltip says so.
 ## Limits and the audit trail
 
 - **12 MiB** per recording (~50 min of 32 kbps mono opus); over that, `413`.
+  The client stops a recording at 10 minutes (~2.4 MB) anyway.
 - Under **1 KiB** or **300 ms** is treated as a stray tap: answered `200` with an
   empty transcript, *without* spending an API call.
 - **~1 hour of audio per user per UTC day** (`KB_STT_DAILY_BYTES`), then `429`.

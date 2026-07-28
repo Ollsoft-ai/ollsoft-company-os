@@ -69,6 +69,14 @@ def page(ctx):
     p.wait_for_url(BASE + "/")
     p.wait_for_selector('[data-testid="tree"] .tree-item', timeout=15000)
     stub(p, {"ok": True, "text": SPOKEN})
+    # Content search is not under test here, and it is expensive for real: the
+    # palette fires /api/search for any 2+ character query, and that scan can
+    # take ~20 s on a large corpus — during which the per-user backend (sync
+    # psycopg on the event loop) answers nothing, so the NEXT test's page load
+    # times out. Dictating into the palette types a query; answer it locally.
+    p.route("**/api/search*", lambda r: r.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"results": [], "files": [], "db": True})))
     yield p
     p.close()
 
@@ -256,7 +264,7 @@ def test_autorepeat_does_not_toggle(page):
 
 def test_blur_stops_a_stranded_recording(page):
     """Alt-Tab mid-hold means the keyup never arrives. Without the blur guard the
-    recording would run all the way to the 90-second cap."""
+    recording would run all the way to the 10-minute cap."""
     page.keyboard.down("F9")
     recording(page)
     page.evaluate("window.dispatchEvent(new Event('blur'))")
@@ -479,6 +487,107 @@ def test_transcript_lands_in_history(page, doc):
     assert phrase in page.locator('[data-testid="dh-list"]').inner_text()
 
 
+def test_failed_transcription_keeps_the_audio_and_history_rescues_it(page, doc):
+    """The reason the vault exists: five minutes of speech cannot be re-spoken.
+    When /stt fails, the recording must survive — listed in Dictation history —
+    and one click there must send the SAME audio again once the server is back."""
+    stub(page, {"error": "upstream exploded"}, status=502)
+    open_doc(page, doc)
+    before = doc_text(page)
+    dictate(page)
+    page.wait_for_selector('[data-testid="toast"]', timeout=15000)
+    assert doc_text(page) == before, "a failed transcription must insert nothing"
+
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"] .dh-rec', timeout=6000)
+    row = page.locator('[data-testid="dh-list"] .dh-rec').first
+    assert "not transcribed" in row.inner_text()
+    assert row.locator('[data-testid="dh-download"]').count() == 1
+
+    # The server recovers; "transcribe" on the kept recording finishes the job.
+    phrase = "rescued " + uuid.uuid4().hex[:8]
+    stub(page, {"ok": True, "text": phrase})
+    row.locator('[data-testid="dh-transcribe"]').click()
+    page.wait_for_function("t => window.__kbview.state.doc.toString().includes(t)",
+                           arg=phrase, timeout=15000)
+    # And once transcribed, it is no longer listed as stranded.
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"] .dh-item', timeout=6000)
+    assert phrase in page.locator('[data-testid="dh-list"]').inner_text()
+
+
+def test_a_recording_survives_the_tab_dying_mid_recording(page):
+    """The worst case: the tab is gone WHILE the words are being spoken — no
+    stop, no upload, nothing. Chunks are vaulted to IndexedDB every second, so
+    after a reload the recording is in Dictation history, ready to transcribe
+    or download, at most one second short."""
+    leave_terminal(page)
+    n_before = page.evaluate(
+        """() => new Promise((res) => { const rq = indexedDB.open('kbDictAudio', 1);
+             rq.onupgradeneeded = () => { rq.result.createObjectStore('recs', {keyPath: 'id'});
+               rq.result.createObjectStore('chunks', {keyPath: ['rid','seq']}); };
+             rq.onsuccess = () => { const t = rq.result.transaction('recs');
+               const c = t.objectStore('recs').count();
+               c.onsuccess = () => res(c.result); };
+             rq.onerror = () => res(-1); })""")
+    page.keyboard.press("F9")               # latch, so nothing stops it
+    recording(page)
+    page.wait_for_timeout(3500)             # a few one-second slices reach disk
+    page.reload()                           # the "crash": no finish, no upload
+    page.wait_for_selector('[data-testid="tree"] .tree-item', timeout=15000)
+
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"] .dh-rec', timeout=6000)
+    row = page.locator('[data-testid="dh-list"] .dh-rec').first
+    assert "not transcribed" in row.inner_text()
+    assert row.locator('[data-testid="dh-transcribe"]').count() == 1
+    n_after = page.evaluate(
+        """() => new Promise((res) => { const rq = indexedDB.open('kbDictAudio', 1);
+             rq.onsuccess = () => { const t = rq.result.transaction('recs');
+               const c = t.objectStore('recs').count();
+               c.onsuccess = () => res(c.result); }; })""")
+    assert n_after == n_before + 1, "the interrupted recording should be vaulted"
+
+
+def test_the_original_audio_of_a_transcript_is_downloadable(page, doc):
+    """A successful dictation keeps its audio for a day too — the transcript row
+    in history offers the original recording as a file."""
+    phrase = "audible " + uuid.uuid4().hex[:8]
+    stub(page, {"ok": True, "text": phrase})
+    open_doc(page, doc)
+    dictate(page)
+    page.wait_for_function("t => window.__kbview.state.doc.toString().includes(t)",
+                           arg=phrase, timeout=15000)
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"] .dh-item', timeout=6000)
+    rows = page.locator('[data-testid="dh-list"] .dh-item')
+    assert phrase in rows.first.inner_text() or phrase in page.locator('[data-testid="dh-list"]').inner_text()
+    with page.expect_download(timeout=10000) as dl:
+        page.locator('.dh-item:not(.dh-rec) .dh-download').first.click()
+    name = dl.value.suggested_filename
+    assert name.startswith("dictation-") and name.rsplit(".", 1)[-1] in ("webm", "ogg")
+
+
+def test_deleting_a_kept_recording_is_permanent(page):
+    """The ✕ on a stranded recording removes it from the vault, not just the
+    modal — reopening the history must not resurrect it."""
+    leave_terminal(page)
+    page.click('[data-testid="dict-hist-btn"]')
+    # The list is filled asynchronously (the vault is IndexedDB) — wait for the
+    # render, not just the modal: rows and the empty-state note are appended in
+    # one synchronous pass, so any child means the list is complete.
+    page.wait_for_selector('[data-testid="dh-list"] > *', timeout=6000)
+    # Earlier tests strand recordings on purpose; clear every one of them.
+    while page.locator('[data-testid="dh-list"] .dh-rec').count():
+        page.locator('[data-testid="dh-list"] .dh-rec .dh-delete').first.click()
+        page.wait_for_timeout(150)
+    page.locator(".modal-close").click()
+    page.wait_for_timeout(400)              # let the IndexedDB deletes commit
+    page.click('[data-testid="dict-hist-btn"]')
+    page.wait_for_selector('[data-testid="dh-list"] > *', timeout=6000)
+    assert page.locator('[data-testid="dh-list"] .dh-rec').count() == 0
+
+
 def test_history_expires_after_a_day(page):
     """Entries older than 24 h are filtered on read — the store is a safety net,
     not an archive."""
@@ -487,7 +596,7 @@ def test_history_expires_after_a_day(page):
       {t: Date.now() - 25 * 3600 * 1000, text: 'stale entry'}]))""")
     leave_terminal(page)
     page.click('[data-testid="dict-hist-btn"]')
-    page.wait_for_selector('[data-testid="dh-list"]', timeout=6000)
+    page.wait_for_selector('[data-testid="dh-list"] > *', timeout=6000)
     body = page.locator('[data-testid="dh-list"]').inner_text()
     assert "fresh entry" in body
     assert "stale entry" not in body
@@ -559,7 +668,7 @@ def test_leaving_the_app_with_an_idle_mic_releases_it(page):
 
 
 def test_a_recording_killed_off_screen_explains_on_return(page):
-    """The bounded cases — the 90 s cap, or the OS reclaiming the microphone in
+    """The bounded cases — the 10 min cap, or the OS reclaiming the microphone in
     the background — finish the recording while nobody is looking. The finish
     must release the mic, and the return to the app must say what happened:
     a toast fired off-screen would have expired unseen. Emulated by ending the
