@@ -30,6 +30,7 @@ from watchfiles import awatch
 log = logging.getLogger("kb-indexer")
 RETRY_BACKOFF = 60.0  # seconds between retries of a path whose indexing failed
 MAX_TRACKED = 10_000  # cap on remembered failing paths, so a mass failure can't grow unbounded
+MAX_PER_SWEEP = 200   # documents re-parsed per 1s sweep; the rest wait for the next one
 
 
 def acl_info(p: Path) -> tuple[int, list[str], list[str], list[str], list[str]]:
@@ -145,8 +146,12 @@ class Indexer:
         self.root = common.REPO_ROOT.resolve()
         self._sig: dict[str, tuple] = {}   # path -> cheap stat signature, to skip unchanged files
         self._warned: set[str] = set()          # paths already logged as failing (log once per streak)
-        self._retry_after: dict[str, float] = {}  # content-index failure -> next attempt (monotonic)
-        self._stat_retry: dict[str, float] = {}   # stat/getfacl failure -> next attempt
+        self._retry_after: dict[str, float] = {}  # transient failure -> next attempt (monotonic)
+        # Path -> the stat signature it last FAILED at. While a path's signature
+        # is unchanged there is nothing new to try, so it is skipped outright:
+        # without this a file the indexer may not read (someone's private note)
+        # costs a getfacl fork and an open() every second, forever.
+        self._failed_at: dict[str, tuple] = {}
         # One writer at a time on self.conn: watch_loop runs in the event loop
         # while the sweeps run in an executor thread, and interleaved
         # commit/rollback on a shared transaction loses or half-applies writes.
@@ -171,23 +176,43 @@ class Indexer:
                         "search index until this is fixed; will keep retrying",
                         rel, type(err).__name__, err)
 
-    def _defer(self, rel: str, err: Exception):
+    def _sig_of(self, p: Path) -> tuple | None:
+        try:
+            st = p.lstat()
+        except OSError:
+            return None
+        return (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), st.st_ctime_ns)
+
+    def _defer(self, rel: str, err: Exception, sig: tuple | None = None):
+        """Record that `rel` could not be indexed. It is retried when its stat
+        signature changes (a permission change bumps ctime) and, for transient
+        faults only, on a timer as well."""
         self._note_failure(rel, err)
+        if len(self._failed_at) < MAX_TRACKED or rel in self._failed_at:
+            self._failed_at[rel] = sig if sig is not None else self._sig_of(self.root / rel)
         if isinstance(err, PermissionError):
-            # Not a transient fault — a boundary. Retrying every minute forever
-            # would just burn syscalls; the file's ctime changes if someone
-            # grants access, and that alone brings it back into the sweep.
+            # Not a transient fault — a boundary. Nothing to retry on a timer.
             self._retry_after.pop(rel, None)
             return
         if len(self._retry_after) >= MAX_TRACKED and rel not in self._retry_after:
-            # A mass failure (kbindexer losing a group) must not turn this into
-            # an unbounded map; the periodic full walk still re-finds the rest.
             return
         self._retry_after[rel] = time.monotonic() + RETRY_BACKOFF
 
+    def _skip(self, rel: str, sig: tuple | None, now: float) -> bool:
+        """True if this path failed before at exactly this signature and its
+        retry timer (if any) has not expired — nothing has changed, so trying
+        again would only burn syscalls."""
+        if rel not in self._failed_at:
+            return False
+        if self._failed_at[rel] != sig:
+            return False                       # something changed: try again
+        if rel in self._retry_after:
+            return now < self._retry_after[rel]    # transient: wait out the timer
+        return True                            # a boundary: nothing to wait for
+
     def _note_success(self, rel: str):
         self._retry_after.pop(rel, None)
-        self._stat_retry.pop(rel, None)
+        self._failed_at.pop(rel, None)
         if rel in self._warned:
             self._warned.discard(rel)
             log.info("recovered: %s indexed", rel)
@@ -196,14 +221,14 @@ class Indexer:
         """Path is gone — drop every trace so these maps track live files only."""
         self._sig.pop(rel, None)
         self._retry_after.pop(rel, None)
-        self._stat_retry.pop(rel, None)
+        self._failed_at.pop(rel, None)
         self._warned.discard(rel)
 
     def rel(self, p: Path) -> str:
         return str(p.resolve().relative_to(self.root))
 
-    def stat_row(self, p: Path):
-        st = p.lstat()
+    def stat_row(self, p: Path, st: os.stat_result | None = None):
+        st = st if st is not None else p.lstat()
         try:
             owner = pwd.getpwuid(st.st_uid).pw_name
         except KeyError:
@@ -216,8 +241,8 @@ class Indexer:
         return (owner, group, eff_mode, stat.S_ISDIR(st.st_mode),
                 st.st_size, st.st_mtime, ru, rg, xu, xg)
 
-    def upsert_file(self, cur, rel: str, p: Path):
-        owner, group, mode, is_dir, size, mtime, ru, rg, xu, xg = self.stat_row(p)
+    def upsert_file(self, cur, rel: str, p: Path, st: os.stat_result | None = None):
+        owner, group, mode, is_dir, size, mtime, ru, rg, xu, xg = self.stat_row(p, st)
         cur.execute(
             "INSERT INTO kb.files(path,owner_name,group_name,mode,is_dir,size,mtime,"
             "acl_users,acl_groups,acl_x_users,acl_x_groups,updated_at) "
@@ -246,9 +271,23 @@ class Indexer:
         # A read failure (e.g. an ACL mask silently zeroing kbindexer's grant)
         # must surface AND be retried — swallowing it here is how a file once
         # stayed out of the index for weeks with the service looking healthy.
-        text = p.read_text(errors="replace")
+        # Leave nothing stale behind: blocks parsed when the file WAS readable
+        # would otherwise keep answering searches with content nobody can
+        # re-verify (and that may since have changed completely).
+        # Stat BEFORE reading: recording size/mtime from after the read would
+        # stamp the row with a newer version than the text it stores, and the
+        # sweep's staleness test (size/mtime differ) would then never fire —
+        # a write landing mid-read would be invisible until the next restart.
+        try:
+            pre = p.lstat()
+            text = p.read_text(errors="replace")
+        except OSError:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
+            self.conn.commit()
+            raise
         with self.conn.cursor() as cur:
-            self.upsert_file(cur, rel, p)
+            self.upsert_file(cur, rel, p, pre)
             cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
             for b in parse_blocks(text):
                 cur.execute(
@@ -392,9 +431,14 @@ class Indexer:
 
         A path's signature is recorded only AFTER it was processed successfully:
         recording it up front turned any single failure into a permanently stale
-        file (never retried until its ctime happened to change again). Failing
-        paths are retried on a backoff so a poison file cannot make this 1s loop
-        spawn a getfacl every second forever."""
+        file (never retried until its ctime happened to change again). A path
+        that FAILED is remembered with the signature it failed at, so it is
+        retried when something about it actually changes (a permission change
+        bumps ctime) rather than once per second forever.
+
+        Work per sweep is capped: one sweep must not hold the connection long
+        enough to stall the watcher — whatever is left is simply picked up by
+        the next one, a second later."""
         stale: list[tuple[Path, str, tuple]] = []
         new_files: list[str] = []
         now = time.monotonic()
@@ -414,17 +458,25 @@ class Indexer:
                     return
                 for ent in entries:
                     rel_child = f"{rel_dir}/{ent.name}" if rel_dir else ent.name
-                    if rel_child in rowpaths or now < self._retry_after.get(rel_child, 0.0) \
+                    if rel_child in rowpaths \
                             or common.is_hidden_rel(rel_child) \
                             or common.is_secret_path(rel_child):
                         continue
                     try:
-                        if ent.is_dir(follow_symlinks=False):
+                        is_dir = ent.is_dir(follow_symlinks=False)
+                        if self._skip(rel_child, self._sig_of(Path(ent.path)), now):
+                            continue
+                        if is_dir:
                             self.upsert_file(cur, rel_child, Path(ent.path))
                             rowpaths.add(rel_child)   # its own sweep row cascades deeper
-                        elif ent.name.endswith(".md"):
+                            self._note_success(rel_child)
+                        elif ent.name.endswith(".md") and len(new_files) < MAX_PER_SWEEP:
                             new_files.append(rel_child)
-                    except OSError as e:
+                    except Exception as e:
+                        # NOT just OSError: a psycopg error here used to escape
+                        # the whole sweep, and since perms_loop only logs it,
+                        # every later sweep died at the same entry.
+                        self.conn.rollback()
                         self._defer(rel_child, e)
 
             discover(self.root, "")
@@ -458,23 +510,18 @@ class Indexer:
                         self._sig.pop(path, None)
                     continue
                 sig = (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), st.st_ctime_ns)
-                content_pending = path in self._retry_after
-                if self._sig.get(path) == sig and not content_pending:
+                if self._sig.get(path) == sig and path not in self._failed_at:
                     continue                          # unchanged -> skip getfacl
-                # PERMISSIONS FIRST, on their own backoff. A file whose CONTENT
-                # cannot be indexed must still have its owner/mode/ACL columns
-                # refreshed — RLS decides from those, so gating them behind the
-                # content backoff would freeze a revocation for as long as the
-                # content kept failing.
-                if now < self._stat_retry.get(path, 0.0):
-                    continue
+                if self._skip(path, sig, now):
+                    continue                          # failed at this exact state
                 try:
                     o, g, m, _is_dir, nsz, nmt, nru, nrg, nxu, nxg = self.stat_row(p)
-                    self._stat_retry.pop(path, None)
                 except OSError as e:
-                    self._stat_retry[path] = now + RETRY_BACKOFF
-                    self._note_failure(path, e)
+                    self._defer(path, e, sig)
                     continue
+                # Permissions are refreshed even when the CONTENT cannot be
+                # indexed: RLS decides from these columns, so a revocation must
+                # land regardless of whether the document itself is readable.
                 if (o, g, m, nru, nrg, nxu, nxg) != (owner, group, mode, au or [], ag or [],
                                                      axu or [], axg or []):
                     cur.execute("UPDATE kb.files SET owner_name=%s, group_name=%s, mode=%s, "
@@ -485,9 +532,9 @@ class Indexer:
                 # index attempt failed)? Re-parse it after this sweep; the
                 # signature is recorded only once that re-parse succeeds.
                 is_doc = path.endswith(".md") and not stat.S_ISDIR(st.st_mode)
-                if is_doc and (content_pending
+                if is_doc and (path in self._failed_at
                                or nsz != size or mtime is None or abs(nmt - mtime) > 1e-6):
-                    if now >= self._retry_after.get(path, 0.0):
+                    if len(stale) < MAX_PER_SWEEP:
                         stale.append((p, path, sig))
                     continue                          # do NOT mark it healthy yet
                 if _is_dir:
@@ -496,36 +543,40 @@ class Indexer:
                 self._note_success(path)
         self.conn.commit()
         for rel_child in new_files:
-            try:
-                self.reindex_file(self.root / rel_child)
-                self._note_success(rel_child)
-            except Exception as e:
-                self.conn.rollback()
-                self._defer(rel_child, e)
+            self._index_one(self.root / rel_child, rel_child, None)
         for p, path, sig in stale:
-            try:
-                self.reindex_file(p)
-                self._sig[path] = sig
-                self._note_success(path)
-            except Exception as e:
-                self.conn.rollback()
-                self._defer(path, e)
+            self._index_one(p, path, sig)
         # Deferred paths with NO row yet (a new file whose very first index
         # attempt failed) are invisible to the row-driven loop above — retry
-        # them here once their backoff expires, or forget them if they're gone.
-        seen_rows = {r[0] for r in rows}
-        for path in [k for k, t in list(self._retry_after.items())
-                     if now >= t and k not in seen_rows]:
+        # them here once something about them changes, or forget them if gone.
+        for path in [k for k in list(self._failed_at) if k not in rowpaths]:
             p = self.root / path
-            if not p.exists():
+            cur_sig = self._sig_of(p)
+            if cur_sig is None and not p.exists():
                 self._forget(path)
                 continue
-            try:
+            if self._skip(path, cur_sig, now):
+                continue
+            self._index_one(p, path, cur_sig)
+
+    def _index_one(self, p: Path, rel: str, sig: tuple | None):
+        """(Re)index one path, recording success or scheduling a retry. A
+        directory has no content to parse — it needs its ROW, and returning
+        early from reindex_file used to count as success, dropping the row and
+        with it every descendant's visibility."""
+        try:
+            if p.is_dir():
+                with self.conn.cursor() as cur:
+                    self.upsert_file(cur, rel, p)
+                self.conn.commit()
+            else:
                 self.reindex_file(p)
-                self._note_success(path)
-            except Exception as e:
-                self.conn.rollback()
-                self._defer(path, e)
+            if sig is not None:
+                self._sig[rel] = sig
+            self._note_success(rel)
+        except Exception as e:
+            self.conn.rollback()
+            self._defer(rel, e, sig)
 
     async def perms_loop(self):
         while True:
@@ -606,6 +657,9 @@ class Indexer:
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    # watchfiles logs a line per debounced batch at INFO; under a bulk write or
+    # a syncd auto-commit storm that alone floods the journal.
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
     idx = Indexer()
     asyncio.run(idx.run())
 

@@ -331,7 +331,18 @@ def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:
     if is_secret_path(str(child if child is not None else parent)):
         return 0o700 if is_dir else 0o600
     try:
-        pm = stat_mod.S_IMODE(os.stat(parent).st_mode)
+        pst = os.stat(parent)
+        pm = stat_mod.S_IMODE(pst.st_mode)
+        # On a directory carrying an extended ACL, st_mode's group bits are the
+        # MASK — the union of every named grant — not the folder's own group
+        # permission. Taking them literally is the very mistake this module
+        # exists to correct, so read the real group:: entry when there is one.
+        entries = acl_entries(parent)
+        if entries:
+            for tag, perm, _q in entries:
+                if tag == _ACL_GROUP_OBJ:
+                    pm = (pm & ~0o070) | (perm << 3)
+                    break
     except OSError:
         return 0o700 if is_dir else 0o600
     if is_dir:
