@@ -211,6 +211,7 @@ def is_secret_path(rel: str) -> bool:
 # over-grant (mask rwx over a real group::--- entry). These two functions mirror
 # the kernel's algorithm — acl(5) "ACCESS CHECK ALGORITHM" — exactly.
 ACL_XATTR = "system.posix_acl_access"
+ACL_DEFAULT_XATTR = "system.posix_acl_default"
 _ACL_USER_OBJ, _ACL_USER, _ACL_GROUP_OBJ, _ACL_GROUP, _ACL_MASK, _ACL_OTHER = (
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20)
 
@@ -245,14 +246,21 @@ def stat_and_acl(path):
     symlink between them and getxattr returns "no ACL" for the symlink while
     the stat still describes the real file — the evaluator then falls back to
     st_mode's group bits, which on an ACL-bearing file are the MASK, and hands
-    out group-wide access the kernel would refuse. O_NOFOLLOW additionally
-    means a symlink can never be the target (raises ELOOP).
+    out group-wide access the kernel would refuse.
+
+    Symlinks are REFUSED (ELOOP). Note that O_PATH|O_NOFOLLOW does not do this
+    for us: that combination deliberately opens the link itself, and a symlink's
+    own mode is 0777, so treating it as the object would grant everyone
+    everything — the check below is what makes this safe, not O_NOFOLLOW.
     """
     fd = os.open(path, os.O_PATH | os.O_NOFOLLOW)
     try:
+        st = os.fstat(fd)
+        if stat_mod.S_ISLNK(st.st_mode):
+            raise OSError(errno.ELOOP, "refusing to evaluate a symlink", str(path))
         # procfs magic-link resolves back to the pinned inode, so this reads the
         # xattr of exactly the object we fstat'ed (getxattr rejects O_PATH fds).
-        return os.fstat(fd), acl_entries(f"/proc/self/fd/{fd}", follow=True)
+        return st, acl_entries(f"/proc/self/fd/{fd}", follow=True)
     finally:
         os.close(fd)
 
@@ -331,24 +339,98 @@ def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:
     return (pm & 0o666) | 0o600               # rw for whoever the folder is for
 
 
+def inherits_acl(parent) -> bool:
+    """Does `parent` carry a default ACL, i.e. will the kernel give a new child
+    an access ACL of its own? Where it does, the kernel's answer is the correct
+    one and we must not chmod over it."""
+    try:
+        os.getxattr(parent, ACL_DEFAULT_XATTR)
+        return True
+    except OSError:
+        return False
+
+
 def create_with_mode(path, data: bytes | None = None, *, exclusive: bool = False):
-    """Create `path` as this (unprivileged) user with birth_mode(). Separate
-    chmod after creation, because the process umask would mask an open() mode.
-    The brief window between the two is more restrictive, never less."""
+    """Create `path` as this (unprivileged) user with the audience of its folder.
+
+    Two regimes, because the kernel already handles one of them:
+      * parent HAS a default ACL — let inheritance do its job, and create with a
+        permissive mode under umask 0. A restrictive create mode would clamp the
+        inherited ACL's MASK to nothing, silently voiding every entry it just
+        granted (exactly the failure that hid documents from the indexer).
+      * parent has none — the mode bits are the whole story: birth_mode().
+    """
+    parent = os.path.dirname(str(path)) or "."
     flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    if inherits_acl(parent) and not is_secret_path(str(path)):
+        old = os.umask(0)
+        try:
+            fd = os.open(path, flags, 0o666)
+        finally:
+            os.umask(old)
+        try:
+            if data:
+                os.write(fd, data)
+        finally:
+            os.close(fd)
+        return
     fd = os.open(path, flags, 0o600)
     try:
         if data:
             os.write(fd, data)
-        os.fchmod(fd, birth_mode(os.path.dirname(str(path)) or ".", False, str(path)))
+        os.fchmod(fd, birth_mode(parent, False, str(path)))
     finally:
         os.close(fd)
 
 
 def mkdir_with_mode(path) -> None:
-    """mkdir as this user with birth_mode() — see create_with_mode."""
+    """mkdir as this user with the audience of its parent — see create_with_mode."""
+    parent = os.path.dirname(str(path)) or "."
+    if inherits_acl(parent) and not is_secret_path(str(path)):
+        old = os.umask(0)
+        try:
+            os.mkdir(path, 0o777)
+        finally:
+            os.umask(old)
+        return
     os.mkdir(path, 0o700)
-    os.chmod(path, birth_mode(os.path.dirname(str(path)) or ".", True, str(path)))
+    os.chmod(path, birth_mode(parent, True, str(path)))
+
+
+def reset_to_parent_audience(path, is_dir: bool) -> None:
+    """Make `path` look exactly as if it had just been created where it sits —
+    used after a copy, which otherwise carries the SOURCE's ACL and mode into a
+    folder with a different audience."""
+    parent = os.path.dirname(str(path)) or "."
+    try:
+        dflt = os.getxattr(parent, ACL_DEFAULT_XATTR)
+    except OSError:
+        dflt = None
+    for attr in (ACL_XATTR, ACL_DEFAULT_XATTR) if is_dir else (ACL_XATTR,):
+        try:
+            os.removexattr(path, attr, follow_symlinks=False)
+        except OSError:
+            pass
+    if dflt and not is_secret_path(str(path)):
+        try:                       # reproduce the kernel's inheritance
+            os.setxattr(path, ACL_XATTR, dflt, follow_symlinks=False)
+            if is_dir:
+                os.setxattr(path, ACL_DEFAULT_XATTR, dflt, follow_symlinks=False)
+            else:
+                # On create the kernel intersects the inherited ACL with the
+                # create mode, which for a regular file carries no execute bit.
+                # chmod with an ACL present rewrites owner/mask/other, which is
+                # exactly that intersection — without it a copied document comes
+                # out executable and mask-widened.
+                st = os.stat(path)
+                os.chmod(path, stat_mod.S_IMODE(st.st_mode) & 0o666)
+            return
+        except OSError:
+            pass
+    try:
+        os.chmod(path, birth_mode(parent, is_dir, str(path)))
+    except OSError:
+        pass
 
 
 # --- Derived text sidecars ---------------------------------------------------

@@ -222,27 +222,19 @@ async def fs_delete(request: web.Request) -> web.Response:
 
 
 def _reset_audience(dst: Path) -> None:
-    """Give a freshly copied tree the DESTINATION's audience: strip any access
-    ACL inherited from the source and set each object's mode from its parent
-    (see common.birth_mode). Best-effort — a copy that lands with slightly tight
-    permissions is recoverable; one that stays private in a team folder, or that
-    carries a stranger's ACL grant into it, is the bug we are preventing."""
-    def fix(p: Path, is_dir: bool):
-        try:
-            os.removexattr(p, common.ACL_XATTR, follow_symlinks=False)
-        except OSError:
-            pass                       # no ACL to strip, or not permitted
-        try:
-            os.chmod(p, common.birth_mode(p.parent, is_dir, str(p)))
-        except OSError:
-            pass
-    fix(dst, dst.is_dir())
+    """Give a freshly copied tree the DESTINATION's audience: drop the ACL and
+    mode that came from the source and re-derive what the kernel would have
+    created here (common.reset_to_parent_audience). Best-effort — a copy that
+    lands slightly tight is recoverable; one that stays private inside a team
+    folder, or that carries a stranger's grant into it, is the bug being fixed."""
+    common.reset_to_parent_audience(dst, dst.is_dir())
     if dst.is_dir():
-        for dirpath, dirnames, filenames in os.walk(dst):
+        # top-down, so each level is fixed before its children read it as parent
+        for dirpath, dirnames, filenames in os.walk(dst, followlinks=False):
             for n in dirnames:
-                fix(Path(dirpath) / n, True)
+                common.reset_to_parent_audience(Path(dirpath) / n, True)
             for n in filenames:
-                fix(Path(dirpath) / n, False)
+                common.reset_to_parent_audience(Path(dirpath) / n, False)
 
 
 def _fs_pair(data: dict) -> tuple[Path, Path, str, str] | web.Response:
