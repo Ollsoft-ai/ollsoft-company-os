@@ -473,3 +473,50 @@ def test_mic_is_one_tap_away_and_steals_no_focus(browser):
     page.wait_for_timeout(300)
     assert page.evaluate(in_editor), "a mic tap must leave the editor focused"
     ctx.close()
+
+
+def test_terminal_double_tap_selects_a_word_for_copy(browser):
+    """Copying on a phone starts with a double-tap: the browser synthesizes the
+    mouse events xterm's selection service listens for, and the selection then
+    auto-copies on mouseup. The touch-scroll layer must stay out of the way of
+    sub-slop taps — claiming the pointer on pointerdown once retargeted those
+    synthesized events away from xterm and killed selection entirely."""
+    ctx, page = m_login(browser)
+    cdp = ctx.new_cdp_session(page)
+    open_terminal(page)
+    page.keyboard.type("echo grab_this_word_zz")
+    page.keyboard.press("Enter")
+    assert wait_for_text(page, "grab_this_word_zz")
+    pt = page.evaluate("""() => { const t = window.__kbterm, b = t.buffer.active;
+      const el = document.querySelector('.term-content');
+      const r = el.getBoundingClientRect(), rowH = el.clientHeight / t.rows;
+      for (let i = 0; i < t.rows; i++) {
+        const l = (b.getLine(b.viewportY + i) || {translateToString: () => ''})
+          .translateToString(true);
+        const c = l.indexOf('grab_this_word_zz');
+        if (c >= 0 && !l.includes('echo'))
+          return [r.x + (c + 5) * (r.width / t.cols), r.y + (i + 0.5) * rowH];
+      }
+      return null; }""")
+    assert pt, "echoed word not on screen"
+    for _ in range(2):                                  # a double-tap
+        cdp.send("Input.dispatchTouchEvent",
+                 {"type": "touchStart", "touchPoints": [{"x": pt[0], "y": pt[1]}]})
+        time.sleep(0.04)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        time.sleep(0.09)
+    page.wait_for_timeout(600)
+    sel = page.evaluate("() => window.__kbterm.getSelection()")
+    assert sel == "grab_this_word_zz", f"double-tap must select the word, got {sel!r}"
+    # …and the gesture layer still scrolls afterwards — the two must coexist
+    page.keyboard.type("clear && seq 1 300")
+    page.keyboard.press("Enter")
+    assert wait_for_text(page, "300")
+    before = page.evaluate("() => window.__kbterm.buffer.active.viewportY")
+    swipe(page, cdp, 0.30, 0.75)
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => window.__kbterm.buffer.active.viewportY") < before
+    page.keyboard.type("exit")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()

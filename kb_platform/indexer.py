@@ -14,16 +14,21 @@ from __future__ import annotations
 import asyncio
 import grp
 import hashlib
+import logging
 import math
 import os
 import pwd
 import re
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import psycopg
 from watchfiles import awatch
+
+log = logging.getLogger("kb-indexer")
+RETRY_BACKOFF = 60.0  # seconds between retries of a path whose indexing failed
 
 
 def acl_info(p: Path) -> tuple[int, list[str], list[str], list[str], list[str]]:
@@ -38,10 +43,17 @@ def acl_info(p: Path) -> tuple[int, list[str], list[str], list[str], list[str]]:
     st = p.lstat()
     mode = stat.S_IMODE(st.st_mode)
     try:
-        out = subprocess.run(["getfacl", "-cE", "--absolute-names", "--", str(p)],
-                             capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        return mode, [], [], [], []
+        r = subprocess.run(["getfacl", "-cE", "--absolute-names", "--", str(p)],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        # Fail CLOSED. On an ACL-bearing file st_mode's group bits are the MASK,
+        # so returning `mode` unchanged would publish mask-as-group-permission
+        # and widen the audience in RLS. Raising keeps the previous row and lets
+        # the caller retry.
+        raise OSError(f"getfacl failed for {p}: {e}") from e
+    if r.returncode != 0:
+        raise OSError(f"getfacl exited {r.returncode} for {p}: {r.stderr.strip()}")
+    out = r.stdout
     group_perm = mask = None
     named_u, named_g = {}, {}
     for raw in out.splitlines():
@@ -131,6 +143,28 @@ class Indexer:
         self.conn = psycopg.connect(f"dbname={common.PG_DB}", autocommit=False)
         self.root = common.REPO_ROOT.resolve()
         self._sig: dict[str, tuple] = {}   # path -> cheap stat signature, to skip unchanged files
+        self._warned: set[str] = set()          # paths already logged as failing (log once per streak)
+        self._retry_after: dict[str, float] = {}  # failing path -> monotonic time of next attempt
+
+    def _note_failure(self, rel: str, err: Exception):
+        """A path exists but could not be indexed. Log ONCE per failure streak —
+        the index quietly missing content is exactly the failure mode that
+        historically went unnoticed for days."""
+        if rel not in self._warned:
+            self._warned.add(rel)
+            log.warning("cannot index %s (%s: %s) — it stays missing/stale in the "
+                        "search index until this is fixed; will keep retrying",
+                        rel, type(err).__name__, err)
+
+    def _defer(self, rel: str, err: Exception):
+        self._retry_after[rel] = time.monotonic() + RETRY_BACKOFF
+        self._note_failure(rel, err)
+
+    def _note_success(self, rel: str):
+        self._retry_after.pop(rel, None)
+        if rel in self._warned:
+            self._warned.discard(rel)
+            log.info("recovered: %s indexed", rel)
 
     def rel(self, p: Path) -> str:
         return str(p.resolve().relative_to(self.root))
@@ -176,10 +210,10 @@ class Indexer:
             return                               # NOT derived sidecars (.x.docx.md), which
         if common.is_secret_path(rel):           # are the one indexable dot-file
             return
-        try:
-            text = p.read_text(errors="replace")
-        except OSError:
-            return
+        # A read failure (e.g. an ACL mask silently zeroing kbindexer's grant)
+        # must surface AND be retried — swallowing it here is how a file once
+        # stayed out of the index for weeks with the service looking healthy.
+        text = p.read_text(errors="replace")
         with self.conn.cursor() as cur:
             self.upsert_file(cur, rel, p)
             cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
@@ -191,6 +225,7 @@ class Indexer:
                     (rel, b["line"], b["kind"], b["checked"], b["ref"], b["text"],
                      b["assignees"], b["tags"], b["text"], embed(b["text"])))
         self.conn.commit()
+        self._note_success(rel)
 
     def remove_path(self, p: Path):
         try:
@@ -205,7 +240,11 @@ class Indexer:
         with self.conn.cursor() as cur:
             cur.execute("TRUNCATE kb.user_groups")
             for u in pwd.getpwall():
-                if u.pw_uid < 1000 or u.pw_shell in NOLOGIN:
+                # NB: no nologin filter. "Viewer" accounts are given a nologin
+                # shell on purpose (web access, no terminal) — skipping them
+                # left them with zero group rows, so RLS denied them every
+                # group-shared row while the kernel happily served the files.
+                if u.pw_uid < 1000 or u.pw_uid >= 65000:
                     continue
                 for gid in os.getgrouplist(u.pw_name, u.pw_gid):
                     try:
@@ -219,27 +258,58 @@ class Indexer:
     def reindex_all(self):
         self.refresh_groups()
         seen = set()
+        errors = 0
+
+        def walk_err(e: OSError):
+            nonlocal errors
+            errors += 1
+            log.warning("startup walk error at %s: %s", getattr(e, "filename", "?"), e)
+
         with self.conn.cursor() as cur:
-            for dirpath, dirnames, filenames in os.walk(self.root):
+            for dirpath, dirnames, filenames in os.walk(self.root, onerror=walk_err):
                 dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "_secrets"]  # prune .claude/.git/_secrets
                 dp = Path(dirpath)
                 if dp != self.root:
-                    self.upsert_file(cur, self.rel(dp), dp)
-                    seen.add(self.rel(dp))
+                    try:
+                        self.upsert_file(cur, self.rel(dp), dp)
+                        seen.add(self.rel(dp))
+                    except (OSError, ValueError) as e:
+                        errors += 1
+                        log.warning("cannot stat dir %s: %s", dp, e)
             self.conn.commit()
-        for dirpath, dirnames, filenames in os.walk(self.root):
+        for dirpath, dirnames, filenames in os.walk(self.root, onerror=lambda e: None):
             dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "_secrets"]
             for fn in filenames:
                 if fn.endswith(".md"):
                     p = Path(dirpath) / fn
-                    self.reindex_file(p)
-                    seen.add(self.rel(p))
+                    try:
+                        rel = self.rel(p)
+                    except (ValueError, OSError):
+                        continue
+                    seen.add(rel)   # keep any existing row even if indexing fails
+                    try:
+                        self.reindex_file(p)
+                    except Exception as e:
+                        # One poison file must not take down the whole index
+                        # (Restart=on-failure would crash-loop us into an empty DB).
+                        self.conn.rollback()
+                        errors += 1
+                        self._defer(rel, e)
         with self.conn.cursor() as cur:
             cur.execute("SELECT path FROM kb.files")
-            for (path,) in cur.fetchall():
-                if path not in seen:
+            victims = [path for (path,) in cur.fetchall() if path not in seen]
+            if errors and victims:
+                # An unreadable subtree looks identical to a deleted one from
+                # here; deleting rows on a walk that hit errors would silently
+                # drop live content (this happened when kbindexer briefly lost
+                # group access). reconcile_perms deletes precisely on ENOENT.
+                log.warning("startup walk hit %d errors — keeping %d unvisited rows",
+                            errors, len(victims))
+            else:
+                for path in victims:
                     cur.execute("DELETE FROM kb.files WHERE path=%s", (path,))
         self.conn.commit()
+        log.info("startup reindex done: %d paths, %d errors", len(seen), errors)
 
     def reconcile_perms(self):
         """Fallback sweep so filesystem changes propagate even if inotify missed
@@ -252,33 +322,81 @@ class Indexer:
         is the only other thing that re-parses a file, and inotify silently drops
         events when the kernel watch limit is hit or the queue overflows. Without
         this, one dropped event means a document's blocks stay stale until the
-        service restarts — invisibly, since the file itself looks fine."""
-        stale: list[Path] = []
+        service restarts — invisibly, since the file itself looks fine.
+
+        A path's signature is recorded only AFTER it was processed successfully:
+        recording it up front turned any single failure into a permanently stale
+        file (never retried until its ctime happened to change again). Failing
+        paths are retried on a backoff so a poison file cannot make this 1s loop
+        spawn a getfacl every second forever."""
+        stale: list[tuple[Path, str, tuple]] = []
+        new_files: list[str] = []
+        now = time.monotonic()
         with self.conn.cursor() as cur:
             cur.execute("SELECT path, owner_name, group_name, mode, acl_users, acl_groups, "
                         "acl_x_users, acl_x_groups, size, mtime FROM kb.files")
             rows = cur.fetchall()
+            rowpaths = {r[0] for r in rows}
+
+            def discover(dirpath: Path, rel_dir: str):
+                """A directory changed (or is the root): pick up children the
+                watcher never delivered — inotify registration is best-effort,
+                so this sweep is the guarantee that new files eventually index."""
+                try:
+                    entries = list(os.scandir(dirpath))
+                except OSError:
+                    return
+                for ent in entries:
+                    rel_child = f"{rel_dir}/{ent.name}" if rel_dir else ent.name
+                    if rel_child in rowpaths or now < self._retry_after.get(rel_child, 0.0) \
+                            or common.is_hidden_rel(rel_child) \
+                            or common.is_secret_path(rel_child):
+                        continue
+                    try:
+                        if ent.is_dir(follow_symlinks=False):
+                            self.upsert_file(cur, rel_child, Path(ent.path))
+                            rowpaths.add(rel_child)   # its own sweep row cascades deeper
+                        elif ent.name.endswith(".md"):
+                            new_files.append(rel_child)
+                    except OSError as e:
+                        self._defer(rel_child, e)
+
+            discover(self.root, "")
             for path, owner, group, mode, au, ag, axu, axg, size, mtime in rows:
                 p = self.root / path
                 try:
                     st = p.lstat()
-                except OSError:
+                except FileNotFoundError:
                     cur.execute("DELETE FROM kb.files WHERE path=%s", (path,))
                     self._sig.pop(path, None)
+                    continue
+                except OSError as e:
+                    # EACCES and friends: the file may well still exist —
+                    # deleting the row would silently drop real content from
+                    # the index (and cascade its blocks). Keep it and complain.
+                    self._note_failure(path, e)
                     continue
                 sig = (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), st.st_ctime_ns)
                 if self._sig.get(path) == sig:
                     continue                          # unchanged -> skip getfacl
-                self._sig[path] = sig
+                if now < self._retry_after.get(path, 0.0):
+                    continue                          # failing path: back off
                 try:
                     o, g, m, _is_dir, nsz, nmt, nru, nrg, nxu, nxg = self.stat_row(p)
-                except OSError:
+                except OSError as e:
+                    self._defer(path, e)
                     continue
                 # Content changed under a missed inotify event? Re-parse it after
-                # this sweep (reindex_file manages its own transaction).
+                # this sweep (reindex_file manages its own transaction); its sig
+                # is recorded only once that re-parse succeeds.
                 if (path.endswith(".md") and not stat.S_ISDIR(st.st_mode)
                         and (nsz != size or mtime is None or abs(nmt - mtime) > 1e-6)):
-                    stale.append(p)
+                    stale.append((p, path, sig))
+                else:
+                    if _is_dir:
+                        discover(p, path)   # entry count changed? find new children
+                    self._sig[path] = sig
+                    self._note_success(path)
                 if (o, g, m, nru, nrg, nxu, nxg) != (owner, group, mode, au or [], ag or [],
                                                      axu or [], axg or []):
                     cur.execute("UPDATE kb.files SET owner_name=%s, group_name=%s, mode=%s, "
@@ -286,11 +404,38 @@ class Indexer:
                                 "updated_at=now() WHERE path=%s",
                                 (o, g, m, nru, nrg, nxu, nxg, path))
         self.conn.commit()
-        for p in stale:
+        for rel_child in new_files:
+            try:
+                self.reindex_file(self.root / rel_child)
+                self._note_success(rel_child)
+            except Exception as e:
+                self.conn.rollback()
+                self._defer(rel_child, e)
+        for p, path, sig in stale:
             try:
                 self.reindex_file(p)
-            except Exception:
+                self._sig[path] = sig
+                self._note_success(path)
+            except Exception as e:
                 self.conn.rollback()
+                self._defer(path, e)
+        # Deferred paths with NO row yet (a new file whose very first index
+        # attempt failed) are invisible to the row-driven loop above — retry
+        # them here once their backoff expires, or forget them if they're gone.
+        rowpaths = {r[0] for r in rows}
+        for path in [k for k, t in self._retry_after.items()
+                     if now >= t and k not in rowpaths]:
+            p = self.root / path
+            if not p.exists():
+                self._retry_after.pop(path, None)
+                self._warned.discard(path)
+                continue
+            try:
+                self.reindex_file(p)
+                self._note_success(path)
+            except Exception as e:
+                self.conn.rollback()
+                self._defer(path, e)
 
     async def perms_loop(self):
         while True:
@@ -298,10 +443,22 @@ class Indexer:
             try:
                 await asyncio.get_event_loop().run_in_executor(None, self.reconcile_perms)
             except Exception:
-                pass
+                log.exception("reconcile sweep failed")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
 
     async def watch_loop(self):
-        async for changes in awatch(self.root, recursive=True, ignore_permission_denied=True):
+        # Watch the three content roots, NOT the repo root: the recursive
+        # registration aborts silently at the first unreadable directory
+        # (ignore_permission_denied hides the error without resuming the walk),
+        # and /srv/kb/.git is deliberately unreadable to kbindexer — watching
+        # from the repo root left projects/ and users/ with NO watches at all.
+        # reconcile_perms independently discovers anything a lost watch misses.
+        roots = [p for n in ("company", "projects", "users")
+                 if (p := self.root / n).is_dir()] or [self.root]
+        async for changes in awatch(*roots, recursive=True, ignore_permission_denied=True):
             for _change, fspath in changes:
                 p = Path(fspath)
                 if p.name.endswith(".kbtmp"):
@@ -324,8 +481,9 @@ class Indexer:
                             self.conn.commit()
                     else:
                         self.remove_path(p)
-                except Exception:
+                except Exception as e:
                     self.conn.rollback()
+                    self._defer(rel, e)   # reconcile_perms retries it on backoff
 
     async def groups_loop(self):
         # Pick up users/groups created or changed via the admin UI so RLS sees them.
@@ -337,11 +495,20 @@ class Indexer:
                 self.conn.rollback()
 
     async def run(self):
-        self.reindex_all()
-        await asyncio.gather(self.watch_loop(), self.perms_loop(), self.groups_loop())
+        # Arm the inotify watcher BEFORE the startup walk: a file created while
+        # the walk is still running would otherwise be invisible until the next
+        # touch or restart (awatch only reports events once it is iterating).
+        # Sharing self.conn across the executor thread and the loop is fine —
+        # psycopg3 connections serialize access internally, and perms_loop
+        # already relies on that.
+        watcher = asyncio.create_task(self.watch_loop())
+        await asyncio.sleep(0.5)   # let awatch install its watches
+        await asyncio.get_event_loop().run_in_executor(None, self.reindex_all)
+        await asyncio.gather(watcher, self.perms_loop(), self.groups_loop())
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     idx = Indexer()
     asyncio.run(idx.run())
 

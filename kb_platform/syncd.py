@@ -53,21 +53,18 @@ DOC_STATE_DIR = Path("/var/lib/kb-syncd")
 GIT_DEBOUNCE = 4.0      # seconds of quiet before an auto-commit
 
 
-def _mode_perm(st: os.stat_result, uid: int, gids: list[int], want: int) -> bool:
-    if st.st_uid == uid:
-        bits = (st.st_mode >> 6) & 7
-    elif st.st_gid in gids:
-        bits = (st.st_mode >> 3) & 7
-    else:
-        bits = st.st_mode & 7
-    return bool(bits & want)
+def _perm(path: Path, st: os.stat_result, uid: int, gids: list[int], want: int) -> bool:
+    return common.unix_access(st, common.acl_entries(str(path)), uid, gids, want)
 
 
 def fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
     """Replicate FULL Unix access for a specific user, since root (this daemon)
-    bypasses os.access. The caller must be able to read/write the file AND
-    traverse (x) every ancestor directory up to REPO_ROOT — otherwise a
-    world-readable file inside a 0700 private dir would leak. Symlinks refused.
+    bypasses os.access. Kernel-exact including POSIX ACLs — the platform's own
+    share feature grants by ACL, so bare mode bits both under-grant (named
+    entries) and over-grant (the mask shows in st_mode's group bits). The
+    caller must be able to read/write the file AND traverse (x) every ancestor
+    directory up to REPO_ROOT — otherwise a world-readable file inside a 0700
+    private dir would leak. Symlinks refused.
     """
     try:
         st = os.lstat(path)
@@ -75,7 +72,7 @@ def fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
         return False
     if stat.S_ISLNK(st.st_mode):
         return False
-    if not _mode_perm(st, uid, gids, 2 if need_write else 4):
+    if not _perm(path, st, uid, gids, 2 if need_write else 4):
         return False
     # every ancestor directory, up to (but not including) the repo root, needs x
     root = common.REPO_ROOT.resolve()
@@ -87,7 +84,7 @@ def fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
             pst = os.lstat(parent)
         except OSError:
             return False
-        if not _mode_perm(pst, uid, gids, 1):
+        if not _perm(parent, pst, uid, gids, 1):
             return False
         parent = parent.parent
     return True
@@ -621,7 +618,14 @@ class SyncDaemon:
                 if common.is_secret_path(path):
                     return
                 subprocess.run(["git", "-C", root, "reset", "-q"], capture_output=True)
-                subprocess.run(["git", "-C", root, "add", "-A", "--", path], capture_output=True)
+                # LITERAL pathspec: `path` ultimately comes from the world-writable
+                # attrib drop-box, so a name like ':(glob)**/_secret[s]/**' must be
+                # a filename, not pathspec magic that could stage other people's
+                # files. (The sweep below keeps magic on purpose — its pathspecs
+                # are constants, not user input.)
+                subprocess.run(["git", "-C", root, "add", "-A", "--", path],
+                               capture_output=True,
+                               env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"})
                 if subprocess.run(["git", "-C", root, "diff", "--cached", "--quiet"],
                                   capture_output=True).returncode == 0:
                     return                                   # nothing actually staged for this path
