@@ -1,0 +1,15 @@
+[Unit]
+Description=KB: repack the /srv/kb audit history (git gc --auto)
+# syncd commits every edited file every 4 s and NOTHING ever repacked the
+# result — 27k+ loose objects / 108 MB after one month on one box, growing
+# with every keystroke session. gc --auto is a no-op until git's own
+# thresholds trip, so running it weekly is cheap insurance, not churn.
+# Ordering: syncd holds the only writer lock on this repo's index; gc --auto
+# takes its own locks and is safe alongside, but run it at a quiet hour anyway.
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/git -C /srv/kb gc --auto --quiet
+Nice=19
+IOSchedulingClass=idle

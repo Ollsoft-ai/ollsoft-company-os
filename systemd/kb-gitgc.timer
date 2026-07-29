@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly repack of the /srv/kb audit history
+
+[Timer]
+# Sunday, small hours: syncd is quietest, and a missed run (box off) catches
+# up on next boot rather than being skipped.
+OnCalendar=Sun *-*-* 04:15:00
+RandomizedDelaySec=30m
+Persistent=true
+AccuracySec=5m
+
+[Install]
+WantedBy=timers.target

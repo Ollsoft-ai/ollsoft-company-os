@@ -23,6 +23,7 @@ import re
 import socket
 import stat
 import subprocess
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -237,6 +238,36 @@ _ACL_ACCESS = "system.posix_acl_access"
 _ACL_DEFAULT = "system.posix_acl_default"
 
 
+# ---- backend-wrapper reaping ------------------------------------------------
+# One dedicated thread reaps EVERY runuser wrapper. The previous shape —
+# run_in_executor(None, proc.wait) per spawn — parked one default-executor
+# thread for each backend's ENTIRE lifetime. That pool is min(32, cores+4)
+# (8 on a 4-core box) and is the same pool the hub's other blocking work uses,
+# so the ~9th live backend starved the hub. One polling thread costs the same
+# no matter how many backends exist; a 2 s poll is prompt enough for zombies.
+_reap_lock = threading.Lock()
+_reap_procs: list = []
+_reap_thread = None
+
+
+def _reap_later(proc) -> None:
+    global _reap_thread
+    with _reap_lock:
+        _reap_procs.append(proc)
+        if _reap_thread is None or not _reap_thread.is_alive():
+            _reap_thread = threading.Thread(target=_reap_forever,
+                                            daemon=True, name="backend-reaper")
+            _reap_thread.start()
+
+
+def _reap_forever() -> None:
+    while True:
+        time.sleep(2.0)
+        with _reap_lock:
+            # poll() reaps a finished child; the survivors stay on the list
+            _reap_procs[:] = [p for p in _reap_procs if p.poll() is None]
+
+
 def _acl_apply_fd(tfd: int, is_dir: bool, args: list[str]) -> None:
     """Apply an ACL change (`args` e.g. ['-m','u:bob:r'] or ['-x','u:bob']) to
     the file behind the pinned fd, race-free: run setfacl on a private root-only
@@ -381,7 +412,7 @@ class Hub:
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Reap the runuser wrapper when it exits, or each backend restart leaves
         # a root zombie behind (Popen is never wait()ed otherwise).
-        asyncio.get_event_loop().run_in_executor(None, proc.wait)
+        _reap_later(proc)
         for _ in range(100):
             if sock.exists():
                 return

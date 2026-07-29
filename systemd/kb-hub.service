@@ -19,6 +19,12 @@ Environment=KB_ETC=/etc/kb
 ExecStart=/opt/kb-venv/bin/python -m kb_platform.hub
 Restart=on-failure
 RestartSec=2
+# Every proxied websocket costs 2 fds (browser side + backend side); the
+# kernel default soft limit of 1024 capped the whole platform at ~500 open
+# docs/terminals ACROSS ALL USERS. No MemoryMax here on purpose: this cgroup
+# holds every per-user backend and web-terminal shell (KillMode default keeps
+# them here), and an OOM kill would take user work down with the hub.
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
