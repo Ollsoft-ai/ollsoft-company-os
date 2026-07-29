@@ -44,11 +44,21 @@ MY_SHELL = pwd.getpwuid(os.geteuid()).pw_shell
 CAN_SHELL = MY_SHELL not in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "")
 
 
-def _db():
+async def _adb():
+    """One async connection per request, peer-authed as this user (RLS is the
+    security boundary). Async, not sync-on-the-loop: this process is a single
+    event loop per user, so ONE slow statement in a sync handler freezes that
+    user's ENTIRE backend — tree, docs, everything. That was a live bug: a
+    content search took ~15 s under the old per-block RLS policy and the app
+    went dark for its duration. Queries here may be arbitrarily heavy (search
+    over the whole corpus, artifact-supplied SQL), so the loop must only ever
+    await them.
+    """
     if psycopg is None:
         return None
     try:
-        return psycopg.connect(f"dbname={common.PG_DB}", autocommit=True)
+        return await psycopg.AsyncConnection.connect(
+            f"dbname={common.PG_DB}", autocommit=True)
     except Exception:
         return None
 
@@ -414,19 +424,19 @@ async def attachment(request: web.Request) -> web.StreamResponse:
 
 
 async def tasks(request: web.Request) -> web.Response:
-    conn = _db()
+    conn = await _adb()
     if conn is None:
         return web.json_response({"tasks": [], "db": False})
     try:
-        with conn.cursor() as cur:
-            cur.execute(
+        async with conn.cursor() as cur:
+            await cur.execute(
                 "SELECT file_path, line, checked, text FROM kb.blocks "
                 "WHERE kind='task' ORDER BY file_path, line")
             rows = [{"path": r[0], "line": r[1], "checked": r[2], "text": r[3]}
-                    for r in cur.fetchall()]
+                    for r in await cur.fetchall()]
         return web.json_response({"tasks": rows, "db": True})
     finally:
-        conn.close()
+        await conn.close()
 
 
 # Anchored task pattern — identical shape to the indexer's, so we only ever flip a
@@ -447,16 +457,16 @@ async def toggle_task(request: web.Request) -> web.Response:
     # Scope exactly like the read side: the (path,line) must be a task the caller
     # can actually SEE in the RLS-governed index. This blocks toggling of
     # index-excluded trees (.claude/) and non-task lines even if FS-writable.
-    conn = _db()
+    conn = await _adb()
     if conn is not None:
         try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM kb.blocks WHERE file_path=%s AND line=%s AND kind='task'",
-                            (rel, line_no))
-                if cur.fetchone() is None:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT 1 FROM kb.blocks WHERE file_path=%s AND line=%s AND kind='task'",
+                                  (rel, line_no))
+                if await cur.fetchone() is None:
                     return web.json_response({"error": "not an indexed task"}, status=400)
         finally:
-            conn.close()
+            await conn.close()
     try:
         lines = p.read_text().splitlines(keepends=True)
     except PermissionError:
@@ -599,25 +609,30 @@ async def search(request: web.Request) -> web.Response:
     # psycopg raises, and an unhandled raise here is a 500 for a typo.
     q = request.query.get("q", "").replace("\x00", "").strip()[:200]
     if not q:
-        conn = _db()
+        conn = await _adb()
         ok = conn is not None
         if conn:
-            conn.close()
+            await conn.close()
         return web.json_response({"results": [], "files": [], "db": ok})
 
-    files = []
-    try:
-        scored = []
-        for rel, is_dir in _walk_repo():
-            s = _name_score(q, rel)
-            if s:
-                scored.append((s, rel, is_dir))
-        scored.sort(key=lambda t: (-t[0], len(t[1]), t[1]))
-        files = [{"path": rel, "dir": is_dir, "score": s} for s, rel, is_dir in scored[:40]]
-    except OSError:
-        files = []
+    # The name-matching walk is os.scandir over the whole repo — real disk I/O
+    # with no async API, so it runs in a worker thread; the loop stays free to
+    # serve the tree and open documents while a search is in flight.
+    def _name_matches():
+        try:
+            scored = []
+            for rel, is_dir in _walk_repo():
+                s = _name_score(q, rel)
+                if s:
+                    scored.append((s, rel, is_dir))
+            scored.sort(key=lambda t: (-t[0], len(t[1]), t[1]))
+            return [{"path": rel, "dir": is_dir, "score": s} for s, rel, is_dir in scored[:40]]
+        except OSError:
+            return []
 
-    conn = _db()
+    files = await asyncio.to_thread(_name_matches)
+
+    conn = await _adb()
     if conn is None:
         return web.json_response({"results": [], "files": files, "db": False})
     try:
@@ -633,10 +648,11 @@ async def search(request: web.Request) -> web.Response:
             per_file[r[0]] = per_file.get(r[0], 0) + 1
             rows.append({"path": r[0], "line": r[1], "kind": r[2], "text": r[3], "rank": rank})
 
-        # Three ways to match, ONE pass over the table. RLS makes kb.can_read()
-        # a per-row plpgsql call and the planner runs it before anything else,
-        # so the scan — not the matching — is the cost: running the tiers as
-        # separate statements would triple the latency for nothing.
+        # Three ways to match, ONE pass over the table. The RLS policy qual
+        # runs before anything else; blocks_read gates per FILE via a hashed
+        # subplan (see schema.sql), so the scan itself — not the permission
+        # check — is the cost: running the tiers as separate statements would
+        # triple the latency for nothing.
         #   1. websearch_to_tsquery — stemming, "quoted phrases", -exclusions.
         #      It never raises on user input, unlike to_tsquery.
         #   2. prefix tsquery — "onbo mee" finds "Onboarding meeting". Tokens are
@@ -650,8 +666,8 @@ async def search(request: web.Request) -> web.Response:
         pq = " & ".join(t + ":*" for t in toks) if toks else None
         like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         try:
-          with conn.cursor() as cur:
-            cur.execute(
+          async with conn.cursor() as cur:
+            await cur.execute(
                 "WITH q AS (SELECT websearch_to_tsquery('pg_catalog.english', %s) AS ws, "
                 "                  CASE WHEN %s::text IS NULL THEN NULL::tsquery "
                 "                       ELSE to_tsquery('pg_catalog.english', %s) END AS pq) "
@@ -662,17 +678,17 @@ async def search(request: web.Request) -> web.Response:
                 "WHERE b.tsv @@ q.ws OR b.tsv @@ q.pq OR b.text ILIKE %s "
                 "ORDER BY rank DESC, length(b.text) LIMIT 90",
                 (q, pq, pq, like))
-            for r in cur.fetchall():
+            for r in await cur.fetchall():
                 take(r, float(r[4]) + (0.02 if r[5] else 0.0))
         except Exception:
             # A malformed query must never 500: the filename half already has an
             # answer, and half a result list beats an error page.
-            conn.rollback()
+            await conn.rollback()
             rows = []
         rows.sort(key=lambda r: -r["rank"])
         return web.json_response({"results": rows[:30], "files": files, "db": True})
     finally:
-        conn.close()
+        await conn.close()
 
 
 async def artifact_query(request: web.Request) -> web.Response:
@@ -689,15 +705,15 @@ async def artifact_query(request: web.Request) -> web.Response:
     params = data.get("params", []) or []
     if not isinstance(sql, str) or not sql.strip():
         return web.json_response({"error": "no sql"}, status=400)
-    conn = _db()
+    conn = await _adb()
     if conn is None:
         return web.json_response({"error": "db offline"}, status=503)
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
+        async with conn.cursor() as cur:
+            await cur.execute(sql, params)
             if cur.description:
                 cols = [d.name for d in cur.description]
-                rows = [list(r) for r in cur.fetchall()]
+                rows = [list(r) for r in await cur.fetchall()]
                 out = {"cols": cols, "rows": rows}
             else:
                 out = {"cols": [], "rows": [], "rowcount": cur.rowcount}
@@ -706,7 +722,7 @@ async def artifact_query(request: web.Request) -> web.Response:
         # Permission denials, syntax errors, etc. all surface as a clean 400.
         return web.json_response({"error": str(e).splitlines()[0]}, status=400)
     finally:
-        conn.close()
+        await conn.close()
 
 
 # Locked-down policy for artifact documents. Delivered as an HTTP header by the
@@ -883,7 +899,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 13}
+            "jobs": jobs, "raw": raw, "v": 14}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the

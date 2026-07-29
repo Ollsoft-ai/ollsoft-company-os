@@ -30,7 +30,7 @@ from playwright.sync_api import sync_playwright
 
 BASE = "http://127.0.0.1:8300"
 CREDS_FILE = "/tmp/kb-test-creds.json"
-MIN_V = 13          # bump together with _cron_listing's "v" in user_server.py
+MIN_V = 14          # bump together with _cron_listing's "v" in user_server.py
 
 
 def http(user, creds):
