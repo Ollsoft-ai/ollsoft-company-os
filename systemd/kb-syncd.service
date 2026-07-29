@@ -16,6 +16,9 @@ Environment=KB_RUN=/run/kb
 Environment=KB_ETC=/etc/kb
 ExecStart=/opt/kb-venv/bin/python -m kb_platform.syncd
 Restart=on-failure
+# Soft ceiling, not MemoryMax: throttling under pressure beats an OOM kill —
+# syncd holds unflushed CRDT edits and the indexer is mid-transaction.
+MemoryHigh=1G
 RestartSec=2
 
 [Install]

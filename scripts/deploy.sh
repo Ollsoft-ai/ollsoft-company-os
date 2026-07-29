@@ -66,6 +66,7 @@ systemctl daemon-reload
 # Monitoring, not workloads — always on, and never bounced by a code deploy.
 systemctl enable --now kb-heartbeat.timer 2>/dev/null || true
 systemctl enable --now kb-maintenance.timer 2>/dev/null || true
+systemctl enable --now kb-gitgc.timer 2>/dev/null || true
 
 if [ "$RESTART" -eq 1 ]; then
   echo "== restart =="

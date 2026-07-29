@@ -27,6 +27,7 @@ How the KB platform actually works, component by component.
 | PostgreSQL   | `postgres`  | local unix socket   | disposable index (`kb` schema, RLS) + per-user schemas (`u_<user>`) |
 | `kb-heartbeat.timer` | **root** | (timer, 5 min) | functional health check — outcomes, not processes; logs, never pushes (see [monitoring.md](monitoring.md)) |
 | `kb-maintenance.timer` | **root** | (timer, daily) | triages the logs via a headless agent with a harness-enforced tool allowlist; the only on-box thing that may notify |
+| `kb-gitgc.timer` | **root** | (timer, weekly) | `git gc --auto` on `/srv/kb` — syncd commits every edit and nothing else ever repacks the audit history |
 
 Only `kb-hub` and `kb-syncd` run as root, and they do only auth/proxy/merge —
 the minimal audited surface.

@@ -165,6 +165,7 @@ CRDT/file merge — the small, auditable surface. Everything touching a user's d
 runs *as that user* (`runuser`, peer auth) or re-checks their Unix bits.
 
 Full component tour: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+Capacity ceilings, growth hygiene and the drift watchlist: **[docs/SCALING.md](docs/SCALING.md)**.
 
 ---
 
@@ -198,7 +199,7 @@ ollsoft-company-os/
 │   ├── schema.sql          Postgres schema, RLS functions, grants
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
 ├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-convert units, the
-│                           kb-heartbeat + kb-maintenance timers, tmpfiles, logrotate
+│                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright) + torture/

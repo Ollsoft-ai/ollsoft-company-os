@@ -156,6 +156,7 @@ class Indexer:
         # while the sweeps run in an executor thread, and interleaved
         # commit/rollback on a shared transaction loses or half-applies writes.
         self._db = asyncio.Lock()
+        self._groups_cache = None   # last (usr, grp) set refresh_groups synced
 
     def _note_failure(self, rel: str, err: Exception):
         """A path exists but could not be indexed. Log ONCE per failure streak —
@@ -311,23 +312,37 @@ class Indexer:
             self._forget(tracked)
 
     def refresh_groups(self):
-        with self.conn.cursor() as cur:
-            cur.execute("TRUNCATE kb.user_groups")
-            for u in pwd.getpwall():
-                # NB: no nologin filter. "Viewer" accounts are given a nologin
-                # shell on purpose (web access, no terminal) — skipping them
-                # left them with zero group rows, so RLS denied them every
-                # group-shared row while the kernel happily served the files.
-                if u.pw_uid < 1000 or u.pw_uid >= 65000:
+        desired = set()
+        for u in pwd.getpwall():
+            # NB: no nologin filter. "Viewer" accounts are given a nologin
+            # shell on purpose (web access, no terminal) — skipping them
+            # left them with zero group rows, so RLS denied them every
+            # group-shared row while the kernel happily served the files.
+            if u.pw_uid < 1000 or u.pw_uid >= 65000:
+                continue
+            for gid in os.getgrouplist(u.pw_name, u.pw_gid):
+                try:
+                    desired.add((u.pw_name, grp.getgrgid(gid).gr_name))
+                except KeyError:
                     continue
-                for gid in os.getgrouplist(u.pw_name, u.pw_gid):
-                    try:
-                        gname = grp.getgrgid(gid).gr_name
-                    except KeyError:
-                        continue
-                    cur.execute("INSERT INTO kb.user_groups(usr,grp) VALUES(%s,%s) "
-                                "ON CONFLICT DO NOTHING", (u.pw_name, gname))
+        # Touch the table only when membership actually CHANGED. The old shape
+        # — TRUNCATE + full reinsert on every 5 s tick — held ACCESS EXCLUSIVE
+        # on a table kb.can_read() reads for every RLS row check, so every
+        # user's queries stalled on every tick (3.8M lifetime inserts for 69
+        # live rows on one box). Row-level DELETE/INSERT of the diff blocks
+        # nobody, and the steady state is a pure in-memory comparison.
+        if desired == self._groups_cache:
+            return
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT usr, grp FROM kb.user_groups")
+            current = {(r[0], r[1]) for r in cur.fetchall()}
+            for usr, g in current - desired:
+                cur.execute("DELETE FROM kb.user_groups WHERE usr=%s AND grp=%s", (usr, g))
+            for usr, g in desired - current:
+                cur.execute("INSERT INTO kb.user_groups(usr,grp) VALUES(%s,%s) "
+                            "ON CONFLICT DO NOTHING", (usr, g))
         self.conn.commit()
+        self._groups_cache = desired
 
     def reindex_all(self):
         self.refresh_groups()
