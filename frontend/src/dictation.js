@@ -128,8 +128,13 @@ const vaultChunks = (rid) =>
     .then((a) => (Array.isArray(a) ? a : []));
 
 async function vaultDelete(id) {
-  await vaultReq("recs", "readwrite", (s) => s.delete(id));
+  // Chunks first: if only one of the two transactions lands (tab closed
+  // between them), a surviving meta row shows up harmlessly as 0 B and is
+  // retried by TTL — surviving CHUNKS would be invisible forever, so the
+  // audio must never be the half left behind. The sweep's orphan pass is the
+  // backstop for writes that race a delete from another tab.
   await vaultReq("chunks", "readwrite", (s) => s.delete(chunkRange(id)));
+  await vaultReq("recs", "readwrite", (s) => s.delete(id));
 }
 
 async function vaultMark(id, status) {
@@ -146,15 +151,26 @@ async function vaultBlob(id) {
   return new Blob(parts.map((c) => c.data), { type: m.mime || "audio/webm" });
 }
 
-// Runs once per page load. A record still marked "recording" is a tab that
-// crashed or was killed mid-dictation — the chunks that made it to disk ARE
-// the recording, so it is promoted to "interrupted" (rescuable), never dropped.
+// A "recording" record older than the hard cap (plus slack) cannot still be
+// live anywhere — it belongs to a tab that crashed or was killed. Younger
+// ones might be THIS APP IN ANOTHER TAB, mid-sentence: promoting those would
+// list a live recording as "interrupted" and let a click delete the meta out
+// from under the tab that owns it.
+const VAULT_DEAD_AFTER = MAX_MS + 60_000;
+
+// Runs once per page load. A record still marked "recording" past the cap is
+// a tab that crashed or was killed mid-dictation — the chunks that made it to
+// disk ARE the recording, so it is promoted to "interrupted" (rescuable),
+// never dropped.
 async function vaultSweep() {
   const all = await vaultAllMeta();
   const now = Date.now();
   const live = [];
   for (const m of all) {
-    if (m.status === "recording") { m.status = "interrupted"; await vaultPutMeta(m); }
+    if (m.status === "recording") {
+      if (now - m.t <= VAULT_DEAD_AFTER) { live.push(m); continue; }  // possibly live elsewhere
+      m.status = "interrupted"; await vaultPutMeta(m);
+    }
     const ttl = m.status === "done" ? VAULT_TTL_DONE : VAULT_TTL_KEPT;
     if (now - m.t > ttl) await vaultDelete(m.id); else live.push(m);
   }
@@ -162,13 +178,27 @@ async function vaultSweep() {
   // in the history; un-transcribed audio is the last thing to evict.
   live.sort((a, b) => (a.status === "done") - (b.status === "done") || b.t - a.t);
   for (const m of live.slice(VAULT_MAX)) await vaultDelete(m.id);
+  // Orphaned chunks — a delete that half-landed, or a write racing a delete
+  // from another tab — belong to no meta row, so nothing above ever saw them.
+  // Without this pass they'd accumulate in IndexedDB forever.
+  const known = new Set((await vaultAllMeta()).map((m) => m.id));
+  const keys = (await vaultReq("chunks", "readonly", (s) => s.getAllKeys())) || [];
+  for (const rid of new Set(keys.map((k) => k[0]))) {
+    if (!known.has(rid))
+      await vaultReq("chunks", "readwrite", (s) => s.delete(chunkRange(rid)));
+  }
 }
 
 // ---- the vault's public face (Dictation history in app.js) ------------------
 export async function listRecordings() {
   const all = await vaultAllMeta();
+  const now = Date.now();
   const out = [];
   for (const m of all.sort((a, b) => b.t - a.t)) {
+    // Still marked "recording" and young enough to be live — in this tab or
+    // another — is not history yet; listing it would offer transcribe/delete
+    // buttons for audio that is still being spoken.
+    if (m.status === "recording" && now - m.t <= VAULT_DEAD_AFTER) continue;
     const parts = await vaultChunks(m.id);
     out.push({ id: m.id, t: m.t, mime: m.mime, status: m.status, ms: m.ms || 0,
                bytes: parts.reduce((n, c) => n + ((c.data && c.data.size) || 0), 0) });
@@ -180,9 +210,17 @@ export function recordingBlob(id) { return vaultBlob(id); }
 
 export function deleteRecording(id) { return vaultDelete(id); }
 
+function busy() {
+  if (hooks && hooks.toast) hooks.toast("Busy — finish the current dictation first", "err");
+}
+
 export async function transcribeRecording(id) {
-  if (state !== "idle") return false;
+  if (state !== "idle") { busy(); return false; }
   const blob = await vaultBlob(id);
+  // Re-check after the await: a recording that started in that window would be
+  // clobbered by transcribeAndInsert forcing the state machine through
+  // "sending" → "idle" under it — leaving a MediaRecorder nothing can stop.
+  if (state !== "idle") { busy(); return false; }
   if (!blob) { if (hooks && hooks.toast) hooks.toast("That recording is gone", "err"); return false; }
   // Resolved NOW, same rule as recording start: the words land where the user
   // is working at the moment they act, not where they were minutes ago.
@@ -362,7 +400,18 @@ async function beginRecording() {
   // A recorder that dies mid-capture (codec failure, device yanked at the wrong
   // moment) must finish like any other stop: the vaulted chunks are the recording.
   rec.onerror = () => { if (state === "recording") finishRecording("Recording error — saved what was captured"); };
-  rec.start(SLICE_MS);   // timeslice: chunks stream into the vault as they exist
+  try {
+    rec.start(SLICE_MS);   // timeslice: chunks stream into the vault as they exist
+  } catch (e) {
+    // The track died between getUserMedia and start (device yanked). Without
+    // this guard the throw would leave a phantom "recording" meta that the next
+    // load promotes to a 0-byte "interrupted" row no one can do anything with.
+    vaultDelete(rid);
+    recId = null; rec = null;
+    state = "idle"; paint("");
+    fail("The microphone was lost before recording could start.");
+    return false;
+  }
 
   state = "recording";
   stopMeter = startMeter();
@@ -428,7 +477,12 @@ async function finishRecording(note) {
     return;
   }
   // Record how long it was while we know; history shows it next to the size.
-  vaultGetMeta(id).then((m) => { if (m) { m.ms = elapsed; return vaultPutMeta(m); } });
+  // Awaited, not fire-and-forget: vaultMark() later does its own get-then-put
+  // of the same record, and two racing read-modify-writes can resurrect a
+  // stale status (a "done" flipping back to "recording" was the losing
+  // interleaving). Sequencing them costs one IDB round-trip.
+  const meta = await vaultGetMeta(id);
+  if (meta) { meta.ms = elapsed; await vaultPutMeta(meta); }
   lastBlob = blob;
   lastRecId = id;
   await transcribeAndInsert(blob, id);
@@ -498,12 +552,15 @@ export function sanitize(text) {
 }
 
 export async function retryDictation() {
-  if (state !== "idle") return;
+  if (state !== "idle") { busy(); return; }
   if (lastBlob) { await transcribeAndInsert(lastBlob, lastRecId); return; }
   // After a reload the in-memory blob is gone, but the vault is not: retry the
   // most recent recording that never produced a transcript.
   const all = await vaultAllMeta();
-  const cand = all.filter((m) => m.status !== "done").sort((a, b) => b.t - a.t)[0];
+  const now = Date.now();
+  const cand = all.filter((m) => m.status !== "done" &&
+                                 !(m.status === "recording" && now - m.t <= VAULT_DEAD_AFTER))
+                  .sort((a, b) => b.t - a.t)[0];
   if (!cand) { if (hooks && hooks.toast) hooks.toast("Nothing to retry", "err"); return; }
   await transcribeRecording(cand.id);
 }
@@ -520,17 +577,53 @@ export async function retryDictation() {
 // the tap had latched it — "recording stops by itself on Firefox".
 let pressLive = false;
 
+// beginRecording awaits getUserMedia, and on a cold mic (first grant, or a
+// permission prompt) that await is long — long enough for the user to press
+// again, or to release the hold. Both used to re-enter with `state` still
+// "idle": a second concurrent recorder reset the module-global chunkSeq and
+// overwrote the first recording's vaulted chunk 0 — corrupting exactly the
+// audio the vault exists to protect — and the first recorder kept the mic
+// with no way to stop it. So the whole setup window is guarded by `starting`,
+// and the gesture that arrived during it is REMEMBERED, not dropped:
+//   release during setup → honoured once recording starts (hold → finish,
+//   tap → latch); second press during setup → finish-as-soon-as-started.
+let starting = false;
+let pressAt = 0;             // when the press that started the setup went down
+let pendingRelease = -1;     // ms the press was held when released mid-setup; -1 = none
+
 export function startPress() {
   if (!dictationReady()) return;
+  if (starting) { pendingRelease = HOLD_MS; return; }   // tap-tap: stop once started
   if (state === "sending") return;                 // a transcript is in flight
   if (state === "recording") { finishRecording(); return; }   // second tap ends a latch
   latched = false;
   pressLive = true;
-  beginRecording();
+  pressAt = Date.now();
+  pendingRelease = -1;
+  starting = true;
+  beginRecording().then((ok) => {
+    starting = false;
+    const held = pendingRelease;
+    pendingRelease = -1;
+    if (!ok || held < 0) return;
+    // The release (or a second press) arrived while the mic was still warming
+    // up. Honour the gesture it belonged to now that recording exists.
+    if (held >= HOLD_MS) finishRecording();
+    else { latched = true; paint("Listening… press again to finish"); }
+  }, () => { starting = false; pendingRelease = -1; });
 }
 
 // Called on keyup / pointerup. `abort` short-circuits the hold logic.
 export function stopPress(abort) {
+  if (starting && state !== "recording") {
+    // Released before the mic finished opening: remember how long the press
+    // lasted so the start handler can classify the gesture.
+    if (abort) { pendingRelease = HOLD_MS; return; }
+    if (!pressLive) return;
+    pressLive = false;
+    pendingRelease = Date.now() - pressAt;
+    return;
+  }
   if (state !== "recording") { pressLive = false; return; }
   if (abort) { finishRecording(); return; }
   if (!pressLive) return;                          // duplicate release of the same press
@@ -616,6 +709,9 @@ export function initDictation(h) {
     const wasKey = keyDown;
     keyDown = false; pressCode = null;
     if (wasKey && state === "recording") finishRecording();
+    // Mid-setup blur: the keyup is gone for good, same as below — finish the
+    // recording the moment it actually starts.
+    else if (wasKey && starting) pendingRelease = HOLD_MS;
   });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {

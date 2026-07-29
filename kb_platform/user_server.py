@@ -682,8 +682,13 @@ async def search(request: web.Request) -> web.Response:
                 take(r, float(r[4]) + (0.02 if r[5] else 0.0))
         except Exception:
             # A malformed query must never 500: the filename half already has an
-            # answer, and half a result list beats an error page.
-            await conn.rollback()
+            # answer, and half a result list beats an error page. The rollback
+            # itself is guarded too — if what failed was the CONNECTION (DB
+            # restarted mid-query), rollback() re-raises and would be the 500.
+            try:
+                await conn.rollback()
+            except Exception:
+                pass
             rows = []
         rows.sort(key=lambda r: -r["rank"])
         return web.json_response({"results": rows[:30], "files": files, "db": True})
@@ -899,7 +904,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 14}
+            "jobs": jobs, "raw": raw, "v": 15}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
