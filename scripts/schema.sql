@@ -108,7 +108,16 @@ ALTER TABLE kb.blocks ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS files_read  ON kb.files;
 DROP POLICY IF EXISTS blocks_read ON kb.blocks;
 CREATE POLICY files_read  ON kb.files  FOR SELECT USING (kb.can_read(path));
-CREATE POLICY blocks_read ON kb.blocks FOR SELECT USING (kb.can_read(file_path));
+-- Per FILE, not per block. kb.can_read() walks every ancestor directory, so
+-- calling it per blocks row costs (rows × depth) kb.files lookups — 15 s of a
+-- search's latency on a ~100k-block corpus. The IN-subquery reads kb.files
+-- UNDER ITS OWN RLS (so can_read still decides, once per file — the planner
+-- evaluates it as a single hashed subplan) and every block whose file is
+-- visible is visible: identical row set, ~1000× fewer can_read calls. A block
+-- can't outlive its file row (FK ON DELETE CASCADE), so "no file row" — where
+-- can_read(file_path) would say false — cannot occur.
+CREATE POLICY blocks_read ON kb.blocks FOR SELECT
+    USING (file_path IN (SELECT path FROM kb.files));
 
 -- Readers (any logged-in user) get SELECT; RLS still gates rows. Writes are
 -- owner-only (kbindexer), preserving the "DB is a disposable index" invariant.

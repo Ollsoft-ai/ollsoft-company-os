@@ -147,6 +147,12 @@ there is no permission code here to get wrong.
   named-group ACL) **AND traverse (x) every ancestor directory** (bits or a named
   traverse ACL). This is why a raw query can never return a row you couldn't
   `cat`, and why a file made world-readable *inside* a `0700` dir stays hidden.
+- `kb.blocks` delegates its policy to `kb.files` (`file_path IN (SELECT path
+  FROM kb.files)`): the subquery runs under the files policy, so `can_read`
+  still decides — but once per *file* (a single hashed subplan), not once per
+  *block*. With ~100k blocks over ~700 files that is the difference between a
+  15-second search and a fast one; the visible row set is identical, and a
+  block cannot outlive its file row (FK `ON DELETE CASCADE`).
 - **Per-user schemas** `u_<user>`: each user owns a private, default-deny schema
   for structured scratch data (an agent's scraped feed, a computed rollup). Nobody
   else has access until the owner `GRANT`s it. This is the *one* place primary
