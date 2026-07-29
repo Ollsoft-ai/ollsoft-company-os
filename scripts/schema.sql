@@ -116,6 +116,18 @@ CREATE POLICY files_read  ON kb.files  FOR SELECT USING (kb.can_read(path));
 -- visible is visible: identical row set, ~1000× fewer can_read calls. A block
 -- can't outlive its file row (FK ON DELETE CASCADE), so "no file row" — where
 -- can_read(file_path) would say false — cannot occur.
+--
+-- Two consequences to keep in mind:
+--  • blocks visibility is now COUPLED to kb.files policies: any future
+--    permissive policy added to kb.files (say, "directory metadata visible to
+--    everyone") silently widens block CONTENT visibility too. Keep files
+--    policies exactly as strict as content should be.
+--  • the hashed subplan evaluates can_read over ALL of kb.files the first
+--    time any blocks row is touched — a flat ~N_files×depth cost per
+--    statement (~0.3 s at 700 files) even for single-row lookups like the
+--    task-toggle gate. That is the price of the 1000× search win; if file
+--    count grows 10×, revisit (materialized per-user visibility is the
+--    known next step).
 CREATE POLICY blocks_read ON kb.blocks FOR SELECT
     USING (file_path IN (SELECT path FROM kb.files));
 

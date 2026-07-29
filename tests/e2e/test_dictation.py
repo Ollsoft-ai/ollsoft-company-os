@@ -148,8 +148,15 @@ def stub(page, payload, status=200):
 
 
 def dictate(page, hold_ms=HOLD_MS):
-    """Hold F9 long enough to read as a hold rather than a tap, then let go."""
+    """Hold F9 long enough to read as a hold rather than a tap, then let go.
+
+    The hold is measured from when capture actually STARTS (the indicator
+    appearing), not from the keydown: on a cold mic getUserMedia can take
+    longer than the whole hold, and a keyup that lands mid-warm-up is a
+    zero-length capture — correctly discarded as too short, which is not what
+    these tests mean to exercise."""
     page.keyboard.down("F9")
+    recording(page)
     page.wait_for_timeout(hold_ms)
     page.keyboard.up("F9")
 
@@ -458,7 +465,12 @@ def test_empty_transcript_says_so(page, doc):
 
 def test_too_short_is_discarded_before_upload(page, doc):
     """A latch immediately stopped produces almost no audio; the client must not
-    upload it at all — that request would be billed for nothing."""
+    upload it at all — that request would be billed for nothing.
+
+    The positive assertion (the "Too short" toast) is what keeps this test
+    honest: on a cold mic the second press lands while getUserMedia is still
+    resolving, and without it the test would pass vacuously with the recording
+    never finished at all."""
     calls = []
     page.route("**/stt*", lambda r: (calls.append(1), r.fulfill(
         status=200, content_type="application/json",
@@ -466,7 +478,9 @@ def test_too_short_is_discarded_before_upload(page, doc):
     open_doc(page, doc)
     page.keyboard.press("F9")     # latch
     page.keyboard.press("F9")     # stop immediately: under the 300 ms floor
-    page.wait_for_timeout(3000)
+    page.wait_for_selector('[data-testid="toast"]', timeout=8000)
+    toasts = page.locator('[data-testid="toast"]').all_inner_texts()
+    assert any("Too short" in t for t in toasts), toasts
     assert calls == [], "a sub-300ms recording should never be uploaded"
 
 
@@ -582,7 +596,7 @@ def test_deleting_a_kept_recording_is_permanent(page):
         page.locator('[data-testid="dh-list"] .dh-rec .dh-delete').first.click()
         page.wait_for_timeout(150)
     page.locator(".modal-close").click()
-    page.wait_for_timeout(400)              # let the IndexedDB deletes commit
+    page.wait_for_timeout(800)              # let the IndexedDB deletes commit
     page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] > *', timeout=6000)
     assert page.locator('[data-testid="dh-list"] .dh-rec').count() == 0
