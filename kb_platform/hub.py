@@ -788,6 +788,18 @@ class Hub:
                     # restoring grants that a narrowed mask had revoked — a
                     # share of one file must not re-open a folder's other ACLs.
                     _acl_apply_fd(dfd, False, ["-n", "-m", f"{flag}:{name}:x"])
+                    # …but a mask without x makes the entry we just added
+                    # effective "---" and the share stays dead. That is exactly
+                    # what happens on a dir that had NO extended ACL before this
+                    # grant (a fresh 0700 _secrets dir): the mask materializes
+                    # from the group bits, i.e. "---". Widen the mask by the x
+                    # bit ALONE — never a full recalc, so every r/w bit a
+                    # narrowed mask deliberately revokes stays revoked.
+                    ents = common.acl_entries(dfd) or []
+                    mask = next((p for t, p, _ in ents if t == common._ACL_MASK), None)
+                    if mask is not None and not (mask & 1):
+                        bits = ("r" if mask & 4 else "") + ("w" if mask & 2 else "") + "x"
+                        _acl_apply_fd(dfd, False, ["-n", "-m", "m::" + bits])
                     if parent not in granted:
                         granted.append(parent)
             except (OSError, KeyError, subprocess.SubprocessError):

@@ -6,6 +6,7 @@ deep links, and live presence in the file tree.
 Deep-link and presence tests light up once the hub/syncd restart with the new
 code — until then they skip with a message saying exactly that."""
 import json
+import re
 import time
 
 import httpx
@@ -80,10 +81,17 @@ def test_mention_autocomplete(browser, box):
     open_doc(page, f"{DIR}/mention.md")
     page.wait_for_function("() => window.__kbsynced === true", timeout=8000)
     cursor_to_end(page)
-    page.keyboard.type("ping @joh")
+    # A real box has arbitrary principals (not just the demo trio), so a short
+    # fuzzy prefix may rank other users into the list. Type enough of "bob" to
+    # be deterministic, but stop short of the full name so the completion still
+    # has something to INSERT — the doc gains characters we never typed.
+    page.keyboard.type("ping @bo")
     page.wait_for_selector(".cm-tooltip-autocomplete li", timeout=6000)
-    # click the bob option directly (don't depend on which row is preselected)
-    page.locator('.cm-tooltip-autocomplete li', has_text="bob").first.click()
+    # click the EXACT "bob" row (substring matching could hit e.g. a "bobby")
+    row = page.locator(".cm-tooltip-autocomplete li").filter(
+        has_text=re.compile(r"^bob$")).first
+    row.wait_for(timeout=6000)
+    row.click()
     page.wait_for_function(
         '() => window.__kbview.state.doc.toString().includes("ping @bob")', timeout=6000)
     ctx.close()

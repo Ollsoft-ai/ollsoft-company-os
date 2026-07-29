@@ -14,21 +14,33 @@ from conftest import BASE, CREDS, login
 # upload/scope/CSP path, not the codec — so we never depend on a real media file
 # living somewhere on the box.
 def _fixture_mp4(tmp_path_factory=None):
-    import base64, tempfile, os
-    # 133-byte minimal ISO-BMFF: ftyp + empty moov. Players reject it, but the
-    # platform only ever stores, serves and permission-checks the bytes.
+    # A REAL one-second MP4 via ffmpeg: test_video_embeds_… waits for the
+    # embed's <video> to survive, and MediaWidget replaces the node with a
+    # "video not found" note when decoding errors — which the old 133-byte
+    # empty-moov stub always did. Stub kept as the no-ffmpeg fallback;
+    # PLAYABLE lets the playback test skip honestly there.
+    import base64, shutil, subprocess, tempfile, os
+    fd, path = tempfile.mkstemp(suffix=".mp4", prefix="kb-test-")
+    os.close(fd)
+    if shutil.which("ffmpeg"):
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "testsrc=duration=1:size=64x64:rate=10",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", path],
+            capture_output=True)
+        if r.returncode == 0 and os.path.getsize(path) > 1000:
+            return path, True
     data = base64.b64decode(
         "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAABIbW9vdgAAAGxtdmhkAAAAAAAA"
         "AAAAAAAAAAAAAAAAA+gAAAAAAAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAABAAAA"
         "AAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC"
     )
-    fd, path = tempfile.mkstemp(suffix=".mp4", prefix="kb-test-")
-    os.write(fd, data)
-    os.close(fd)
-    return path
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return path, False
 
 
-SRC_MP4 = _fixture_mp4()
+SRC_MP4, PLAYABLE = _fixture_mp4()
 
 TABLE_DOC = """# Sprint
 
@@ -141,6 +153,8 @@ def test_structural_buttons_add_and_remove(browser, doc):
 
 
 def test_video_embeds_and_survives_a_click(browser, video_doc):
+    if not PLAYABLE:
+        pytest.skip("no ffmpeg on this box — the fallback fixture cannot decode")
     ctx, page = open_doc(browser, video_doc)
     page.wait_for_selector(".cm-img-embed video", timeout=15000)
     vid = page.locator(".cm-img-embed video")

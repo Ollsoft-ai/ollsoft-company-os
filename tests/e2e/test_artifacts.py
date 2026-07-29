@@ -1,20 +1,69 @@
 """The full artifacts scenario: an agent-written script feeds a per-user table,
 a sandboxed dashboard artifact renders it live with edit/delete, shared with a
 specific colleague — and everyone else is bounded by Postgres grants + file ACLs.
+
+Self-contained on purpose: a real box's company/dashboards/randoms.html and
+u_alice.readings have lived a life of their own (edited perms, renamed columns),
+so this module builds its OWN copy of the whole scenario through the product
+APIs as alice — a unique table, the stock dashboard pointed at it, a private
+file ACL-shared with carol — and tears every bit of it down again.
 """
 import time
+from pathlib import Path
 
 import httpx
+import pytest
 from conftest import BASE, CREDS, login
 
-ART = "company/dashboards/randoms.html"
-TABLE = "u_alice.readings"
+TAG = str(int(time.time()))
+DIR = f"company/kbtest_art_{TAG}"
+ART = f"{DIR}/dash.html"
+TABLE = f"u_alice.kbtest_readings_{TAG}"
 
 
 def q(user, sql, params=None):
     c = httpx.Client(base_url=BASE, timeout=15)
     c.post("/login", data={"username": user, "password": CREDS[user]})
     return c.post("/api/artifact/query", json={"sql": sql, "params": params or []}).json()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def scenario():
+    """Build the scenario exactly the way the demo seed tells the story, but
+    under unique names so nothing pre-existing is touched or depended on."""
+    c = httpx.Client(base_url=BASE, timeout=30)
+    r = c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    assert r.status_code == 200, r.text
+
+    def sql(stmt, params=None):
+        rr = c.post("/api/artifact/query", json={"sql": stmt, "params": params or []})
+        assert rr.status_code == 200, rr.text
+        return rr.json()
+
+    # The per-user table + the sharing grants (SELECT/UPDATE/DELETE to carol,
+    # nothing to bob). The schema USAGE grant is idempotent — the demo seed
+    # already gives carol USAGE on u_alice — and is deliberately NOT revoked in
+    # teardown, so a seeded box's own sharing story keeps working.
+    sql(f"CREATE TABLE {TABLE} (id bigserial PRIMARY KEY, value int NOT NULL, "
+        "at timestamptz DEFAULT now())")
+    sql(f"INSERT INTO {TABLE} (value) SELECT (random()*100)::int FROM generate_series(1,20)")
+    sql("GRANT USAGE ON SCHEMA u_alice TO carol")
+    sql(f"GRANT SELECT, UPDATE, DELETE ON {TABLE} TO carol")
+
+    # The dashboard: the stock randoms.html artifact, pointed at OUR table.
+    src = Path(__file__).resolve().parents[2] / "defaults" / "artifacts" / "randoms.html"
+    html = src.read_text().replace("u_alice.readings", TABLE)
+    assert TABLE in html
+    assert c.post("/api/fs/mkdir", json={"path": DIR}).status_code == 200
+    assert c.post("/fs/newfile", json={"path": ART}).status_code in (200, 409)
+    assert c.post("/api/artifact/write", json={"path": ART, "content": html}).status_code == 200
+    # File side of the boundary: private + an explicit read ACL for carol only.
+    r = c.post("/fs/props", json={"path": ART, "visibility": "private",
+                                  "acl_add": [{"type": "user", "name": "carol", "perms": "r"}]})
+    assert r.status_code == 200, r.text
+    yield
+    c.post("/api/fs/delete", json={"path": DIR})
+    sql(f"DROP TABLE IF EXISTS {TABLE}")
 
 
 def tree_paths(user):
@@ -38,8 +87,8 @@ def _wait_db(sql, params, want, tries=15):
 
 
 def test_owner_sees_live_table_and_can_edit_and_delete(browser):
-    # The table auto-refreshes and a writer keeps inserting, so we pin a SPECIFIC
-    # row by its id and poll the DB — never rely on "the first row" staying put.
+    # The table auto-refreshes every 2s, so we pin a SPECIFIC row by its id and
+    # poll the DB — never rely on "the first row" staying put.
     ctx = browser.new_context()
     page = login(ctx, "alice")
     page.click(f'.tree-item[data-path="{ART}"]')

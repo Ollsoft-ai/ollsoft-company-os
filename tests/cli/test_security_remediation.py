@@ -31,39 +31,66 @@ def test_socket_dir_not_world_writable():
 
 # --- CRITICAL: fs_upload cannot be redirected by a planted symlink ---------
 def test_fs_upload_refuses_symlink():
-    target = "/tmp/kb_sec_target_%d" % int(time.time())
-    link = "/srv/kb/users/alice/evil_link"
+    """The link is planted in company/ — group-writable to every kb-users
+    member — so the test works no matter which OS user runs the suite (an
+    earlier version used users/alice/, writable only when the runner IS
+    alice, which is true on CI and false on a dev box)."""
+    t = int(time.time())
+    target = f"/tmp/kb_sec_target_{t}"
+    name = f"evil_link_{t}"
+    link = f"/srv/kb/company/{name}"
     if os.path.exists(target):
         os.remove(target)
-    subprocess.run(["ln", "-sf", target, link], check=True)   # alice owns his dir
+    subprocess.run(["sg", "kb-users", "-c", f"ln -sf {target} {link}"], check=True)
     try:
-        kry = cl("alice")
-        r = kry.post("/fs/upload", params={"dir": "users/alice"},
-                     files={"file": ("evil_link", b"PWNED", "text/plain")})
+        r = cl("alice").post("/fs/upload", params={"dir": "company"},
+                             files={"file": (name, b"PWNED", "text/plain")})
         assert r.status_code != 200, "upload through a symlink must fail"
         assert not os.path.exists(target), "root must not have written through the symlink"
     finally:
-        subprocess.run(["rm", "-f", link], check=False)
+        subprocess.run(["sg", "kb-users", "-c", f"rm -f {link}"], check=False)
 
 
 # --- MEDIUM: the indexer never indexes symlinks ----------------------------
 def test_indexer_skips_symlinks():
-    link = "evillink_%d.md" % int(time.time())
-    subprocess.run(["sg", "kb-users", "-c",
-                    f"ln -sf /srv/kb/company/overview.md /srv/kb/company/{link}"], check=False)
+    """Self-contained: the symlink targets a file the test creates itself. The
+    owner invariant is 'the indexed owner is the FILESYSTEM owner of the
+    target, before and after a symlink appears' — not any particular username:
+    the hub's newfile deliberately creates group-shared files owned by root,
+    and whoever owns company/overview.md on a given box is a coin toss."""
+    import pwd as _pwd
+    t = int(time.time())
+    doc = f"company/kbtest_symtarget_{t}.md"
+    link = f"evillink_{t}.md"
+    a = cl("alice")
+    assert a.post("/fs/newfile", json={"path": doc}).status_code == 200
+    assert a.post("/api/artifact/write",
+                  json={"path": doc, "content": "# target\n\nsymlink bait\n"}).status_code == 200
+    fs_owner = _pwd.getpwuid(os.stat(f"/srv/kb/{doc}").st_uid).pw_name
+
+    def indexed_owner():
+        return subprocess.run(["sg", "kb-users", "-c",
+                              f"psql -d kb -tAc \"SELECT owner_name FROM kb.files WHERE path='{doc}'\""],
+                              capture_output=True, text=True).stdout.strip()
+
     try:
+        deadline = time.time() + 15
+        while time.time() < deadline and indexed_owner() != fs_owner:
+            time.sleep(0.5)
+        assert indexed_owner() == fs_owner, "baseline: the target must index with its fs owner"
+
+        subprocess.run(["sg", "kb-users", "-c",
+                        f"ln -sf /srv/kb/{doc} /srv/kb/company/{link}"], check=False)
         time.sleep(3)
         out = subprocess.run(["sg", "kb-users", "-c",
                               f"psql -d kb -tAc \"SELECT count(*) FROM kb.files WHERE path='company/{link}'\""],
                              capture_output=True, text=True)
         assert out.stdout.strip() == "0", "a symlink must not be indexed"
         # and the real target's metadata is untouched (owner not clobbered)
-        owner = subprocess.run(["sg", "kb-users", "-c",
-                               "psql -d kb -tAc \"SELECT owner_name FROM kb.files WHERE path='company/overview.md'\""],
-                              capture_output=True, text=True).stdout.strip()
-        assert owner == "alice", "symlink must not clobber the target's indexed owner"
+        assert indexed_owner() == fs_owner, "symlink must not clobber the target's indexed owner"
     finally:
         subprocess.run(["sg", "kb-users", "-c", f"rm -f /srv/kb/company/{link}"], check=False)
+        a.post("/api/fs/delete", json={"path": doc})
 
 
 # --- HIGH: RLS no longer over-shares via the ACL mask ----------------------

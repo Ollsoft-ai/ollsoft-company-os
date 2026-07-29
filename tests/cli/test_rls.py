@@ -68,26 +68,48 @@ def test_rls_direct_psql_as_alice():
     assert n >= 1
 
 
-# --- chmod propagates to search visibility quickly -------------------------
-def test_chmod_revokes_search_within_2s():
-    path = "/srv/kb/company/overview.md"
-    assert "company/overview.md" in search("carol", "quarterly")
-    subprocess.run(["chmod", "600", path], check=True)   # alice owns it
+# --- privacy propagates to search visibility quickly ------------------------
+def test_making_a_file_private_revokes_search_quickly():
+    """Self-contained on purpose: it creates its own document and drives the
+    permission change through the product's own visibility API (as the owner),
+    so it does not care who owns company/overview.md on this box or which OS
+    user runs the suite — both burned earlier incarnations of this test.
+
+    Sealing semantics (570eb4c) are asserted deliberately: a private (0600)
+    file is unreadable to the INDEXER itself, so its rows are sealed and it
+    vanishes from every user's content search — the owner's included. The
+    index never serves content the kernel would deny it; the owner still has
+    the file itself, the tree, and filename search."""
+    token = f"pangovault{int(time.time())}"
+    rel = f"company/kbtest_privacy_{token}.md"
+    c = httpx.Client(base_url=BASE, timeout=15)
+    r = c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    assert r.status_code == 200
+    assert c.post("/fs/newfile", json={"path": rel}).status_code == 200
+    assert c.post("/api/artifact/write",
+                  json={"path": rel, "content": f"# note\n\nthe {token} ledger\n"}).status_code == 200
     try:
-        deadline = time.time() + 2.5
+        # indexed and company-visible first (files in company/ are born team/company readable)
+        assert rel in search_has("carol", token, rel, timeout=10), "baseline: carol must see it"
+
+        assert c.post("/fs/props", json={"path": rel, "visibility": "private"}).status_code == 200
+        deadline = time.time() + 4
         gone = False
         while time.time() < deadline:
-            if "company/overview.md" not in search("carol", "quarterly"):
+            if rel not in search("carol", token):
                 gone = True
                 break
             time.sleep(0.3)
-        assert gone, "chmod 600 must remove the file from carol's search < 2.5s"
-        # alice (owner) still sees it.
-        assert "company/overview.md" in search("alice", "quarterly")
-    finally:
-        subprocess.run(["chmod", "664", path], check=True)
-        # let the index reconcile back
-        for _ in range(10):
-            if "company/overview.md" in search("carol", "quarterly"):
-                break
+        assert gone, "going private must remove the file from carol's search within seconds"
+        # Sealed for the owner too — poll, the same sweep does both.
+        deadline = time.time() + 4
+        while time.time() < deadline and rel in search("alice", token):
             time.sleep(0.3)
+        assert rel not in search("alice", token), \
+            "a 0600 file is unreadable to the indexer, so its CONTENT must seal for everyone"
+
+        # …and coming back is symmetric.
+        assert c.post("/fs/props", json={"path": rel, "visibility": "company"}).status_code == 200
+        assert rel in search_has("carol", token, rel, timeout=10), "restore must re-index"
+    finally:
+        c.post("/api/fs/delete", json={"path": rel})

@@ -55,7 +55,7 @@
 
   async function refresh() {
     const r = await kbQuery(
-      `SELECT id, value, to_char(created_at,'HH24:MI:SS') AS at FROM ${TABLE} ORDER BY id DESC LIMIT 15`);
+      `SELECT id, value, to_char(at,'HH24:MI:SS') AS at FROM ${TABLE} ORDER BY id DESC LIMIT 15`);
     if (r.error) { content.innerHTML = `<div class="err">query denied: ${r.error}</div>`; return; }
     if (!r.rows.length) { content.innerHTML = '<div class="sub">no readings yet…</div>'; return; }
     const rows = r.rows.map((row) => {

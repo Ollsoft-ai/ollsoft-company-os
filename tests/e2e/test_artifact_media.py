@@ -4,6 +4,7 @@ Blob (structured clone) and the artifact makes its own blob: URL; the CSP allows
 blob: for media/img but still forbids every network channel, so bytes can be
 displayed and never sent anywhere."""
 import json
+import os
 import time
 
 import httpx
@@ -11,25 +12,36 @@ import pytest
 
 from conftest import BASE, CREDS, login
 
-# A tiny synthetic MP4 generated at test time. The point of these tests is the
-# upload/scope/CSP path, not the codec — so we never depend on a real media file
-# living somewhere on the box.
+# A tiny REAL MP4 generated at test time with ffmpeg — one second of test
+# pattern. It must be genuinely playable: test_artifact_plays_a_video waits for
+# the browser to fire `loadedmetadata`, and the old 133-byte ftyp+empty-moov
+# stub has zero tracks, so chromium fires `error` instead and the test can
+# never pass anywhere. The stub remains as the fallback for boxes without
+# ffmpeg (the byte-path tests still work there); PLAYABLE records which one
+# this run got, and the playback test skips honestly instead of failing.
 def _fixture_mp4(tmp_path_factory=None):
-    import base64, tempfile, os
-    # 133-byte minimal ISO-BMFF: ftyp + empty moov. Players reject it, but the
-    # platform only ever stores, serves and permission-checks the bytes.
+    import base64, shutil, subprocess, tempfile, os
+    fd, path = tempfile.mkstemp(suffix=".mp4", prefix="kb-test-")
+    os.close(fd)
+    if shutil.which("ffmpeg"):
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "testsrc=duration=1:size=64x64:rate=10",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", path],
+            capture_output=True)
+        if r.returncode == 0 and os.path.getsize(path) > 1000:
+            return path, True
     data = base64.b64decode(
         "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAABIbW9vdgAAAGxtdmhkAAAAAAAA"
         "AAAAAAAAAAAAAAAAA+gAAAAAAAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAABAAAA"
         "AAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC"
     )
-    fd, path = tempfile.mkstemp(suffix=".mp4", prefix="kb-test-")
-    os.write(fd, data)
-    os.close(fd)
-    return path
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return path, False
 
 
-SRC_MP4 = _fixture_mp4()
+SRC_MP4, PLAYABLE = _fixture_mp4()
 
 ARTIFACT = """<!doctype html><meta charset="utf-8">
 <body><video id="v" muted playsinline></video>
@@ -93,6 +105,8 @@ def folder():
 
 
 def test_artifact_plays_a_video_from_its_folder(browser, folder):
+    if not PLAYABLE:
+        pytest.skip("no ffmpeg on this box — the fallback fixture cannot decode")
     ctx = browser.new_context()
     page = login(ctx, "bob")
     page.goto(f"{BASE}/{folder}/player.html")
@@ -108,7 +122,9 @@ def test_artifact_plays_a_video_from_its_folder(browser, folder):
             break
         page.wait_for_timeout(250)
     assert txt.startswith("PLAYABLE:"), f"video did not play in the sandbox: {txt!r}"
-    assert int(txt.split(":")[1]) > 100000, txt
+    # the sandbox channel delivered the file COMPLETELY — byte-for-byte size,
+    # not a magic threshold (the fixture is a deliberately tiny real clip)
+    assert int(txt.split(":")[1]) == os.path.getsize(SRC_MP4), txt
 
     # ...and the walls the binary channel must NOT have loosened:
     scope = _settled(page, frame.locator("#scope"))

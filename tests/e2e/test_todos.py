@@ -28,11 +28,34 @@ def test_todo_data_is_rls_scoped():
 
 
 def test_assigned_to_me_query():
-    # The 'mine' view is: current_user = ANY(assignees), still under RLS.
-    rows = q("alice", "SELECT file_path FROM kb.blocks WHERE kind='task' "
-                        "AND %s = ANY(assignees)", ["alice"])["rows"]
-    paths = {r[0] for r in rows}
-    assert "company/overview.md" in paths      # 'Ship the knowledgebase platform @alice'
+    # Self-contained: a real box's company docs may hold no @alice task (the
+    # demo seed skips documents that already exist), so plant our OWN task doc
+    # via the product API, wait for the indexer, and assert the 'mine' query
+    # (current_user = ANY(assignees), still under RLS) surfaces exactly it.
+    path = f"company/kbtest_todo_{int(time.time())}.md"
+    c = httpx.Client(base_url=BASE, timeout=15)
+    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    assert c.post("/api/file", json={"path": path}).status_code == 200
+    c.post("/api/artifact/write", json={
+        "path": path,
+        "content": "# rollout\n\n- [ ] verify the rollout @alice #kbtest\n"})
+    try:
+        # the indexer is inotify-driven; give it a generous grace period
+        deadline = time.time() + 60
+        indexed = []
+        while time.time() < deadline:
+            indexed = q("alice", "SELECT file_path FROM kb.blocks WHERE kind='task' "
+                                 "AND file_path=%s", [path]).get("rows", [])
+            if indexed:
+                break
+            time.sleep(0.5)
+        assert indexed, f"indexer never picked up {path}"
+        rows = q("alice", "SELECT file_path FROM kb.blocks WHERE kind='task' "
+                            "AND %s = ANY(assignees)", ["alice"])["rows"]
+        paths = {r[0] for r in rows}
+        assert path in paths, f"'assigned to me' missed {path}, got {paths}"
+    finally:
+        c.post("/api/fs/delete", json={"path": path})
 
 
 def test_todos_artifact_mine_and_all(browser):
