@@ -69,7 +69,7 @@ there is no permission code here to get wrong.
   `users`); a blocked ancestor is a clean 403, not a 500.
 - `POST /api/upload`, `GET /api/attachment` — attachments in a `_files/` sibling.
 - `GET /pty` — a **real login shell** in a PTY (via `pty.fork` + `bash -l`),
-  starting in `/srv/kb/company`, bridged to xterm.js in the browser. Shells are
+  starting in `/srv/kb` (the knowledgebase root), bridged to xterm.js in the browser. Shells are
   **persistent sessions** (`?session=<sid>&have=<bytes>`): they outlive the
   websocket, buffer 256 KB of output, and a reconnect replays only what the
   client missed (or sends `{"reset":true,"base":N}` + the full buffer when the

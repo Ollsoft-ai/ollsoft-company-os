@@ -944,7 +944,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 17}
+            "jobs": jobs, "raw": raw, "v": 18}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
@@ -1123,11 +1123,11 @@ class PtySession:
             # Every failure path ends in os._exit.
             try:
                 os.environ["TERM"] = "xterm-256color"
-                # Start in the shared company root (everyone can access it)
-                # rather than the user's home, so the terminal lands inside the
-                # knowledgebase.
+                # Start at the knowledgebase root (everyone can access it)
+                # rather than the user's home, so the terminal lands with
+                # company/, projects/ and users/ all one step away.
                 try:
-                    os.chdir(common.REPO_ROOT / "company")
+                    os.chdir(common.REPO_ROOT)
                 except OSError:
                     try:
                         os.chdir(pwd.getpwuid(os.geteuid()).pw_dir)
