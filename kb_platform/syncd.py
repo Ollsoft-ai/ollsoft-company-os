@@ -403,12 +403,17 @@ class SyncDaemon:
                     content = str(txt)
                 except Exception:
                     continue
-                if content.encode() == self.last_written.get(name):
-                    continue
                 # The file moved or was deleted while open: never resurrect it at
                 # the old path (that recreated it as root) — retire the room.
+                # Checked BEFORE the clean/dirty short-circuit below: a room whose
+                # text already matches last_written is exactly the case that used
+                # to `continue` past this and leak forever, keeping the deleted
+                # path's stale CRDT state authoritative over anything later
+                # written to disk there.
                 if not (common.REPO_ROOT / name).exists():
                     self._retire_room(name)
+                    continue
+                if content.encode() == self.last_written.get(name):
                     continue
                 try:
                     if self._atomic_write(name, content):
