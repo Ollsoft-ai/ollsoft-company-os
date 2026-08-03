@@ -109,6 +109,10 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   documents open as a tab when you click through.
 - **Kernel-enforced permissions**, surfaced through a web file tree, editor, and a
   real in-browser terminal (each running as your OS user).
+- **Drop in what you already have**: drag files — or whole folders, subfolders and
+  all — from your desktop onto any folder in the tree (or right-click it →
+  *Upload folder*); everything lands with live per-file progress, then converts
+  and becomes searchable.
 - **VS-Code-style shell**: documents and artifacts open as tabs (background
   artifacts stay live); terminals are tabbed in a docked, resizable bottom panel.
 - **Cron panel**: every user has their own `crontab`; the UI lists, adds, pauses

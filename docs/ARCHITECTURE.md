@@ -195,9 +195,24 @@ grants so search/RLS agree with the kernel.
 
 VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js`):
 
-- **File tree actions** (on hover): `＋` new file, `⊞` new folder (both only on
-  folders you can write), `⚙` permissions, `✕` delete (only where you can write
-  the parent). Deleting a file/folder retires any tabs showing it.
+- **File tree actions** (on hover): `＋` new file, `⊞` new folder, `⇪` upload files
+  (all three only on folders you can write), `⚙` permissions, `✕` delete (only
+  where you can write the parent). Deleting a file/folder retires any tabs
+  showing it. The context menu (right-click, or `⋯` on touch) adds the rest,
+  including **Upload folder**.
+- **Folder uploads**: a whole tree can come in two ways — dropped from the
+  desktop onto a tree row, or picked via *Upload folder*. Neither is a new
+  endpoint: the client turns the tree into paths relative to the target
+  (`sub/deep/a.png`), creates every folder on them first (`/api/fs/mkdir`, as the
+  user, 409 = already there so a re-drop merges) and then POSTs each file to
+  `/fs/upload?dir=<target>/<sub>`, so permissions and inheritance are exactly the
+  single-file rules. `dataTransfer.files` cannot describe a directory at all, so a
+  drop walks the `webkitGetAsEntry()` tree (paging `readEntries` to the end, which
+  also carries folders holding no files); the picker uses `webkitdirectory` and
+  `webkitRelativePath`. `.git` (it would become a gitlink in the audit repo),
+  `.DS_Store` and `Thumbs.db` are skipped, deep/huge drops are bounded
+  (2000 files, 24 levels), and a drop asks for confirmation with the file count —
+  the browser prompts for the picker but not for a drop.
 - **Live presence & cursors**: the doc header shows an avatar per person with the
   file open (initials on a per-user color, yourself ringed), and each
   collaborator's caret + selection render inline with their name — in both the
