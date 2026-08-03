@@ -17,3 +17,21 @@ This repo is the company brain. Markdown files are the source of truth.
 - Read the skills in `.claude/skills/` before using the database, writing an
   artifact, or scheduling automation. They describe how this platform works and
   what the conventions are.
+
+## How to write markdown here — short, dense, scannable
+
+**We write docs to organize ourselves, not to drown in text.** Length is a cost,
+not proof of effort. A wall of prose is a bug: nobody reads it, so the
+information in it may as well not exist.
+
+- **Bullets and tables over paragraphs.** Prose only when the logic needs
+  connecting words.
+- **One fact per line.** Front-load the fact; skip the wind-up.
+- **Bold the load-bearing words** so a line survives being skimmed.
+- **Conclusion first**, background below it and only if someone would ask.
+- **No filler** — no restating the heading, no "as mentioned above", no summary
+  of what the reader just read.
+- **Short sections.** Past ~10 lines, split it or cut it.
+
+Delete every sentence carrying no new information, then reread and cut again.
+Same goes for your replies: don't hand back a long summary of a short change.

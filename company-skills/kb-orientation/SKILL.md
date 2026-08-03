@@ -33,6 +33,28 @@ Just edit the `.md` files with your normal file tools. You don't need any specia
 
 Write markdown normally. Tasks are `- [ ] todo` / `- [x] done`. Headings with `#`. Keep files human-readable.
 
+## House style: short, dense, scannable
+
+**We write docs to organize ourselves, not to drown in text.** Length is a cost,
+not proof of effort. A wall of prose is a bug — nobody reads it, so the
+information in it may as well not exist. Every `.md` you write or edit here:
+
+- **Bullets and tables over paragraphs.** Prose only when the logic genuinely
+  needs connecting words.
+- **One fact per line.** Front-load the fact; skip the wind-up.
+- **Bold the load-bearing words** so a line survives being skimmed.
+- **Conclusion first**, background below it and only if someone would ask.
+- **No filler.** No restating the heading, no "as mentioned above", no summary
+  of what the reader just read, no closing paragraph that adds nothing.
+- **Short headings, short sections.** If a section outgrows ~10 lines, split it
+  or cut it.
+
+Delete every sentence that carries no new information. When you finish, reread
+and cut again — the shorter version is almost always the better doc.
+
+This applies to your own output too: don't hand back a long summary of a short
+change.
+
 # Reading office files and PDFs
 
 You cannot read a `.docx`/`.pptx`/`.xlsx`/`.pdf` directly — but you don't have
@@ -47,35 +69,52 @@ folder, dot-prefixed). Two things to know:
   `status:` line in its frontmatter — `failed`/`empty`/`unsupported` explain
   themselves.
 
-# Sharing a folder with teammates — use a group, NEVER per-user ACLs
+# Sharing a folder with a team — give it an owning GROUP
 
-Learned the hard way (July 2026, the Nextcloud-collectives migration): folders
-were shared with `setfacl -m u:<name>:rwx` and it *looked* right — `ls`, the
-file tree, search and even a kernel-level read test all worked — but the
-granted colleagues still could not open a single document. The live-editor
-daemon (syncd) and the hub's create/upload checks evaluate **only the classic
-owner/group/other mode bits**; they never read ACLs. And because an extended
-ACL makes `ls`'s group bits show the ACL *mask*, a folder can even look
-group-accessible when the real group entry is `---` — so the editor can
-falsely admit people a restricted folder was never shared with.
-
-The only sharing mechanism that works end-to-end is the folder's **owning
-group** (the pattern of `proj-olingo`):
+**A folder's audience is its owning group.** That is the mechanism every layer
+agrees on — the kernel, the live editor, the search index and the file tree —
+so it is what you should reach for every time:
 
 1. A dedicated OS group per audience, e.g. `proj-<name>` / `team-<name>`,
-   with **`kbindexer` as a member** (so the search index can read it) —
-   creating groups needs an admin, so ask krystof.
-2. `chgrp -R <group> <folder>`; `chmod -R g+rwX,o-rwx <folder>`; `chmod g+s`
-   on every directory (so new files inherit the group).
-3. Strip any leftover extended ACLs: `setfacl -R -b <folder>` (skip the
-   read-only `.*.md` sidecars — kb-convert manages those itself).
-4. Whole-company audience = the existing `kb-users` group; no new group, and
+   with **`kbindexer` as a member** (otherwise the folder is invisible to
+   search). Creating a group needs an admin — ask krystof.
+2. `chgrp -R <group> <folder>`; `chmod -R g+rwX,o-rwx <folder>`; and `chmod
+   g+s` on every directory, so new files inherit the group instead of the
+   creator's private one.
+3. Whole-company audience = the existing `kb-users` group. No new group, and
    new hires inherit access automatically — same reasoning as `kb_users` in
    **kb-database**.
+4. Changing who is *in* a group takes effect for new logins, but processes
+   that are already running keep their old group list. After adding or
+   removing a member, ask krystof to restart `kb-indexer` (so search catches
+   up) — otherwise the change looks like it did not work.
 
-Per-user ACLs remain fine for exactly one case: read-sharing a single
-non-editor file, e.g. an artifact `.html` (see **kb-artifacts**). Never use
-them on folders or `.md` documents.
+Per-user ACLs (`setfacl -m u:<name>:r`) still work and are the right tool for
+sharing ONE file with ONE person — the "share" button uses them, and the
+platform now evaluates them exactly as the kernel does. But do not build a
+team folder out of them: you would be hand-maintaining a list that no new hire
+ever joins, and the next person to look at `ls -l` cannot see who has access.
+
+## Two traps that make a share look broken when the permissions are fine
+
+**The `ls` group column can lie.** On a file with an extended ACL, the group
+bits shown by `ls -l` are the ACL *mask*, not the real `group::` entry — so a
+folder can read as group-accessible while the group is actually denied, and
+vice versa. Never diagnose from `ls` alone; run `getfacl -cpE <path>`, which
+prints `group::` and `mask::` separately and marks ineffective entries.
+
+**A file born 0600 is invisible to the team AND to search.** Anything that
+creates files with a restrictive umask — `tempfile.mkstemp()` in a cron
+script, `install -m600`, an editor writing a temp file and renaming it — lands
+a file the folder's group cannot read, and the file silently never appears in
+search results (the indexer is just another user; if it cannot read the file,
+the file does not exist as far as search is concerned). If a document is
+missing from search, check `getfacl` on it first. In your own scripts, write
+files as `0o660` inside shared folders.
+
+Whenever a share does not behave, verify from the other person's side rather
+than guessing — `sudo -u <them> test -r <path> && echo yes` answers it in one
+line, and `sudo -u kbindexer test -r <path>` answers the search question.
 
 # What else you can do (see the other skills)
 
