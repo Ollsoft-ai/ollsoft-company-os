@@ -71,6 +71,7 @@ async def whoami(request: web.Request) -> web.Response:
 
 
 _NUM_RE = re.compile(r"(\d+)")
+_LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 
 
 def _name_key(name: str):
@@ -80,6 +81,10 @@ def _name_key(name: str):
     emoji-prefixed folder at the bottom by accident. Bucket on the first
     character instead, then sort naturally (`v2` before `v10`) on the folded
     name so case and diacritics don't split obvious neighbours.
+
+    Inside the emoji bucket the icon is decoration, not the name: strip it and
+    sort on the words after it, so `🎨 Design` precedes `💡 Know How` instead of
+    the two being ordered by whichever codepoint their icon happens to have.
     """
     ch = name[:1]
     if not ch:
@@ -92,7 +97,13 @@ def _name_key(name: str):
         cat = 2
     else:
         cat = 0              # _ - . ( ~ …
-    folded = _fold(name)
+    text = name
+    if cat == 3:
+        # Drops the icon plus its trailing space, and any ZWJ/variation-selector
+        # parts of a multi-codepoint emoji. An icon-only name keeps its own
+        # codepoints so it still sorts somewhere stable.
+        text = _LEAD_ICON_RE.sub("", name) or name
+    folded = _fold(text)
     parts = tuple((int(p), "") if p.isdigit() else (-1, p)
                   for p in _NUM_RE.split(folded) if p)
     return (cat, parts, name)  # raw name last: stable, total order for `a` vs `A`
@@ -933,7 +944,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 16}
+            "jobs": jobs, "raw": raw, "v": 17}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
