@@ -774,9 +774,58 @@ async function uploadAndInsert(view, tab, files, pos) {
   }
 }
 
+// ---- dragging a tree row into a document = link it -------------------------
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i;
+
+// A link from a document in `fromDir` to `target`, both knowledgebase paths.
+// RELATIVE, not absolute: an image embed is resolved by resolveMediaUrl, which
+// only understands a relative target — "/users/…/pic.png" would be handed to
+// the browser as a literal src and render broken.
+function relLink(fromDir, target) {
+  const from = fromDir ? fromDir.split("/") : [];
+  const to = target.split("/");
+  let i = 0;                                        // shared prefix, never the file itself
+  while (i < from.length && i < to.length - 1 && from[i] === to[i]) i++;
+  return "../".repeat(from.length - i) +
+         to.slice(i).map(encodeURIComponent).join("/");
+}
+
+// Insert a markdown link to a knowledgebase path at `pos`. Images, video and
+// audio embed (same rule as an upload); everything else — documents, folders,
+// spreadsheets — becomes a plain link, so a dropped .md opens as a tab and a
+// dropped folder reveals itself in the tree.
+function insertPathLink(view, tab, path, pos) {
+  if (view.state.readOnly) { kbToast("This document is read-only", "err"); return; }
+  if (path === tab.path) { kbToast("That is this document", "err"); return; }
+  const name = baseName(path);
+  const url = relLink(dirName(tab.path), path);
+  const embed = IMAGE_EXT.test(name) || VIDEO_EXT.test(name) || AUDIO_EXT.test(name);
+  // A note reads as its title, not its filename; an attachment keeps its
+  // extension, which is half of what tells you what it is.
+  let snippet = (embed ? "![" : "[") + name.replace(/\.md$/i, "") + "](" + url + ")";
+  const at = Math.min(pos, view.state.doc.length);
+  if (embed) {
+    const line = view.state.doc.lineAt(at);
+    if (at > line.from) snippet = "\n\n" + snippet;
+    snippet += view.state.sliceDoc(at, Math.min(at + 1, view.state.doc.length)) === "\n" ? "\n" : "\n\n";
+  }
+  view.dispatch({ changes: { from: at, insert: snippet },
+                  selection: { anchor: at + snippet.length } });
+  view.focus();
+}
+
 function mediaExtension(tab) {
   return EditorView.domEventHandlers({
     drop(e, view) {
+      // A row dragged out of the tree carries its path: dropping it into text
+      // LINKS the file (dropping it on a folder still moves it — see setupDrop).
+      const kbPath = e.dataTransfer ? e.dataTransfer.getData("application/x-kb-path") : "";
+      if (kbPath) {
+        e.preventDefault();
+        const p = view.posAtCoords({ x: e.clientX, y: e.clientY });
+        insertPathLink(view, tab, kbPath, p == null ? view.state.selection.main.head : p);
+        return true;
+      }
       const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
       if (!files.length) return false;
       e.preventDefault();
@@ -1969,12 +2018,16 @@ function renderNodes(nodes, parentWritable) {
       e.preventDefault(); e.stopPropagation();
       openTreeMenu(n, parentWritable, e.clientX, e.clientY);
     });
-    // dragging a row moves the file/folder; top-level areas stay fixed
+    // dragging a row moves the file/folder — or, dropped into a document,
+    // links it; top-level areas stay fixed
     if (n.path.includes("/")) {
       row.draggable = true;
       row.addEventListener("dragstart", (e) => {
         e.dataTransfer.setData("application/x-kb-path", n.path);
-        e.dataTransfer.effectAllowed = "move";
+        // text/plain is the fallback for everything that is not a folder row or
+        // an editor — a terminal, say, where the path is what you wanted anyway.
+        e.dataTransfer.setData("text/plain", n.path);
+        e.dataTransfer.effectAllowed = "copyMove";
       });
     }
 
@@ -4326,6 +4379,8 @@ function openShortcuts() {
   groups.push({ name: "Good to know", rows: [
     { keys: [], label: "Right-click any file for rename, move, copy, download and permissions" },
     { keys: [], label: "Drag a file onto a folder to move it; drop files onto a folder to upload" },
+    { keys: [], label: "Drag a file from the tree INTO an open document to link it",
+      hint: "images and video embed; everything else becomes a link you can click" },
     { keys: [], label: "In a terminal, Ctrl shortcuts go to the shell — use " +
         comboLabel("Alt+BracketRight") + ", " + comboLabel("Alt+W") + " or " +
         comboLabel("Mod+Backquote") },
