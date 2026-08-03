@@ -70,6 +70,34 @@ async def whoami(request: web.Request) -> web.Response:
                               "claimed": request.headers.get("X-KB-User")})
 
 
+_NUM_RE = re.compile(r"(\d+)")
+
+
+def _name_key(name: str):
+    """Explorer-style ordering: symbols, then digits, then letters, then emoji.
+
+    Plain codepoint order puts `T-Systems` above `_files` and buries every
+    emoji-prefixed folder at the bottom by accident. Bucket on the first
+    character instead, then sort naturally (`v2` before `v10`) on the folded
+    name so case and diacritics don't split obvious neighbours.
+    """
+    ch = name[:1]
+    if not ch:
+        cat = 0
+    elif ord(ch) >= 0x2000:  # emoji and the symbol blocks — after Z, on purpose
+        cat = 3
+    elif ch.isdigit():
+        cat = 1
+    elif ch.isalpha():
+        cat = 2
+    else:
+        cat = 0              # _ - . ( ~ …
+    folded = _fold(name)
+    parts = tuple((int(p), "") if p.isdigit() else (-1, p)
+                  for p in _NUM_RE.split(folded) if p)
+    return (cat, parts, name)  # raw name last: stable, total order for `a` vs `A`
+
+
 async def tree(request: web.Request) -> web.Response:
     root = common.REPO_ROOT
 
@@ -78,7 +106,8 @@ async def tree(request: web.Request) -> web.Response:
         if depth > 12:
             return out
         try:
-            entries = sorted(os.scandir(d), key=lambda e: (not e.is_dir(), e.name))
+            entries = sorted(os.scandir(d),
+                             key=lambda e: (not e.is_dir(), _name_key(e.name)))
         except OSError:
             return out
         for e in entries:
