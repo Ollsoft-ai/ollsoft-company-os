@@ -933,7 +933,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 15}
+            "jobs": jobs, "raw": raw, "v": 16}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
