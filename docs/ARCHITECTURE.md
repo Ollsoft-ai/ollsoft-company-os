@@ -215,7 +215,11 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   toolbar (H1-3, bold/italic/strike/code, lists, task, quote, link, media, hr;
   Ctrl+B/I) and **drag-drop + screenshot-paste** insert media at the drop point —
   the bytes upload to a `_files/` sibling (as the user) and render inline; images
-  land on their own block, other files as links. A **Source** toggle (persisted in
+  land on their own block, other files as links. Dragging a row *out of the tree*
+  into the text instead inserts a **link to that existing file** (`relLink` writes
+  it relative to the document, which is what `resolveMediaUrl` needs to render an
+  embed) — media embeds, anything else becomes a clickable link; the same drag
+  dropped on a folder still moves the file. A **Source** toggle (persisted in
   `localStorage`) drops to raw markdown with line numbers. GFM task/strikethrough/
   table nodes come from `@lezer/markdown` extensions.
 - **Editor tabs**: every opened document/artifact is a tab; each keeps its own

@@ -104,6 +104,9 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   interactive checkboxes, images) over the same markdown — with a formatting
   toolbar and drag-drop / screenshot-paste that stores files and renders them
   inline — or a raw-source view with line numbers. One toggle, same document.
+- **Link what is already there**: drag any file or folder from the tree into an
+  open document and it becomes a link at the drop point — images and video embed,
+  documents open as a tab when you click through.
 - **Kernel-enforced permissions**, surfaced through a web file tree, editor, and a
   real in-browser terminal (each running as your OS user).
 - **VS-Code-style shell**: documents and artifacts open as tabs (background

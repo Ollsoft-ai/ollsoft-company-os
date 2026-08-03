@@ -243,6 +243,88 @@ def test_file_drop_inserts_link_not_image(browser):
         ctx.close()
 
 
+# Dragging a row OUT of the tree and into the text links the file that is
+# already there — the other half of drag-drop (a desktop file uploads, a tree
+# row links). Driven as a real drag: the DataTransfer the tree row fills on
+# dragstart is the exact object handed to the editor's drop.
+DRAG_LINK_JS = """async ([src, xoff]) => {
+  const dt = new DataTransfer();
+  const row = document.querySelector('.tree-item[data-path="' + src + '"]');
+  if (!row) return {err: 'no tree row for ' + src};
+  if (!row.draggable) return {err: 'row is not draggable'};
+  const ds = new DragEvent('dragstart', {bubbles: true, cancelable: true});
+  Object.defineProperty(ds, 'dataTransfer', {value: dt});
+  row.dispatchEvent(ds);
+  const carried = dt.getData('application/x-kb-path');
+
+  const content = document.querySelector('.cm-content');
+  const box = content.getBoundingClientRect();
+  const ev = new DragEvent('drop', {bubbles: true, cancelable: true,
+    clientX: box.left + xoff, clientY: box.top + 8});
+  Object.defineProperty(ev, 'dataTransfer', {value: dt});
+  content.dispatchEvent(ev);
+  await new Promise(r => setTimeout(r, 400));
+  return {carried, src: window.__kbview.state.doc.toString()};
+}"""
+
+
+def test_tree_row_dropped_into_doc_links_it(browser):
+    tag = f"linkdrop_{int(time.time())}"
+    folder = f"company/{tag}"
+    doc = f"{folder}/deep/note.md"
+    c = api("alice")
+    assert c.post("/api/fs/mkdir", json={"path": folder}).status_code == 200
+    assert c.post("/api/fs/mkdir", json={"path": f"{folder}/deep"}).status_code == 200
+    # a name with a space: the link target has to be percent-encoded or the
+    # markdown parser never sees a link at all
+    assert c.post("/api/file", json={"path": f"{folder}/spec notes.md"}).status_code in (200, 409)
+    up = c.post(f"/api/upload?dir={folder}",
+                files={"file": ("pic.png", base64.b64decode(RED_PNG_B64), "image/png")})
+    assert up.status_code == 200, up.text
+
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, doc)
+        set_source(page, "see also:\n")
+        move_cursor(page, len(source(page)))
+
+        # a sibling document: plain link, ".md" dropped from the label, "../"
+        # climbed out of deep/, the space encoded
+        r = page.evaluate(DRAG_LINK_JS, [f"{folder}/spec notes.md", 20])
+        assert not r.get("err"), r
+        assert r["carried"] == f"{folder}/spec notes.md", r
+        assert "[spec notes](../spec%20notes.md)" in r["src"], r["src"]
+
+        # an image: embeds, on its own block
+        expand_folder(page, f"{folder}/_files")
+        move_cursor(page, len(source(page)))
+        r = page.evaluate(DRAG_LINK_JS, [f"{folder}/_files/pic.png", 20])
+        assert not r.get("err"), r
+        assert "![pic.png](../_files/pic.png)" in r["src"], r["src"]
+
+        # the payoff of writing the link RELATIVE: it actually renders. An
+        # absolute path would be handed to the browser as a literal src.
+        page.wait_for_timeout(600)
+        assert page.evaluate(
+            "() => {const i=document.querySelector('.cm-img-embed img');"
+            " return i && i.complete && i.naturalWidth > 0;}"), "embed did not load"
+
+        # ...and the document link opens the document as a tab, not a download
+        page.evaluate("""() => {
+          const i = window.__kbview.state.doc.toString().indexOf('spec notes]');
+          const c = window.__kbview.coordsAtPos(i);
+          const ev = new MouseEvent('dblclick', {bubbles: true, cancelable: true,
+            clientX: c.left + 1, clientY: (c.top + c.bottom) / 2});
+          document.querySelector('.cm-content').dispatchEvent(ev);
+        }""")
+        page.wait_for_function(
+            f"() => window.__kbpath === '{folder}/spec notes.md'", timeout=8000)
+    finally:
+        ctx.close()
+        c.post("/api/fs/delete", json={"path": folder})
+
+
 def test_readonly_doc_has_no_toolbar_and_locked_checkboxes(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
