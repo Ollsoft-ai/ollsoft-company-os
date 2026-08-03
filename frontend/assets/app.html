@@ -151,6 +151,9 @@
   <p id="ptt-status" role="status" aria-live="polite" class="visually-hidden"></p>
   <p id="ptt-error" role="alert" class="visually-hidden"></p>
   <input id="up-tree" type="file" multiple hidden />
+  <!-- folder picker: `webkitdirectory` is what gives each file a
+       webkitRelativePath, i.e. the tree the upload has to recreate -->
+  <input id="up-tree-dir" type="file" webkitdirectory multiple hidden />
   <script type="module" src="/static/app.js?v=1784984673475"></script>
 </body>
 </html>

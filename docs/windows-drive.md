@@ -83,8 +83,8 @@ rclone mount kb:/srv/kb K: --network-mode --vfs-cache-mode full `
   after that it is cached and instant. **Save**: writes land locally and
   upload a few seconds after the application closes the file; the sidecar and
   index refresh a couple of seconds later. Ctrl+S to searchable ≈ 10 s.
-- **Importing folders**: drag any folder tree onto the drive — the browser
-  upload only takes individual files, but Explorer copies trees natively, and
+- **Importing folders**: drag any folder tree onto the drive — Explorer copies
+  trees natively (the web app can also take a dropped or picked folder), and
   everything converts and indexes as it lands.
 - Changes made elsewhere (web app, agents, colleagues) appear in Explorer
   within `--dir-cache-time` (~15 s). SFTP has no change notifications, so

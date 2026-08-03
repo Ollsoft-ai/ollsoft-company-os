@@ -828,6 +828,16 @@ function mediaExtension(tab) {
       }
       const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
       if (!files.length) return false;
+      // A folder dropped into the text would upload as a 0-byte stand-in file.
+      // Folders belong in the tree, so say where to drop them instead.
+      const dirs = [...((e.dataTransfer && e.dataTransfer.items) || [])]
+        .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+        .some((en) => en && en.isDirectory);
+      if (dirs) {
+        e.preventDefault();
+        kbToast("Drop a folder onto a folder in the sidebar, not into a document", "err");
+        return true;
+      }
       e.preventDefault();
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       uploadAndInsert(view, tab, files, pos == null ? view.state.selection.main.head : pos);
@@ -1317,6 +1327,7 @@ const I = {
   plus: svgIcon('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'),
   folderPlus: svgIcon('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>'),
   upload: svgIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
+  folderUp: svgIcon('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="9.5 14 12 11.5 14.5 14"/><line x1="12" y1="11.5" x2="12" y2="17"/>'),
   download: svgIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
   share: svgIcon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>'),
   trash: svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
@@ -1711,6 +1722,7 @@ function openTreeMenu(n, parentWritable, x, y) {
       items.push({ icon: I.plus, label: "New file", fn: () => newFileIn(n.path) });
       items.push({ icon: I.folderPlus, label: "New folder", fn: () => newFolderIn(n.path) });
       items.push({ icon: I.upload, label: "Upload files", fn: () => uploadInto(n.path) });
+      items.push({ icon: I.folderUp, label: "Upload folder", fn: () => uploadFolderInto(n.path) });
       if (fileClipboard) {
         items.push({ icon: I.paste, label: "Paste " + baseName(fileClipboard.path),
                      fn: () => pasteInto(n.path) });
@@ -1918,28 +1930,84 @@ function uploadWithProgress(folder, file, onPct) {
   });
 }
 
+// ---- folder uploads --------------------------------------------------------
+// A FOLDER upload is a list of files each carrying a path relative to the drop
+// target ("sub/deep/a.png"). Two things make that work: every folder on those
+// paths is created first (so an empty folder arrives too, and so /fs/upload
+// always has a real `dir=`), and the per-file POST names the subfolder.
+const UPLOAD_MAX_FILES = 2000;    // a mis-dropped home directory is not an upload
+const UPLOAD_MAX_DEPTH = 24;
+// Machinery, not content: a nested `.git` would become a gitlink in the KB's own
+// audit repo, and `.DS_Store`/`Thumbs.db` are pure noise on every Mac/Windows drop.
+const UPLOAD_SKIP = new Set([".git", ".DS_Store", "Thumbs.db"]);
+
+// Every ancestor folder of every file, so `a/b/c.md` also asks for `a` and `a/b`.
+function ancestorDirs(items) {
+  const s = new Set();
+  for (const it of items) {
+    const parts = it.rel.split("/");
+    parts.pop();
+    let cur = "";
+    for (const p of parts) { cur = cur ? cur + "/" + p : p; s.add(cur); }
+  }
+  return [...s];
+}
+
+// Create the folder skeleton, parents first. An existing folder (409) is a
+// success — dropping a folder next to one that is already there must merge, and
+// a subfolder we couldn't create is remembered so its files are skipped rather
+// than silently landing in the wrong place.
+async function ensureFolders(folder, dirs) {
+  const failed = new Set();
+  const ordered = [...new Set(dirs)].filter(Boolean).sort(
+    (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+  for (const d of ordered) {
+    const parent = d.includes("/") ? d.slice(0, d.lastIndexOf("/")) : "";
+    if (parent && failed.has(parent)) { failed.add(d); continue; }
+    const r = await fetch("/api/fs/mkdir", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: folder + "/" + d }),
+    });
+    if (r.ok || r.status === 409) continue;
+    const j = await r.json().catch(() => ({}));
+    kbToast(j.error || ("could not create folder " + d), "err");
+    failed.add(d);
+  }
+  return failed;
+}
+
 // Shared by drag-drop and the ⇪ picker: register every ghost up front (later
 // ones say "waiting…"), then upload one at a time.
-async function uploadMany(folder, files) {
-  if (!files.length) return 0;
+// `files` is a list of File (flat, landing directly in `folder`) or of
+// {file, rel} for a folder upload, where `rel` is the path under `folder`.
+// `extraDirs` carries folders that hold no files at all — otherwise a dropped
+// empty folder would vanish.
+async function uploadMany(folder, files, extraDirs = []) {
+  const items = files.map((f) => (f instanceof File ? { file: f, rel: f.name } : f));
+  if (!items.length && !extraDirs.length) return 0;
+  const dirs = [...ancestorDirs(items), ...extraDirs];
   const m = _pendingUploads.get(folder) || new Map();
   _pendingUploads.set(folder, m);
-  const ids = files.map((f) => {
+  const ids = items.map((it) => {
     const id = ++_upSeq;
-    m.set(id, { name: f.name, pct: null });
+    m.set(id, { name: it.rel, pct: null });
     return id;
   });
   collapsed.delete(folder);   // the user should SEE the ghosts appear
   rerenderTree();
   let ok = 0;
   try {
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i], id = ids[i];
+    const failed = dirs.length ? await ensureFolders(folder, dirs) : new Set();
+    for (let i = 0; i < items.length; i++) {
+      const { file: f, rel } = items[i], id = ids[i];
+      const sub = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+      if (sub && failed.has(sub)) { m.delete(id); continue; }
       updateGhostRow(id, 0);
-      const r = await uploadWithProgress(folder, f, (pct) => updateGhostRow(id, pct));
+      const r = await uploadWithProgress(sub ? folder + "/" + sub : folder, f,
+                                         (pct) => updateGhostRow(id, pct));
       if (r.status >= 200 && r.status < 300) ok++;
-      else if (r.status === 413) kbToast(f.name + " is larger than the server's upload limit", "err");
-      else kbToast(r.error || "could not upload " + f.name, "err");
+      else if (r.status === 413) kbToast(rel + " is larger than the server's upload limit", "err");
+      else kbToast(r.error || "could not upload " + rel, "err");
       m.delete(id);
     }
   } finally {
@@ -1961,6 +2029,82 @@ function uploadInto(folder) {
     if (ok) kbToast("Uploaded " + ok + (ok > 1 ? " files" : " file") + " to " + folder, "ok");
   };
   input.click();
+}
+
+// Pick a whole FOLDER — `webkitdirectory` hands us every file inside it with a
+// `webkitRelativePath`, i.e. the tree to recreate. (The browser asks for
+// confirmation itself, so there is no second dialog here.) Empty subfolders are
+// invisible to the picker; the drag-drop path does carry them.
+function uploadFolderInto(folder) {
+  const input = $("#up-tree-dir");
+  input.onchange = async () => {
+    const picked = [...input.files];
+    input.value = "";
+    const items = picked
+      .map((f) => ({ file: f, rel: f.webkitRelativePath || f.name }))
+      .filter((it) => !it.rel.split("/").some((seg) => UPLOAD_SKIP.has(seg)));
+    if (!items.length) { kbToast("That folder has nothing to upload", "err"); return; }
+    if (items.length > UPLOAD_MAX_FILES) {
+      kbToast("That folder has " + items.length + " files — the limit is " +
+              UPLOAD_MAX_FILES + " per upload", "err");
+      return;
+    }
+    const top = items[0].rel.split("/")[0];
+    const ok = await uploadMany(folder, items);
+    if (ok) kbToast("Uploaded " + top + " (" + ok + (ok > 1 ? " files" : " file") +
+                    ") to " + folder, "ok");
+  };
+  input.click();
+}
+
+// ---- dropped folders -------------------------------------------------------
+// `dataTransfer.files` cannot describe a folder (a dropped directory shows up
+// as a useless zero-byte entry), so walk the webkitGetAsEntry() tree instead.
+function _entryFile(entry) {
+  return new Promise((res) => entry.file((f) => res(f), () => res(null)));
+}
+// readEntries() returns a batch at a time (~100 in Chromium) and signals the
+// end with an empty one — a single call silently truncates a big folder.
+function _readAllEntries(reader) {
+  return new Promise((res, rej) => {
+    const out = [];
+    const step = () => reader.readEntries((batch) => {
+      if (!batch.length) { res(out); return; }
+      out.push(...batch);
+      step();
+    }, rej);
+    step();
+  });
+}
+async function _walkEntry(entry, prefix, acc, depth) {
+  if (acc.files.length >= UPLOAD_MAX_FILES || UPLOAD_SKIP.has(entry.name)) return;
+  if (entry.isFile) {
+    const f = await _entryFile(entry);
+    if (f) acc.files.push({ file: f, rel: prefix + entry.name });
+    return;
+  }
+  if (!entry.isDirectory || depth >= UPLOAD_MAX_DEPTH) return;
+  const dir = prefix + entry.name;
+  acc.dirs.push(dir);
+  let kids;
+  try { kids = await _readAllEntries(entry.createReader()); }
+  catch (e) { kbToast("could not read " + dir, "err"); return; }
+  for (const k of kids) await _walkEntry(k, dir + "/", acc, depth + 1);
+}
+// Returns {files: [{file, rel}], dirs: [rel]} for a drop of any mix of files and
+// folders. The entry list MUST be taken synchronously: `dataTransfer.items` is
+// emptied as soon as the drop event's task ends, so nothing may be awaited first.
+async function collectDropped(dt) {
+  const entries = [...((dt && dt.items) || [])]
+    .filter((i) => i.kind === "file")
+    .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null));
+  const plain = [...((dt && dt.files) || [])];
+  if (!entries.some(Boolean)) {    // no entries API — flat files are all we get
+    return { files: plain.map((f) => ({ file: f, rel: f.name })), dirs: [] };
+  }
+  const acc = { files: [], dirs: [] };
+  for (const e of entries) if (e) await _walkEntry(e, "", acc, 0);
+  return acc;
 }
 
 // hidden (dot-prefixed) entries are filtered client-side; the sidebar's `.*`
@@ -3487,9 +3631,27 @@ function setupDrop(row, folder) {
       await moveEntry(internal, folder + "/" + baseName(internal));
       return;
     }
-    const files = [...(e.dataTransfer ? e.dataTransfer.files : [])];
-    if (!files.length) return;
-    await uploadMany(folder, files);   // ghost rows + progress, then the real tree
+    // Folders come as entries, not as files — collectDropped walks them into
+    // {rel} paths, so a whole tree can be dropped onto a folder.
+    const { files, dirs } = await collectDropped(e.dataTransfer);
+    if (!files.length && !dirs.length) return;
+    if (files.length >= UPLOAD_MAX_FILES) {
+      kbToast("That is more than " + UPLOAD_MAX_FILES + " files — upload it in parts", "err");
+      return;
+    }
+    // Unlike the folder picker, a drop gets no confirmation from the browser —
+    // and a mis-aimed drop can be a lot of files, so ask once with the count.
+    if (dirs.length) {
+      const tops = dirs.filter((d) => !d.includes("/"));   // what was actually dropped
+      const what = tops.length === 1 ? '"' + tops[0] + '"' : tops.length + " folders";
+      if (!await kbConfirm("Upload " + what + " with " + files.length +
+                           (files.length === 1 ? " file" : " files") + " into " + folder + "?",
+                           { title: "Upload folder", ok: "Upload" })) return;
+    }
+    const ok = await uploadMany(folder, files, dirs);   // ghosts, then the real tree
+    if (ok && dirs.length) {
+      kbToast("Uploaded " + ok + (ok > 1 ? " files" : " file") + " to " + folder, "ok");
+    }
   });
 }
 
@@ -3742,6 +3904,7 @@ const BINDINGS = [
 const EXTRA_COMMANDS = [
   { id: "newfolder", label: "New folder in company", run: () => newFolderIn("company") },
   { id: "upload", label: "Upload files into company", run: () => uploadInto("company") },
+  { id: "uploaddir", label: "Upload a folder into company", run: () => uploadFolderInto("company") },
   { id: "hidden", label: "Show / hide dot-files", run: () => $("#hidden-toggle").click() },
   { id: "foldall", label: "Collapse / expand all folders", run: toggleFoldAll },
   { id: "cron", label: "Scheduled jobs (cron)", when: () => canShell, run: openCron },
@@ -4381,6 +4544,8 @@ function openShortcuts() {
     { keys: [], label: "Drag a file onto a folder to move it; drop files onto a folder to upload" },
     { keys: [], label: "Drag a file from the tree INTO an open document to link it",
       hint: "images and video embed; everything else becomes a link you can click" },
+    { keys: [], label: "Drop a whole folder from your computer onto a folder — subfolders and all",
+      hint: "or right-click the folder → Upload folder" },
     { keys: [], label: "In a terminal, Ctrl shortcuts go to the shell — use " +
         comboLabel("Alt+BracketRight") + ", " + comboLabel("Alt+W") + " or " +
         comboLabel("Mod+Backquote") },
