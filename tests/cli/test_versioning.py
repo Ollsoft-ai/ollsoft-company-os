@@ -209,6 +209,34 @@ def test_activity_only_shows_readable_files(k):
     assert not leaked, f"activity leaked alice's private file to bob: {leaked}"
 
 
+def test_activity_pages_past_the_batch_and_flags_truncation(k):
+    """A capped feed must SAY it is capped, and raising the cap must reach the
+    older rows it hid. Regression: activity used a flat `git log -n 300` over
+    the whole repo before the permission filter. Editor autosaves commit every
+    few seconds, so those 300 covered hours — `--since "8 days ago"` silently
+    returned only today and a week of someone's work read as 'no activity'."""
+    p = f"{DIR}/paging.md"
+    assert k.post("/api/file", json={"path": p}).status_code == 200
+    write(k, p, "one\n")
+    wait_for_rev(k, p, 1)
+    time.sleep(6)                      # past the ~4s commit debounce
+    write(k, p, "one\ntwo\n")
+    revs = wait_for_rev(k, p, 2)
+    older, newer = revs[1]["rev"], revs[0]["rev"]
+
+    # a narrow window keeps this hermetic on a box with real history
+    q = {"since": "10 minutes ago", "author": "alice"}
+    full = k.get("/api/vc/activity", params={**q, "limit": 1000}).json()
+    seen = {c["rev"] for c in full["commits"]}
+    assert {older, newer} <= seen, f"both revs must be in the window: {sorted(seen)[:5]}"
+
+    capped = k.get("/api/vc/activity", params={**q, "limit": 1}).json()
+    assert len(capped["commits"]) == 1, f"limit ignored: {len(capped['commits'])} rows"
+    assert capped["truncated"] is True, "a capped feed must report truncated=True"
+    assert capped["commits"][0]["rev"] == full["commits"][0]["rev"], "newest-first order"
+    assert full["truncated"] is False, "an uncapped window must not claim truncation"
+
+
 def test_cli_reports_who_did_what(k):
     """kb-history over the peer-cred socket: identity comes from the kernel
     (SO_PEERCRED), so `kb-history --author X` answers 'what did X do' — this is

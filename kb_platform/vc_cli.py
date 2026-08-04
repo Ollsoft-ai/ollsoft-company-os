@@ -76,7 +76,10 @@ def main() -> None:
     ap.add_argument("--since", default="1 day ago", help='e.g. "yesterday", "3 days ago" (default: 1 day ago)')
     ap.add_argument("--until", default="", help='e.g. "today 08:00"')
     ap.add_argument("--author", default="", help="only this user's changes")
-    ap.add_argument("--limit", type=int, default=50)
+    # default depends on the mode: one file's versions (50) vs the activity
+    # feed (200, the server's own default) — None means "let the mode decide".
+    ap.add_argument("--limit", type=int, default=None,
+                    help="max rows (default: 50 per file, 200 for the activity feed)")
     ap.add_argument("--rev", default="", help="a version id from the history list")
     ap.add_argument("--show", action="store_true", help="print the file's full content at --rev")
     ap.add_argument("--diff", action="store_true", help="print the patch introduced by --rev (default with --rev)")
@@ -107,7 +110,7 @@ def main() -> None:
         return
 
     if a.path:
-        data = _get("log", path=a.path, limit=str(a.limit))
+        data = _get("log", path=a.path, limit=str(a.limit or 50))
         if a.json:
             print(json.dumps(data))
             return
@@ -121,7 +124,8 @@ def main() -> None:
               f"{data['path']} --rev <id>   (--show for content, --restore to bring it back)")
         return
 
-    data = _get("activity", since=a.since, until=a.until, author=a.author)
+    data = _get("activity", since=a.since, until=a.until, author=a.author,
+                limit=str(a.limit or 200))
     if a.json:
         print(json.dumps(data))
         return
@@ -136,6 +140,11 @@ def main() -> None:
         for f in c["files"]:
             verb = _STATUS.get(f["status"], f["status"])
             print(f"      {verb:<8} " + " -> ".join(f["paths"]))
+    # Say it out loud: a capped feed that looks complete is how "no activity"
+    # gets reported for someone who was working the whole week.
+    if data.get("truncated"):
+        print(f"\n! showing the newest {len(commits)} changes only — there are older ones "
+              f"in this window.\n  narrow it (--author, --until) or raise --limit.")
     print("\ndetails:  kb-history <path>          versions of one file"
           "\n          kb-history <path> --rev <id>   the change itself")
 
