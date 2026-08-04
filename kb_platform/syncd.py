@@ -784,6 +784,13 @@ class SyncDaemon:
     _REV_RE = re.compile(r"^[0-9a-f]{4,40}$")
     _VCUSER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
     _DATE_RE = re.compile(r"^[A-Za-z0-9 :.\-]{1,40}$")
+    # activity paging: commits read per git call, plus the two ceilings on how
+    # deep one request walks before it stops and reports truncated=True — a
+    # commit count and a wall-clock budget (well under the CLI's 30s timeout).
+    _VC_BATCH = 500
+    _VC_MAX_SCAN = 20000
+    _VC_BUDGET_S = 20.0
+    _VC_CHECK_PARALLEL = 8
 
     def _vc_identity(self, request: web.Request) -> str | None:
         token = request.headers.get("X-KB-Auth")
@@ -970,49 +977,90 @@ class SyncDaemon:
                                      status=400)
         if author and not self._VCUSER_RE.match(author):
             return web.json_response({"error": "bad author"}, status=400)
-        args = ["log", "-n", "300", f"--since={since}",
-                "--format=%x01%H%x1f%an%x1f%at%x1f%s", "--name-status"]
+        try:
+            limit = max(1, min(1000, int(request.query.get("limit", 200))))
+        except ValueError:
+            return web.json_response({"error": "bad limit"}, status=400)
+        base = [f"--since={since}", "--format=%x01%H%x1f%an%x1f%at%x1f%s", "--name-status"]
         if until:
-            args.append(f"--until={until}")
+            base.append(f"--until={until}")
         if author:
-            args.append(f"--author=^{author} <")
+            base.append(f"--author=^{author} <")
         loop = asyncio.get_event_loop()
-        r = await loop.run_in_executor(None, self._git_ro, args)
-        commits, cur = [], None
-        for line in r.stdout.splitlines():
-            if line.startswith("\x01"):
-                parts = line[1:].split("\x1f")
-                cur = {"rev": parts[0][:12], "author": parts[1], "ts": int(parts[2]),
-                       "subject": parts[3], "files": []}
-                commits.append(cur)
-            elif line.strip() and cur is not None:
-                bits = line.split("\t")
-                status_c = bits[0][:1]
-                paths = [b for b in bits[1:] if b]
-                cur["files"].append({"status": status_c, "paths": paths})
-        # permission-filter: a file appears only if the caller can read it NOW.
-        # One fresh check per unique path, de-duped within THIS request only.
+        # PAGE through history — never one flat `-n N`. Editor autosaves commit
+        # every few seconds, so the newest few hundred commits can be a single
+        # afternoon: a flat cap silently shadows --since and reports a week of
+        # someone's work as "nothing". Instead walk newest-first in batches
+        # until `limit` VISIBLE rows exist or the window runs out, and say so
+        # when we stopped early. MAX_SCAN bounds the work: each unseen path
+        # costs one runuser readability check.
         rc: dict = {}
-        uniq = {p for c in commits for f in c["files"] for p in f["paths"]}
-        readable = {}
-        for p in uniq:
-            readable[p] = await loop.run_in_executor(None, self._can_read_as, user, p, rc)
-        out = []
-        for c in commits:
-            # REDACT within each row: keep only the paths the caller can read, so
-            # a rename row (paths=[old,new]) can never disclose the never-readable
-            # side. A row with no readable path disappears entirely.
-            files = []
-            for f in c["files"]:
-                vis = [p for p in f["paths"] if readable.get(p)]
-                if vis:
-                    files.append({**f, "paths": vis})
-            if files:
-                out.append({**c, "files": files})
-            if len(out) >= 200:
+        out: list = []
+        scanned = 0
+        truncated = False
+        # A deep window must come back PARTIAL, never hang: the CLI gives up at
+        # 30s, and a timeout tells the caller nothing at all, whereas a short
+        # answer flagged truncated=True is still a true answer.
+        deadline = loop.time() + self._VC_BUDGET_S
+        while len(out) < limit and scanned < self._VC_MAX_SCAN and loop.time() < deadline:
+            args = ["log", "-n", str(self._VC_BATCH), "--skip", str(scanned), *base]
+            r = await loop.run_in_executor(None, self._git_ro, args)
+            commits, cur = [], None
+            for line in r.stdout.splitlines():
+                if line.startswith("\x01"):
+                    parts = line[1:].split("\x1f")
+                    cur = {"rev": parts[0][:12], "author": parts[1], "ts": int(parts[2]),
+                           "subject": parts[3], "files": []}
+                    commits.append(cur)
+                elif line.strip() and cur is not None:
+                    bits = line.split("\t")
+                    status_c = bits[0][:1]
+                    paths = [b for b in bits[1:] if b]
+                    cur["files"].append({"status": status_c, "paths": paths})
+            if not commits:
                 break
+            scanned += len(commits)
+            # Resolve this batch's UNSEEN paths concurrently. Each check is a
+            # runuser+test process (~25ms); doing them one after another is what
+            # made a one-day window take 11s. Same kernel checks, same
+            # per-request freshness — only the waiting overlaps. Bounded so a
+            # deep scan can't fork a swarm of processes on a shared box.
+            unseen = list(dict.fromkeys(
+                p for c in commits for f in c["files"] for p in f["paths"] if p not in rc))
+            if unseen:
+                sem = asyncio.Semaphore(self._VC_CHECK_PARALLEL)
+
+                async def _check(p: str) -> None:
+                    async with sem:
+                        await loop.run_in_executor(None, self._can_read_as, user, p, rc)
+
+                await asyncio.gather(*(_check(p) for p in unseen))
+            for i, c in enumerate(commits):
+                # REDACT within each row: keep only the paths the caller can read,
+                # so a rename row (paths=[old,new]) can never disclose the
+                # never-readable side. A row with no readable path disappears.
+                # The check is per unique path, fresh from the kernel, de-duped
+                # within THIS request only (revocation takes effect immediately).
+                files = []
+                for f in c["files"]:
+                    # every path in this batch is already resolved in rc
+                    vis = [p for p in f["paths"] if rc.get(p)]
+                    if vis:
+                        files.append({**f, "paths": vis})
+                if files:
+                    out.append({**c, "files": files})
+                    if len(out) >= limit:
+                        # more only if this batch still had rows, or was full
+                        truncated = i + 1 < len(commits) or len(commits) == self._VC_BATCH
+                        break
+            if len(commits) < self._VC_BATCH:
+                break   # end of history inside the window — nothing left to page
+        else:
+            truncated = True   # hit MAX_SCAN or the time budget, window still open
         return web.json_response({"since": since, "until": until or None,
-                                  "author": author or None, "commits": out})
+                                  "author": author or None, "limit": limit,
+                                  "scanned": scanned, "truncated": truncated,
+                                  "commits": out})
 
 
 def make_app() -> web.Application:
