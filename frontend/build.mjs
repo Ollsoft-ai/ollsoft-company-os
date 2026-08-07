@@ -9,7 +9,10 @@ await esbuild.build({
   format: "esm",
   outfile: "static/app.js",
   sourcemap: false,
-  minify: false,
+  // Minified + literal UTF-8 (app.html declares utf-8): ~2 MB of readable JS
+  // was real parse time on every load, and every byte rides the tunnel.
+  minify: true,
+  charset: "utf8",
   logLevel: "info",
 });
 

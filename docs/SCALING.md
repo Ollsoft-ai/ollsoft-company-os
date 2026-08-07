@@ -23,12 +23,16 @@ guessed; re-measure before trusting them at a different scale.
    1,119 nodes, no cache, no ETag). ~25 users saturate one core of four.
    Fix shape: short-TTL per-backend cache, or an mtime-keyed ETag so the poll
    is usually 304. **Open.**
-4. **RLS flat tax grows with file count.** `blocks_read` evaluates
-   `kb.can_read()` over all of `kb.files` once per statement (hashed subplan;
-   see the comment block in `scripts/schema.sql`). ~0.2 s at 675 files,
-   linear: ~2 s at 10× — paid by every search keystroke, task list, and
-   toggle gate. Fix shape: materialized per-user visibility maintained by the
-   indexer. **Open — the known big one.**
+4. ~~**RLS flat tax grows with file count.**~~ **Fixed 2026-08-07.** Was
+   `kb.can_read()` over all of `kb.files` once per statement — measured
+   **0.34 s at 655 files**, linear, paid by every search keystroke, task list
+   and toggle gate. Now both policies gate on `kb.visible_files`, a
+   materialized `(usr, path)` set the indexer diff-syncs on its 1 s sweep
+   (`indexer.py`, `compute_visibility` / `refresh_visibility`). Measured:
+   `/api/tasks` **356 ms → 20 ms**, search SQL **685 ms → 130 ms**.
+   `kb.can_read()` stays as the parity oracle — it and `compute_visibility()`
+   must agree pair-for-pair, asserted per user in
+   `tests/cli/test_visible_files.py`.
 5. **Indexer restart = full resweep** (~10 min at 93k blocks, watches arm only
    after). Don't restart it casually with deploys; see `/kb-deploy` skill.
    Fix shape: persist sweep signatures so a restart resumes instead of
@@ -53,6 +57,46 @@ guessed; re-measure before trusting them at a different scale.
     loop, forever. Flipping the flag needs care (flush-before-evict), so it
     was deliberately NOT flipped in the quick pass. **Open.** Related:
     `/var/lib/kb-syncd` state files are never compacted or pruned.
+11. **Content search is a sequential scan, and always will be under RLS.**
+    `tsv @@` and `ILIKE` are not leakproof, so Postgres refuses to evaluate
+    them below a policy qual — no index on `kb.blocks` is reachable for a
+    user's own query, whatever indexes exist. So search latency scales with
+    **heap width × row count**, not with indexing. That is why the dead
+    `embedding` column and three zero-scan indexes were dropped 2026-08-07
+    (`kb.blocks` 186 MB → 50 MB; search SQL 330 ms → 130 ms at constant row
+    count). Do NOT "fix" this with a `SECURITY DEFINER` wrapper to reach the
+    GIN index — that was tried and reverted the same day: with RLS off inside
+    the definer, attacker-controlled non-leakproof predicates run against rows
+    the caller cannot see, and a LIKE pattern ending in a lone backslash
+    errors only when some row matches, i.e. a one-bit oracle over the whole
+    corpus via `/api/artifact/query`. See the note in `scripts/schema.sql`.
+    Next levers, in order: keep the heap narrow; `shared_buffers` is **128 MB**
+    on a 23 GB box, so raise it (needs a restart) to keep the table resident.
+    **Open (bounded).**
+
+## Future: semantic search
+
+Deliberately NOT built (2026-08-07). The old `embedding` column was a 64-dim
+MD5 signed-hash placeholder — never a model, so never semantically useful, and
+nothing ever read it; it was dropped rather than kept as dead heap weight.
+If it comes back, the shape that works here:
+
+- **Chunk-level, not block-level.** A "block" is one *line* (avg 99 chars, 32%
+  under 40) — embedding those is noise. Chunk by section/paragraph: better
+  retrieval and ~20× fewer vectors.
+- **Its own table**, never a column on `kb.blocks`. 1536 dims × 4 B × 93k rows
+  ≈ 570 MB; inline that would be 7× the current heap and wreck keyword search
+  (see item 11 — every search reads the heap).
+- **A separate worker**, like `kb-convert`. The indexer is local, synchronous
+  and fail-closed; a network call in `reindex_file` would wreck that.
+- **Mind the same RLS trap**: `<=>` is not leakproof either, so HNSW is
+  unreachable under a policy — pre-filter to the caller's `visible_files`, and
+  note pgvector's iterative index scans need ≥ 0.8 (box upgraded to 0.8.6 on
+  2026-08-07 in preparation).
+- Cost is a non-issue: the whole corpus is ~9 MB of text ≈ 2.3 M tokens, well
+  under $0.10 to embed with a current small model.
+- Expose it to **agents via a skill** first (they can afford a ~200 ms embed
+  round trip); the app's search box debounces at 180 ms and cannot.
 
 ## Growth hygiene (fixed 2026-07-29)
 
@@ -70,8 +114,10 @@ guessed; re-measure before trusting them at a different scale.
 
 The box (4 vCPU / 8 GB) is comfortable to ~10 active users. For a company
 rollout, 8 vCPU / 16 GB removes RAM as the first wall and halves resweep and
-suite times. Hardware does NOT fix items 2–4 above — they are algorithmic and
-arrive with user count and corpus size regardless of cores.
+suite times. Hardware does NOT fix items 2–3 above — they are algorithmic and
+arrive with user count and corpus size regardless of cores. (Item 4 was the
+third of that set and is now fixed; item 11 is bounded by heap size, which
+*is* partly a hardware/config lever — see `shared_buffers`.)
 
 ## Drift watchlist (things that rot silently)
 
