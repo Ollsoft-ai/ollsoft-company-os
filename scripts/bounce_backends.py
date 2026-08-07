@@ -76,6 +76,12 @@ def bounce(browser, user, creds):
     page.fill('input[name="password"]', creds[user])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")
+    # Wait for the app to have BOOTED, not merely navigated: #toggleterm is
+    # wired after the first render, so clicking as soon as the URL changes
+    # races that and lands on a dead button. The click is swallowed and this
+    # then times out waiting for a terminal that was never opened — reporting
+    # a Playwright error while leaving the backend un-bounced.
+    page.wait_for_selector('[data-testid="tree"] .tree-item')
     page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     page.click("#terminal")
