@@ -31,6 +31,21 @@ def api(user):
 
 @pytest.fixture()
 def doc():
+    """A document of this test's OWN, never a shared path.
+
+    These tests used one module-level DOC, deleting and recreating it between
+    them. Deleting the file is what retires its CRDT room, and that happens on
+    the watcher's schedule — so recreating the same path immediately could land
+    the next test's content in the PREVIOUS test's still-live room, merging one
+    test's text into another. That produced spliced lines like
+    '# Meeting  hh hhhhhnotes' (fragments of two different tests' typing) and
+    made these tests fail only when run together, which read exactly like the
+    merge bug they exist to catch. A unique path per test removes the shared
+    state entirely.
+    """
+    global DOC, DISK
+    DOC = f"company/extmerge_{int(time.time() * 1000)}.md"
+    DISK = f"/srv/kb/{DOC}"
     k = api("alice")
     assert k.post("/api/file", json={"path": DOC}).status_code in (200, 409)
     assert k.post("/api/artifact/write", json={"path": DOC, "content": BASE_TEXT}).status_code == 200
