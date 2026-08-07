@@ -137,6 +137,76 @@ def _line_changes(base, other):
     return out
 
 
+def _apply_line_edits(txt, live: str, target: str) -> None:
+    """Turn the live CRDT text into `target` using the SMALLEST spans possible.
+
+    Never a global character diff. diff3 gives a clean `target`, but flattening
+    it back to `diff_main(live, target)` re-introduces exactly the problem diff3
+    was chosen to avoid: on repetitive prose (near-identical lines, runs of the
+    same letter) dmp finds no good alignment and emits one huge delete plus one
+    huge insert.
+
+    That is data loss, not cosmetics. A concurrent keystroke from a browser that
+    lands INSIDE a deleted span loses its anchor characters — the CRDT keeps the
+    text (it never drops an insert) but it collapses to the START of the deleted
+    region. Measured: a user typing in the third line had their text surface
+    inside the document's title (`#  hhhhMeeting notes`), which is precisely the
+    corruption tests/e2e/test_external_merge.py reproduces.
+
+    So: diff by LINE, and inside each changed run trim the identical head and
+    tail. The deleted span can then never exceed the lines that actually
+    differ, and an unlucky concurrent keystroke can at worst move to the start
+    of the one line the external writer genuinely rewrote.
+
+    Edits are applied in DESCENDING offset order so that mutating the text
+    cannot shift the offsets of edits not yet applied.
+
+    OFFSETS ARE UTF-8 BYTES, NOT CHARACTERS. pycrdt/yrs index Text by byte, and
+    they do not complain when handed a Python string index: `insert()` at an
+    offset that lands mid-character silently appends to the END of the document
+    instead, and `del` of a partial character discards the remainder of the
+    text. On a corpus this Czech, with emoji in half the folder names, passing
+    len(str) offsets is not an edge case — it is most documents. Every
+    conversion below goes through .encode(); keep it that way.
+    """
+    a = live.splitlines(keepends=True)
+    b = target.splitlines(keepends=True)
+    starts, acc = [], 0
+    for ln in a:                      # BYTE offset of each live line
+        starts.append(acc)
+        acc += len(ln.encode())
+    starts.append(acc)
+
+    edits = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        old, new = "".join(a[i1:i2]), "".join(b[j1:j2])
+        base = starts[i1]
+        head = 0                      # shared prefix stays untouched
+        while head < len(old) and head < len(new) and old[head] == new[head]:
+            head += 1
+        tail = 0                      # …and so does the shared suffix
+        while (tail < len(old) - head and tail < len(new) - head
+               and old[-1 - tail] == new[-1 - tail]):
+            tail += 1
+        # head/tail are character counts over text identical on both sides, so
+        # their byte widths are the same in `old` and `new`.
+        head_b = len(old[:head].encode())
+        tail_b = len(old[len(old) - tail:].encode()) if tail else 0
+        old_b = len(old.encode())
+        edits.append((base + head_b, base + old_b - tail_b,
+                      new[head:len(new) - tail]))
+
+    with txt.doc.transaction():
+        for start, end, ins in reversed(edits):
+            if end > start:
+                del txt[start:end]
+            if ins:
+                txt.insert(start, ins)
+
+
 def three_way_merge_lines(base_text, ours_text, theirs_text):
     base = base_text.splitlines(keepends=True)
     ours = ours_text.splitlines(keepends=True)
@@ -471,18 +541,7 @@ class SyncDaemon:
             if conflicts:
                 log.warning("external merge for %s: %d conflicting region(s) — "
                             "the live editors' lines were kept", name, conflicts)
-        ops = self.dmp.diff_main(live, target)
-        self.dmp.diff_cleanupSemantic(ops)
-        with txt.doc.transaction():
-            idx = 0
-            for op, data in ops:
-                if op == 0:
-                    idx += len(data)
-                elif op == -1:
-                    del txt[idx:idx + len(data)]
-                elif op == 1:
-                    txt.insert(idx, data)
-                    idx += len(data)
+        _apply_line_edits(txt, live, target)
         # Record what's ON DISK as the new shadow. If the merge kept concurrent
         # keystrokes (doc != disk), the flush loop sees the difference and writes
         # the merged text back out — that's the reconciliation, not a loop.
