@@ -430,8 +430,29 @@ body { display: flex; flex-direction: column; }
 #editor:empty::before { content: "Ctrl+P to jump to a file · Ctrl+` for a shell · ? for every shortcut";
   position: absolute; inset: 0; display: grid; place-items: center;
   font-family: var(--mono); font-size: .8rem; color: var(--faint); }
-.tab-content { height: 100%; }
+.tab-content { height: 100%; position: relative; }
 .artifact-frame { width: 100%; height: 100%; border: 0; background: #fff; }
+
+/* ── loading affordances ──────────────────────────────────────────────────
+   One spinner for the whole app: .upspin (defined with the upload ghost).
+   Everything here answers the same question a frozen empty pane cannot —
+   "is this blank, or still working?" */
+.kb-loading { position: absolute; inset: 0; z-index: 4; display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: .6rem;
+  background: var(--bg); color: var(--muted); font-size: .82rem; }
+.kb-loading .upspin { width: 1.15rem; height: 1.15rem; }
+/* Held invisible for 180ms, then faded in: a fast open must not flash a
+   spinner (that reads as jank), a slow one must never look frozen. */
+.kb-loading, .palette-searching { animation: loadfade .16s ease-out .18s both; }
+@keyframes loadfade { from { opacity: 0; } to { opacity: 1; } }
+/* Reduced motion keeps the 180ms hold — that is timing, not motion, and it is
+   what stops a fast open from flashing — but snaps in instead of fading. */
+@media (prefers-reduced-motion: reduce) {
+  .kb-loading, .palette-searching { animation-duration: .01s; } }
+/* content search still in flight — sits under whatever already matched */
+.palette-searching { display: flex; align-items: center; gap: .5rem;
+  padding: .5rem .6rem; font-size: .8rem; color: var(--muted); }
+.palette-head .upspin { flex: 0 0 auto; width: .78rem; height: .78rem; }
 
 .access-badge { font-family: var(--mono); font-size: .66rem; font-weight: 600; letter-spacing: .04em;
   padding: .14rem .6rem; border-radius: 20px; white-space: nowrap; flex: 0 0 auto; }
@@ -564,6 +585,11 @@ body { display: flex; flex-direction: column; }
   border-bottom: 1px solid var(--border); }
 .palette-kind { font-size: .64rem; text-transform: uppercase; letter-spacing: .09em;
   color: var(--faint); font-weight: 600; flex: 0 0 auto; }
+/* the "FIND" label pulses while a content search is in flight — peripheral
+   feedback at the caret, where the eye already is, not just down in the list */
+.palette-kind.busy { color: var(--accent);
+  animation: live 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .palette-kind.busy { animation: none; } }
 .palette-input { flex: 1; background: transparent; border: 0; outline: none; color: var(--ink);
   font-family: var(--sans); font-size: .96rem; padding: .8rem 0; min-width: 0; }
 .palette-input::placeholder { color: var(--faint); }

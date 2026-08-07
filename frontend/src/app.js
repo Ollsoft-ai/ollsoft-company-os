@@ -2385,6 +2385,29 @@ function renderDocTitle(t) {
   }
 }
 
+// A spinner over a tab's pane until its content is actually there. Scoped to
+// the tab (not the editor column) so switching away from a slow-opening
+// document doesn't drag its spinner onto the one you switched to. The CSS
+// holds it invisible for 180ms, so a fast open never flashes it.
+function showTabLoading(t, label) {
+  if (!t.el || t.el.querySelector(".kb-loading")) return;
+  const el = document.createElement("div");
+  el.className = "kb-loading";
+  el.setAttribute("role", "status");
+  el.setAttribute("data-testid", "tab-loading");
+  const spin = document.createElement("span");
+  spin.className = "upspin";
+  const txt = document.createElement("span");
+  txt.textContent = label;
+  el.append(spin, txt);
+  t.el.appendChild(el);
+}
+
+function clearTabLoading(t) {
+  if (!t || !t.el) return;
+  for (const el of t.el.querySelectorAll(".kb-loading")) el.remove();
+}
+
 function activateTab(t) {
   active = t;
   for (const o of tabs) o.el.style.display = o === t ? "" : "none";
@@ -2443,9 +2466,11 @@ async function openPath(path, kind) {
 
 // ---- secret viewer: masked, reveal/copy/edit — never the collab editor ----
 async function mountSecret(t) {
+  showTabLoading(t, "Opening " + baseName(t.path) + "…");
   const r = await fetch("/api/file?path=" + encodeURIComponent(t.path));
   const j = await r.json().catch(() => ({}));
   if (!tabs.includes(t)) return;
+  clearTabLoading(t);   // el.innerHTML below would strand it anyway
   refreshTabBadge(t);
   const el = t.el;
   el.className = "tab-content secret-view";
@@ -2510,12 +2535,26 @@ async function mountSecret(t) {
 }
 
 async function mountDoc(t) {
+  // Until the CRDT session syncs there is nothing in the pane — not an empty
+  // document, just nothing yet. Say so, or a slow open is indistinguishable
+  // from a blank file.
+  showTabLoading(t, "Opening " + baseName(t.path) + "…");
+  // Both round trips start NOW, in parallel — they are independent, and over a
+  // tunnel each costs a full RTT; serializing them was a visible chunk of the
+  // time-to-first-keystroke on every doc open.
+  const propsP = fetch("/fs/props?path=" + encodeURIComponent(t.path));
+  // the doc's lineage id: presenting it is what admits us to the live session
+  // (a tab holding an older lineage would re-merge stale history as duplicated
+  // text — the relay refuses those instead)
+  const epochP = fetch("/api/doc-epoch?path=" + encodeURIComponent(t.path))
+    .then((r) => r.json()).then((j) => j.epoch || "")
+    .catch(() => "");  // offline; the connect will just be refused
   // Decide editable-ness up front so the editor opens in the right mode. A
   // read-only file still opens in the live session (you see it + updates), just
   // not editable — the daemon also refuses to persist edits from a read-only join.
   let access = { read: true, write: true };
   try {
-    const rr = await fetch("/fs/props?path=" + encodeURIComponent(t.path));
+    const rr = await propsP;
     const pr = await rr.json();
     // gone (404), or present-but-unreadable (hub returns 200 with read:false) —
     // either way there is nothing to edit, so say so instead of mounting a dead,
@@ -2532,12 +2571,7 @@ async function mountDoc(t) {
   if (active === t) setAccessBadge(access);
   const readOnly = !access.write;
 
-  // the doc's lineage id: presenting it is what admits us to the live session
-  // (a tab holding an older lineage would re-merge stale history as duplicated
-  // text — the relay refuses those instead)
-  let epoch = "";
-  try { epoch = (await (await fetch("/api/doc-epoch?path=" + encodeURIComponent(t.path))).json()).epoch || ""; }
-  catch (e) { /* offline; the connect will just be refused */ }
+  const epoch = await epochP;
   if (!tabs.includes(t)) return;
   const ydoc = new Y.Doc();
   const provider = new WebsocketProvider(wsBase() + "/ws/doc", t.path, ydoc,
@@ -2619,8 +2653,15 @@ async function mountDoc(t) {
   });
   provider.on("sync", (isSynced) => {
     t.synced = isSynced;
+    if (isSynced) clearTabLoading(t);   // the text is really here now
     if (active === t) { window.__kbsynced = isSynced; renderSyncBadge(); }
   });
+  // Never spin forever. If the relay is unreachable the doc genuinely has no
+  // content to show, but an endless spinner claims it is still coming — drop
+  // to the empty editor and let the "not syncing" badge tell the true story.
+  setTimeout(() => {
+    if (tabs.includes(t) && !t.synced) clearTabLoading(t);
+  }, 10000);
   if (active === t) { syncTestHooks(); updateModeUI(); renderPresence(); }
 }
 
@@ -2684,8 +2725,14 @@ function renderPresence() {
 
 // ---- artifacts (sandboxed, query-as-viewer) -------------------------------
 function mountArtifact(t) {
+  // An artifact is a whole page fetched into a sandboxed frame — the slowest
+  // thing to open, and until it paints the frame is plain white.
+  showTabLoading(t, "Opening " + baseName(t.path) + "…");
   const frame = document.createElement("iframe");
   frame.className = "artifact-frame";
+  // 'load' fires for error responses too, which is what we want: either way
+  // the frame is showing its own content now and the spinner would be a lie.
+  frame.addEventListener("load", () => clearTabLoading(t));
   // Two independent walls: (1) sandbox="allow-scripts" WITHOUT allow-same-origin
   // gives the artifact an opaque origin — it cannot touch the app's DOM, cookies,
   // or session. (2) The /api/artifact/raw response carries a strict CSP
@@ -4271,10 +4318,34 @@ function openPalette(mode, seed) {
   ov.addEventListener("click", (e) => { if (e.target === ov) closePalette(); });
 
   let items = [], sel = 0, seq = 0;
+  // Is a content search in flight? Filename matches are computed locally and
+  // appear instantly; document contents come from the server. Without this the
+  // gap between the two showed "No matches" — stating as fact something we did
+  // not know yet.
+  let searching = false;
+  const willSearch = (q) => !!q && !q.startsWith(">") && q.length >= 2;
+
+  const spinnerRow = (label) => {
+    const row = document.createElement("div");
+    row.className = "palette-searching";
+    row.setAttribute("role", "status");
+    row.setAttribute("data-testid", "palette-searching");
+    const s = document.createElement("span");
+    s.className = "upspin";
+    const txt = document.createElement("span");
+    txt.textContent = label;
+    row.append(s, txt);
+    return row;
+  };
 
   const render = () => {
     list.innerHTML = "";
+    kind.classList.toggle("busy", searching);
     if (!items.length) {
+      if (searching) {                     // don't claim "nothing" prematurely
+        list.appendChild(spinnerRow("Searching documents…"));
+        return;
+      }
       const empty = document.createElement("div");
       empty.className = "palette-empty muted";
       empty.textContent = "No matches";
@@ -4331,6 +4402,9 @@ function openPalette(mode, seed) {
       row.addEventListener("click", () => choose(i));
       list.appendChild(row);
     });
+    // Filename matches are already showing; tell the user document contents
+    // are still coming rather than letting them read this as the full answer.
+    if (searching) list.appendChild(spinnerRow("Searching documents…"));
   };
 
   const choose = (i) => {
@@ -4412,10 +4486,16 @@ function openPalette(mode, seed) {
     contentTimer = _palette.timer = setTimeout(async () => {
       let j;
       try { j = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json(); }
-      catch (e) { return; }
-      if (mine !== seq || _palette !== self) return;   // superseded or closed
+      catch (e) {
+        // Offline or the backend refused: stop claiming a search is running.
+        if (mine === seq && _palette === self) { searching = false; render(); }
+        return;
+      }
+      // Superseded or closed: a NEWER search owns `searching` now — leave it.
+      if (mine !== seq || _palette !== self) return;
+      searching = false;
       const hits = (j.results || []).slice(0, 12);
-      if (!hits.length) return;
+      if (!hits.length) { render(); return; }   // repaint to drop the spinner
       for (const m of hits) {
         items.push({
           group: "In documents", icon: I.doc, path: m.path + ":" + m.line,
@@ -4432,6 +4512,9 @@ function openPalette(mode, seed) {
     const q = input.value.trim();
     items = build(q);
     sel = 0;
+    // Set BEFORE render so the very first paint after a keystroke already
+    // shows the pending state — not one frame late.
+    searching = willSearch(q);
     render();
     searchContents(q);
   };

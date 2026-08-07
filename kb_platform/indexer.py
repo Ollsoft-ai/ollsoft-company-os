@@ -13,9 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import grp
-import hashlib
 import logging
-import math
 import os
 import pwd
 import re
@@ -101,17 +99,78 @@ ASSIGNEE_RE = re.compile(r"(?:^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)")
 TAG_RE = re.compile(r"(?:^|\s)#([A-Za-z0-9_][A-Za-z0-9_-]*)")
 NOLOGIN = {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false", ""}
 PERMS_RESCAN = 1.0  # seconds; fallback so chmod propagates even if inotify misses IN_ATTRIB
+# Advisory-lock key serialising kb.visible_files writers (this daemon and
+# scripts/refresh_visibility.py). Arbitrary but must match on both sides.
+VIS_LOCK = 0x6B62_5649  # "kbVI"
 
 
-def embed(text: str) -> str:
-    """Deterministic 64-dim signed-hash embedding. A stand-in for a real model;
-    swapping in an embedding API is a one-function change. Returns pgvector text."""
-    v = [0.0] * 64
-    for tok in re.findall(r"\w+", text.lower()):
-        h = hashlib.md5(tok.encode()).digest()
-        v[h[0] % 64] += 1.0 if (h[1] & 1) else -1.0
-    n = math.sqrt(sum(x * x for x in v)) or 1.0
-    return "[" + ",".join(f"{x / n:.6f}" for x in v) + "]"
+def compute_visibility(files_rows, group_rows, users) -> set[tuple[str, str]]:
+    """The Python mirror of kb.can_read(): every (usr, path) pair the Unix read
+    check grants, computed from the SAME state the SQL oracle reads (kb.files
+    rows + kb.user_groups rows — NOT a fresh stat, so index and visibility can
+    never disagree). kb.visible_files is what the RLS policies gate on; this
+    function is why one hashed subplan replaces ~0.3 s of per-statement plpgsql.
+    Any semantic change here must land in kb.can_read too — schema.sql says the
+    same in the other direction, and the parity check is
+    `SELECT count(*) FROM kb.visible_files v WHERE NOT kb.can_read(v.path)`.
+
+    files_rows: (path, owner_name, group_name, mode, acl_users, acl_groups,
+    acl_x_users, acl_x_groups) — the read check uses mode/owner/group plus the
+    READ ACL columns; ancestor traversal uses mode x plus the TRAVERSE columns.
+    Like the kernel (and kb._has), exactly one mode class applies — owner, else
+    group, else other — and that class's denial is final."""
+    files = {r[0]: r for r in files_rows}
+    member: dict[str, set[str]] = {}
+    for u, g in group_rows:
+        member.setdefault(u, set()).add(g)
+
+    def has(row, u, groups, nbit: int) -> bool:
+        owner, group, mode = row[1], row[2], row[3]
+        if owner == u:
+            return bool(mode & (nbit << 6))
+        if group in groups:
+            return bool(mode & (nbit << 3))
+        return bool(mode & nbit)
+
+    out: set[tuple[str, str]] = set()
+    for u in users:
+        groups = member.get(u, set())
+        reach: dict[str, bool] = {}   # dir -> it AND all its ancestors traverse
+
+        def traversable(d: str) -> bool:
+            """Iterative on purpose: kb.can_read walks ancestors in a plpgsql
+            FOR loop with no depth limit, so recursing one Python frame per
+            path component would diverge from the oracle by raising
+            RecursionError on a deep tree — and that exception propagates out
+            of the sweep, freezing visibility sync for EVERY user."""
+            chain = []
+            d0 = d
+            while True:
+                got = reach.get(d0)
+                if got is not None:
+                    break
+                row = files.get(d0)
+                # a missing ancestor row denies, exactly like can_read's NOT FOUND
+                got = row is not None and (has(row, u, groups, 1)
+                                           or u in (row[6] or [])
+                                           or bool(groups & set(row[7] or [])))
+                if not got or "/" not in d0:
+                    break               # denied, or reached a top-level dir
+                chain.append(d0)        # depends on its parent: resolve upward
+                d0 = d0.rsplit("/", 1)[0]
+            for anc in reversed(chain):
+                reach[anc] = got
+            reach[d0] = got
+            return reach[d]
+
+        for path, row in files.items():
+            if not (has(row, u, groups, 4) or u in (row[4] or [])
+                    or groups & set(row[5] or [])):
+                continue
+            if "/" in path and not traversable(path.rsplit("/", 1)[0]):
+                continue
+            out.add((u, path))
+    return out
 
 
 def parse_blocks(text: str) -> list[dict]:
@@ -157,6 +216,16 @@ class Indexer:
         # commit/rollback on a shared transaction loses or half-applies writes.
         self._db = asyncio.Lock()
         self._groups_cache = None   # last (usr, grp) set refresh_groups synced
+        # Last (usr, path) set refresh_visibility synced. MUST be dropped
+        # whenever a kb.files row is deleted: kb.visible_files has an
+        # ON DELETE CASCADE FK to it, so the delete is a SECOND writer that
+        # empties visibility rows behind this cache's back. Without the reset,
+        # a delete+recreate inside one sweep window (mv out and back, a
+        # revert, an rsync restore) recomputes the SAME set, hits the
+        # equality early-return, and leaves the file with NO visibility rows —
+        # invisible to every user, in search and in the To-dos view, until an
+        # unrelated permission change happens to force a full diff.
+        self._vis_cache = None
 
     def _note_failure(self, rel: str, err: Exception):
         """A path exists but could not be indexed. Log ONCE per failure streak —
@@ -286,6 +355,23 @@ class Indexer:
             with self.conn.cursor() as cur:
                 cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
             self.conn.commit()
+            # Publish the PERMISSIONS too, right now. Losing read access is the
+            # usual reason we are here (someone made the file private), and RLS
+            # decides from kb.files' columns — but the sweep will not refresh
+            # them for us: this very failure records the path in _failed_at at
+            # its CURRENT signature, and _skip() then returns before reaching
+            # the permission-refresh branch. Measured: kb.files kept serving the
+            # old 0644 indefinitely after a chmod 600 (the row, i.e. the file's
+            # existence/size/mtime, stayed visible to users who had just lost
+            # access; content was already gone with the blocks above).
+            # Separate transaction: a getfacl failure here must not roll back
+            # the block deletion, which is the part that matters most.
+            try:
+                with self.conn.cursor() as cur:
+                    self.upsert_file(cur, rel, p)
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()   # sweep's seal path is the backstop
             raise
         with self.conn.cursor() as cur:
             self.upsert_file(cur, rel, p, pre)
@@ -293,10 +379,10 @@ class Indexer:
             for b in parse_blocks(text):
                 cur.execute(
                     "INSERT INTO kb.blocks(file_path,line,kind,checked,block_ref,text,"
-                    "assignees,tags,tsv,embedding) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('english',%s),%s::vector)",
+                    "assignees,tags,tsv) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('english',%s))",
                     (rel, b["line"], b["kind"], b["checked"], b["ref"], b["text"],
-                     b["assignees"], b["tags"], b["text"], embed(b["text"])))
+                     b["assignees"], b["tags"], b["text"]))
         self.conn.commit()
         self._note_success(rel)
 
@@ -308,6 +394,7 @@ class Indexer:
         with self.conn.cursor() as cur:
             cur.execute("DELETE FROM kb.files WHERE path=%s OR path LIKE %s", (rel, rel + "/%"))
         self.conn.commit()
+        self._vis_cache = None   # the FK cascade just deleted visibility rows
         for tracked in [rel, *[k for k in self._sig if k.startswith(rel + "/")]]:
             self._forget(tracked)
 
@@ -343,6 +430,69 @@ class Indexer:
                             "ON CONFLICT DO NOTHING", (usr, g))
         self.conn.commit()
         self._groups_cache = desired
+
+    def refresh_visibility(self):
+        """Diff-sync kb.visible_files against compute_visibility(). Same shape
+        as refresh_groups: steady state is a pure in-memory comparison, the
+        table is touched only when the computed set actually changed — so the
+        1 s sweep costs a couple ms of Python, not writes. Runs AFTER
+        reconcile_perms in the sweep, so it reads the permission columns that
+        sweep just refreshed: revocation reaches the policies in the same tick
+        it reaches kb.files.
+
+        The advisory lock serialises this against scripts/refresh_visibility.py
+        (the manual/migration resync). Both do read-modify-write on the same
+        table under READ COMMITTED, so without it a concurrent pair can compute
+        their diffs from the same snapshot and re-INSERT pairs the other just
+        revoked."""
+        users = [u.pw_name for u in pwd.getpwall() if 1000 <= u.pw_uid < 65000]
+        with self.conn.cursor() as cur:
+            # The lock is transaction-scoped, so EVERY exit from here on must
+            # end the transaction — an early `return` that just falls out would
+            # hold it (and an idle-in-transaction snapshot) until some later
+            # method happens to commit.
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (VIS_LOCK,))
+            cur.execute("SELECT path, owner_name, group_name, mode, acl_users, "
+                        "acl_groups, acl_x_users, acl_x_groups FROM kb.files")
+            files_rows = cur.fetchall()
+            cur.execute("SELECT usr, grp FROM kb.user_groups")
+            group_rows = cur.fetchall()
+            desired = compute_visibility(files_rows, group_rows, users)
+            if desired == self._vis_cache:
+                self.conn.rollback()      # nothing to write; release the lock
+                return
+            cur.execute("SELECT usr, path FROM kb.visible_files")
+            current = set(cur.fetchall())
+            gone, new = current - desired, desired - current
+            if gone:
+                cur.executemany(
+                    "DELETE FROM kb.visible_files WHERE usr=%s AND path=%s", sorted(gone))
+            if new:
+                # the file row is guaranteed to exist: `desired` was computed
+                # from kb.files in this same transaction, and this connection
+                # is the only writer of that table
+                cur.executemany(
+                    "INSERT INTO kb.visible_files(usr,path) VALUES(%s,%s) "
+                    "ON CONFLICT DO NOTHING", sorted(new))
+        self.conn.commit()
+        self._vis_cache = desired
+        if gone or new:
+            log.info("visibility synced: +%d -%d pairs", len(new), len(gone))
+
+    def _vacuum_blocks(self):
+        """The startup walk rewrote every block (reindex_file is DELETE+INSERT),
+        leaving ~a full table of dead tuples. Every content search is a
+        sequential scan (see schema.sql on why no index is reachable under
+        RLS), so that bloat is paid by every user on every search until vacuum
+        reclaims it. Do it now, deterministically, instead of waiting for
+        autovacuum's threshold. VACUUM can't run inside a transaction, so this
+        uses its own autocommit connection; best-effort by design."""
+        try:
+            with psycopg.connect(f"dbname={common.PG_DB}", autocommit=True) as c:
+                c.execute("VACUUM (ANALYZE) kb.blocks")
+            log.info("post-walk vacuum of kb.blocks done")
+        except Exception as e:
+            log.warning("post-walk vacuum failed (autovacuum will catch up): %s", e)
 
     def reindex_all(self):
         self.refresh_groups()
@@ -427,6 +577,7 @@ class Indexer:
                     kept += 1
                     continue
                 cur.execute("DELETE FROM kb.files WHERE path=%s", (path,))
+                self._vis_cache = None   # FK cascade removed visibility rows
         self.conn.commit()
         log.info("startup reindex done: %d paths, %d errors, %d rows kept behind "
                  "unreadable paths", len(seen), errors, kept)
@@ -501,6 +652,7 @@ class Indexer:
                     st = p.lstat()
                 except FileNotFoundError:
                     cur.execute("DELETE FROM kb.files WHERE path=%s", (path,))
+                    self._vis_cache = None   # FK cascade removed visibility rows
                     self._forget(path)
                     continue
                 except OSError as e:
@@ -598,7 +750,11 @@ class Indexer:
             await asyncio.sleep(PERMS_RESCAN)
             async with self._db:      # exclusive use of self.conn
                 try:
-                    await asyncio.get_event_loop().run_in_executor(None, self.reconcile_perms)
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, self.reconcile_perms)
+                    # visibility reads what the sweep just wrote — same tick,
+                    # so a chmod/ACL change reaches the policies within ~1 s
+                    await loop.run_in_executor(None, self.refresh_visibility)
                 except Exception:
                     log.exception("reconcile sweep failed")
                     try:
@@ -666,7 +822,26 @@ class Indexer:
         # otherwise interleave commits and rollbacks on one transaction and
         # corrupt each other's writes. Nothing is missed by waiting — a file
         # created during the walk is picked up by reconcile_perms' discover().
+        #
+        # Visibility first, from the PRE-walk index state: kb.visible_files
+        # survives restarts, but permissions may have drifted while we were
+        # down, and the walk takes minutes — search must not serve a revoked
+        # audience (or a blank one) for that long. During the walk itself
+        # visibility updates only at its end, the same window in which inotify
+        # watches aren't armed yet.
+        try:
+            self.refresh_groups()
+            self.refresh_visibility()
+        except Exception:
+            log.exception("pre-walk visibility refresh failed")
+            self.conn.rollback()
         self.reindex_all()
+        try:
+            self.refresh_visibility()
+        except Exception:
+            log.exception("post-walk visibility refresh failed")
+            self.conn.rollback()
+        self._vacuum_blocks()
         await asyncio.gather(self.watch_loop(), self.perms_loop(), self.groups_loop())
 
 

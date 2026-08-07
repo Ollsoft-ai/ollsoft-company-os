@@ -670,12 +670,17 @@ async def search(request: web.Request) -> web.Response:
         except OSError:
             return []
 
-    files = await asyncio.to_thread(_name_matches)
+    # Start the walk NOW and let it run in its thread while the content query
+    # is in flight: the two halves of a search are independent, and awaiting
+    # the walk first simply added its ~120 ms to the query's ~130 ms for no
+    # reason. Whoever finishes last decides the latency.
+    files_task = asyncio.create_task(asyncio.to_thread(_name_matches))
 
-    conn = await _adb()
-    if conn is None:
-        return web.json_response({"results": [], "files": files, "db": False})
+    conn = None
     try:
+        conn = await _adb()
+        if conn is None:
+            return web.json_response({"results": [], "files": await files_task, "db": False})
         rows, seen, per_file = [], set(), {}
 
         def take(r, rank):
@@ -688,11 +693,17 @@ async def search(request: web.Request) -> web.Response:
             per_file[r[0]] = per_file.get(r[0], 0) + 1
             rows.append({"path": r[0], "line": r[1], "kind": r[2], "text": r[3], "rank": rank})
 
-        # Three ways to match, ONE pass over the table. The RLS policy qual
-        # runs before anything else; blocks_read gates per FILE via a hashed
-        # subplan (see schema.sql), so the scan itself — not the permission
-        # check — is the cost: running the tiers as separate statements would
-        # triple the latency for nothing.
+        # Three ways to match, ONE pass over the table. This is a SEQUENTIAL
+        # scan and cannot be anything else: `tsv @@` and ILIKE are not
+        # leakproof, so under RLS the planner may not evaluate them below the
+        # policy qual, and no index on kb.blocks is reachable. That is the
+        # security model working — a SECURITY DEFINER wrapper WOULD reach the
+        # index, and would hand every account a content oracle over the whole
+        # corpus (see the note in schema.sql). What was made fast instead is
+        # the two things that actually scale: the policy qual (a hashed subplan
+        # over kb.visible_files, replacing ~0.34 s of per-statement can_read())
+        # and the heap the scan reads (the dead embedding column is gone).
+        # Running the tiers as separate statements would only add scans.
         #   1. websearch_to_tsquery — stemming, "quoted phrases", -exclusions.
         #      It never raises on user input, unlike to_tsquery.
         #   2. prefix tsquery — "onbo mee" finds "Onboarding meeting". Tokens are
@@ -716,7 +727,12 @@ async def search(request: web.Request) -> web.Response:
                 "       (b.tsv @@ q.pq) AS pref "
                 "FROM kb.blocks b, q "
                 "WHERE b.tsv @@ q.ws OR b.tsv @@ q.pq OR b.text ILIKE %s "
-                "ORDER BY rank DESC, length(b.text) LIMIT 90",
+                # file_path/line break the remaining ties. Without them the
+                # order among equal-rank, equal-length rows is whatever the
+                # scan emitted — and now that kb.blocks is narrow enough for
+                # the planner to go PARALLEL, that varies run to run: the same
+                # query reshuffled its results between keystrokes.
+                "ORDER BY rank DESC, length(b.text), b.file_path, b.line LIMIT 90",
                 (q, pq, pq, like))
             for r in await cur.fetchall():
                 take(r, float(r[4]) + (0.02 if r[5] else 0.0))
@@ -731,9 +747,14 @@ async def search(request: web.Request) -> web.Response:
                 pass
             rows = []
         rows.sort(key=lambda r: -r["rank"])
-        return web.json_response({"results": rows[:30], "files": files, "db": True})
+        return web.json_response({"results": rows[:30], "files": await files_task, "db": True})
     finally:
-        await conn.close()
+        if conn is not None:
+            await conn.close()
+        # An error path that never awaited the walk would otherwise leave a
+        # pending task behind ("Task was destroyed but it is pending").
+        if not files_task.done():
+            files_task.cancel()
 
 
 async def artifact_query(request: web.Request) -> web.Response:
@@ -944,7 +965,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 18}
+            "jobs": jobs, "raw": raw, "v": 19}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
