@@ -91,8 +91,11 @@ If it comes back, the shape that works here:
   and fail-closed; a network call in `reindex_file` would wreck that.
 - **Mind the same RLS trap**: `<=>` is not leakproof either, so HNSW is
   unreachable under a policy — pre-filter to the caller's `visible_files`, and
-  note pgvector's iterative index scans need ≥ 0.8 (box upgraded to 0.8.6 on
-  2026-08-07 in preparation).
+  note pgvector's iterative index scans need ≥ 0.8. The box runs **PostgreSQL
+  18.4 with pgvector 0.8.6** (upgraded 2026-08-07 from 16.14 / 0.6.0 via
+  `pg_upgradecluster`, PGDG repo). The old 16/main cluster is still on disk,
+  port 5433, `start.conf = manual` — the rollback path until someone runs
+  `pg_dropcluster 16 main`.
 - Cost is a non-issue: the whole corpus is ~9 MB of text ≈ 2.3 M tokens, well
   under $0.10 to embed with a current small model.
 - Expose it to **agents via a skill** first (they can afford a ~200 ms embed
