@@ -5663,8 +5663,49 @@ function wireTermResizer() {
   });
 }
 
+// ---- session expiry -------------------------------------------------------
+
+// The session cookie lives 12h (common.SESSION_TTL). Close the laptop over a
+// weekend and it is gone — but the tab still shows a fully painted app, and
+// every call quietly 401s: the tree poll swallows the error, saves do nothing,
+// search returns nothing. It LOOKS alive and is not, and the only way out was
+// to know to hit reload.
+//
+// One wrapper around fetch is enough, because every call the app makes goes
+// through it. The 4s tree poll means an expiry is noticed within seconds even
+// if you touch nothing, and the visibilitychange nudge below makes it
+// immediate when you come back to the tab.
+let _sessionGone = false;
+
+function installSessionGuard() {
+  const raw = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const r = await raw(...args);
+    if (r.status === 401) sessionExpired();
+    return r;
+  };
+}
+
+function sessionExpired() {
+  if (_sessionGone) return;   // many in-flight calls fail at once; bounce once
+  _sessionGone = true;
+  // replace(), not href: the dead app must not sit in the back-stack waiting
+  // to be returned to. Documents are CRDT-synced continuously, so there is no
+  // unsaved editor state to lose here.
+  location.replace("/login");
+}
+
 // ---- boot -----------------------------------------------------------------
 async function boot() {
+  // Before anything else, so even the boot requests below are covered.
+  installSessionGuard();
+  // Coming back to a tab that has been asleep: check immediately instead of
+  // waiting up to 4s for the next poll (background tabs are throttled to about
+  // once a minute, so the poll alone can feel slow at exactly the moment you
+  // are looking at it).
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !_sessionGone) loadTree(false);
+  });
   try { _deepLinksOk = (await fetch("/company", { method: "HEAD" })).ok; }
   catch (e) { /* old hub — URLs stay at / until it restarts */ }
   await loadWhoami();
