@@ -608,6 +608,8 @@ body { display: flex; flex-direction: column; }
 .pi-sub { color: var(--faint); font-family: var(--mono); font-size: .66rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pi-sub b { color: var(--accent); font-weight: 600; }
+.palette-item.pi-more { padding-top: .25rem; padding-bottom: .25rem; }
+.palette-item.pi-more .pi-main { color: var(--muted); font-size: .76rem; }
 .palette-empty { padding: .9rem .6rem; font-size: .82rem; }
 .palette-foot { display: flex; align-items: center; justify-content: space-between; gap: .5rem;
   border-top: 1px solid var(--border); padding: .45rem .8rem; color: var(--faint); font-size: .7rem; }

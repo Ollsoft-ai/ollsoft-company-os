@@ -57,7 +57,10 @@ def cursor(page):
 
 def test_quick_open_finds_a_file_by_name(page):
     items = palette(page, "todos")
-    assert paths(items)[0] == "company/todos.html"
+    # content hits (path:line) may already sit above the file section — the
+    # best FILE match is what quick-open is about
+    files = [p for p in paths(items) if p and ":" not in p]
+    assert files[0] == "company/todos.html"
     page.keyboard.press("Escape")
 
 
@@ -80,13 +83,44 @@ def test_secrets_never_appear_in_the_palette(page):
     page.keyboard.press("Escape")
 
 
-def test_content_search_streams_in_underneath(page):
+def test_content_search_streams_in_on_top(page):
     palette(page, "zebrafish")
     page.wait_for_timeout(900)
     groups = [g.lower() for g in page.locator(".palette-group").all_inner_texts()]
     assert any("document" in g for g in groups), groups
+    # the documents section renders ABOVE the files section
+    assert "document" in groups[0], groups
     assert [p for p in paths(page.locator('[data-testid="palette-item"]'))
             if p and p.startswith("projects/acme/plan.md:")]
+    page.keyboard.press("Escape")
+
+
+def test_enter_still_opens_the_best_file_after_content_lands(page):
+    """The document section inserts above the files, but the selection must
+    stay anchored on the best file match — Enter cannot change meaning
+    depending on whether the server had answered by then."""
+    palette(page, "todos")
+    page.wait_for_timeout(900)                    # let the content search land
+    sel = page.locator(".palette-item.sel")
+    assert sel.get_attribute("data-path") == "company/todos.html"
+    page.keyboard.press("Escape")
+
+
+def test_files_section_caps_at_five_until_expanded(page):
+    # a one-letter query matches lots of files locally and (being under two
+    # characters) never triggers the content search, so every row is a file
+    palette(page, "e")
+    files = lambda: [p for p in paths(page.locator('[data-testid="palette-item"]'))
+                     if p and ":" not in p]
+    n = len(files())
+    more = page.locator('[data-testid="palette-more"]')
+    if more.count():
+        assert n == 5, files()
+        more.click()
+        assert len(files()) > 5
+        assert page.locator('[data-testid="palette-input"]').count() == 1  # stayed open
+    else:
+        assert n <= 5, files()          # nothing was hidden
     page.keyboard.press("Escape")
 
 

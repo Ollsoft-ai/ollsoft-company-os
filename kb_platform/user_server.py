@@ -624,23 +624,28 @@ def _name_score(q: str, rel: str) -> int:
 
 
 def _subseq_score(q: str, hay: str) -> int:
-    """Do the query's characters appear in order in `hay`? Score by how tightly
-    packed the match is (consecutive characters and matches right after a
-    separator score higher), 0 if the subsequence isn't there at all."""
+    """Do the query's characters appear in order in `hay`, each one either
+    consecutive to the previous match or starting a word? Runs and word starts
+    score higher; letters plucked from the middles of unrelated words ("tomas"
+    out of "terraform.tfvars") are no match at all. Mirrors subseqMatch in
+    frontend/src/app.js — keep the two in step."""
     if not q:
         return 0
     i = score = run = 0
     for pos, ch in enumerate(hay):
-        if ch == q[i]:
-            run += 1
-            score += 2 + run
-            if pos == 0 or hay[pos - 1] in " -_./":
-                score += 4
-            i += 1
-            if i == len(q):
-                return max(score - pos // 8, 1)
-        else:
+        if ch != q[i]:
             run = 0
+            continue
+        boundary = pos == 0 or hay[pos - 1] in " -_./"
+        if run == 0 and not boundary:   # mid-word starts don't count
+            continue
+        run += 1
+        score += 2 + run
+        if boundary:
+            score += 4
+        i += 1
+        if i == len(q):
+            return max(score - pos // 8, 1)
     return 0
 
 
@@ -965,7 +970,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 19}
+            "jobs": jobs, "raw": raw, "v": 20}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
