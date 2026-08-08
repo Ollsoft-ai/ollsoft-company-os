@@ -1320,6 +1320,7 @@ const svgIcon = (paths) =>
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + "</svg>";
 const I = {
   chevron: svgIcon('<polyline points="9 18 15 12 9 6"/>'),
+  chevronDown: svgIcon('<polyline points="6 9 12 15 18 9"/>'),
   doc: svgIcon('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'),
   file: svgIcon('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>'),
   artifact: svgIcon('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'),
@@ -3710,17 +3711,21 @@ function foldText(s) {
   return s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
 
-// Are the query's characters present, in order? Score by how tightly packed the
-// match is — consecutive characters and matches right after a separator count
-// for more, which is what makes `apl` rank projects/acme/plan.md first.
+// Are the query's characters present, in order — each one either CONSECUTIVE
+// to the previous match or starting a word? Consecutive runs and word starts
+// score higher (that's what makes `apl` rank projects/acme/plan.md first);
+// letters plucked from the middles of unrelated words ("tomas" out of
+// "terraform.tfvars") are not a match at all.
 function subseqMatch(q, hay) {
   let i = 0, score = 0, run = 0, last = 0;
   const hits = [];
   for (let pos = 0; pos < hay.length && i < q.length; pos++) {
     if (hay[pos] !== q[i]) { run = 0; continue; }
+    const boundary = pos === 0 || " -_./".includes(hay[pos - 1]);
+    if (run === 0 && !boundary) continue;   // mid-word starts don't count
     run++;
     score += 2 + run;
-    if (pos === 0 || " -_./".includes(hay[pos - 1])) score += 4;
+    if (boundary) score += 4;
     hits.push(pos);
     last = pos;
     i++;
@@ -4318,6 +4323,13 @@ function openPalette(mode, seed) {
   ov.addEventListener("click", (e) => { if (e.target === ov) closePalette(); });
 
   let items = [], sel = 0, seq = 0;
+  // The two searched sections are held apart and composed on every change:
+  // document matches render ABOVE file matches even though they arrive later,
+  // and each section shows only its head until its "Show more" row is taken.
+  // `fixed` (commands, or the Open/Recent list before anything is typed)
+  // bypasses the sectioning entirely.
+  let fixed = null, docFull = [], fileFull = [], docsOpen = false, filesOpen = false;
+  const DOC_CUT = 10, FILE_CUT = 5;
   // Is a content search in flight? Filename matches are computed locally and
   // appear instantly; document contents come from the server. Without this the
   // gap between the two showed "No matches" — stating as fact something we did
@@ -4341,11 +4353,11 @@ function openPalette(mode, seed) {
   const render = () => {
     list.innerHTML = "";
     kind.classList.toggle("busy", searching);
+    // The spinner sits on TOP: that is where the "In documents" section will
+    // appear when the results land, so nothing below it jumps.
+    if (searching) list.appendChild(spinnerRow("Searching documents…"));
     if (!items.length) {
-      if (searching) {                     // don't claim "nothing" prematurely
-        list.appendChild(spinnerRow("Searching documents…"));
-        return;
-      }
+      if (searching) return;               // don't claim "nothing" prematurely
       const empty = document.createElement("div");
       empty.className = "palette-empty muted";
       empty.textContent = "No matches";
@@ -4362,8 +4374,8 @@ function openPalette(mode, seed) {
         list.appendChild(g);
       }
       const row = document.createElement("div");
-      row.className = "palette-item" + (i === sel ? " sel" : "");
-      row.setAttribute("data-testid", "palette-item");
+      row.className = "palette-item" + (i === sel ? " sel" : "") + (it.more ? " pi-more" : "");
+      row.setAttribute("data-testid", it.more ? "palette-more" : "palette-item");
       row.dataset.index = String(i);
       if (it.path) row.dataset.path = it.path;
       const ic = document.createElement("span");
@@ -4402,16 +4414,33 @@ function openPalette(mode, seed) {
       row.addEventListener("click", () => choose(i));
       list.appendChild(row);
     });
-    // Filename matches are already showing; tell the user document contents
-    // are still coming rather than letting them read this as the full answer.
-    if (searching) list.appendChild(spinnerRow("Searching documents…"));
   };
 
   const choose = (i) => {
     const it = items[i];
     if (!it) return;
+    if (it.more) { it.more(); return; }   // expand the section, stay open
     closePalette();
     it.run();
+  };
+
+  const moreItem = (group, n, fn) => ({
+    group, icon: I.chevronDown, more: fn,
+    main: { text: "Show " + n + " more", hits: [] },
+  });
+
+  // Rebuild `items` from the current sections and expansion state. Called on
+  // every keystroke AND when the content results land or a section expands.
+  const compose = () => {
+    if (fixed) { items = fixed; return; }
+    items = docsOpen ? [...docFull] : docFull.slice(0, DOC_CUT);
+    if (!docsOpen && docFull.length > DOC_CUT)
+      items.push(moreItem("In documents", docFull.length - DOC_CUT,
+                          () => { docsOpen = true; compose(); render(); }));
+    items.push(...(filesOpen ? fileFull : fileFull.slice(0, FILE_CUT)));
+    if (!filesOpen && fileFull.length > FILE_CUT)
+      items.push(moreItem("Files", fileFull.length - FILE_CUT,
+                          () => { filesOpen = true; compose(); render(); }));
   };
 
   const fileIcon = (n) => (n.dir ? I.folder : isSecretPath(n.path) ? I.lock
@@ -4426,6 +4455,8 @@ function openPalette(mode, seed) {
   });
 
   const build = (q) => {
+    fixed = null; docFull = []; fileFull = [];
+    docsOpen = filesOpen = false;
     const out = [];
     if (q.startsWith(">")) {
       kind.textContent = "Run";
@@ -4437,7 +4468,8 @@ function openPalette(mode, seed) {
                    main: { text: c.label, hits: hit.hits }, run: c.run });
       }
       out.sort((a, b) => b.score - a.score);
-      return out;
+      fixed = out;
+      return;
     }
     kind.textContent = "Find";
     const entries = flatEntries();
@@ -4453,7 +4485,8 @@ function openPalette(mode, seed) {
         if (n) out.push({ ...fileItem(n, null), group: "Recent" });
         if (out.length > 14) break;
       }
-      return out;
+      fixed = out;
+      return;
     }
     const scored = [];
     for (const n of entries) {
@@ -4470,8 +4503,7 @@ function openPalette(mode, seed) {
       scored.push({ n, hit, score });
     }
     scored.sort((a, b) => b.score - a.score || a.n.path.length - b.n.path.length);
-    for (const s of scored.slice(0, 20)) out.push(fileItem(s.n, s.hit));
-    return out;
+    fileFull = scored.slice(0, 20).map((s) => fileItem(s.n, s.hit));
   };
 
   // contents come from the backend; they arrive after the local list is drawn
@@ -4494,23 +4526,26 @@ function openPalette(mode, seed) {
       // Superseded or closed: a NEWER search owns `searching` now — leave it.
       if (mine !== seq || _palette !== self) return;
       searching = false;
-      const hits = (j.results || []).slice(0, 12);
-      if (!hits.length) { render(); return; }   // repaint to drop the spinner
-      for (const m of hits) {
-        items.push({
-          group: "In documents", icon: I.doc, path: m.path + ":" + m.line,
-          main: { text: m.text, hits: contentHits(q, m.text) },
-          sub: { text: m.path + " · line " + m.line, hits: [] },
-          run: () => openAtLine(m.path, m.line),
-        });
-      }
+      docFull = (j.results || []).map((m) => ({
+        group: "In documents", icon: I.doc, path: m.path + ":" + m.line,
+        main: { text: m.text, hits: contentHits(q, m.text) },
+        sub: { text: m.path + " · line " + m.line, hits: [] },
+        run: () => openAtLine(m.path, m.line),
+      }));
+      // Documents insert ABOVE the files. Keep the selection anchored on the
+      // row it was on — by default the best file match — so Enter never
+      // changes meaning depending on whether the server answered yet. With no
+      // file rows at all, the first document hit gets the selection.
+      if (items.length) sel += Math.min(docFull.length, DOC_CUT) + (docFull.length > DOC_CUT ? 1 : 0);
+      compose();
       render();
     }, 180);
   };
 
   const refresh = () => {
     const q = input.value.trim();
-    items = build(q);
+    build(q);
+    compose();
     sel = 0;
     // Set BEFORE render so the very first paint after a keystroke already
     // shows the pending state — not one frame late.
