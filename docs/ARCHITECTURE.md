@@ -242,6 +242,20 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   container, so switching is instant and **background artifacts keep running**
   (their bridge messages are routed by `ev.source` to the tab they came from, and
   kb-read/kb-write stays scoped to *that* artifact's folder, not the focused one).
+- **Editor panes (split view)**: the tab strip and editor host are per **pane**;
+  dragging a tab onto another pane moves it, onto a pane's left/right edge splits
+  a new column off. `tabs` stays the one flat list (a tab's `paneId` says which
+  column it is in), each pane remembers its own current tab, and the document
+  header + markdown toolbar above the row describe the **active** one. Layout and
+  column widths persist in `localStorage` with the open tabs. A pane retires when
+  its last tab leaves; the leftmost pane keeps the historic `#tabbar`/`#editor`
+  ids. Split handles are rebuilt freely, pane elements never are — re-inserting a
+  pane would reload the artifact iframes inside it.
+- **File tree width**: dragged on the gutter between tree and editor, clamped to
+  [140px, 60% of the window], remembered in `localStorage` (`kbSidebarW`) and
+  applied at module eval so the tree never snaps after boot. Truncated row names
+  reveal themselves as a native tooltip, set on hover only when the label is
+  actually cut off.
 - **Terminal panel**: a docked, resizable bottom panel with its own terminal
   tabs (`＋` spawns, `×` kills, shell `exit` retires its tab — announced by the
   server's `{"exit":true}` frame). A tab only dies when the *shell* dies: a
