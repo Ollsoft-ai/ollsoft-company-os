@@ -1361,7 +1361,10 @@ function saveSession() {
   if (_restoring) return;
   try {
     localStorage.setItem("kbOpen", JSON.stringify({
-      tabs: tabs.map((t) => ({ path: t.path, kind: t.kind })),
+      tabs: tabs.map((t) => ({ path: t.path, kind: t.kind,
+                               pane: Math.max(0, panes.findIndex((p) => p.id === t.paneId)) })),
+      panes: panes.map((p) => p.grow),
+      paneActive: panes.map((p) => (p.active ? p.active.path : null)),
       active: active ? active.path : null,
       terms: terms.map((t) => ({ sid: t.sid, name: t.name })),
       activeTerm: activeTerm ? activeTerm.sid : null,
@@ -1380,11 +1383,22 @@ async function restoreSession() {
     // order) synchronously before its first await, so mapping over the list
     // preserves order while firing all the props/epoch/websocket round-trips at
     // once — N tabs restore in one batch instead of one-after-another.
-    await Promise.allSettled((s.tabs || []).map((t) => openPath(t.path, t.kind)));
+    // Rebuild the columns first, so every tab lands in the pane it was in.
+    while (panes.length < Math.min((s.panes || []).length, 6)) insertPane(panes.length);
+    (s.panes || []).forEach((g, i) => { if (panes[i] && g > 0) panes[i].grow = g; });
+    normalizeSplits();
+    await Promise.allSettled((s.tabs || []).map(
+      (t) => openPath(t.path, t.kind, (panes[t.pane || 0] || panes[0]).id)));
+    // Panes whose files all vanished collapse on their own; drop the strays.
+    for (const p of panes.slice()) if (!paneTabs(p).length) removePane(p);
+    (s.paneActive || []).forEach((path, i) => {
+      const t = path && tabs.find((x) => x.path === path);
+      if (t && panes[i] && t.paneId === panes[i].id) panes[i].active = t;
+    });
     if (s.active) {
       const t = tabs.find((x) => x.path === s.active);
       if (t) activateTab(t);
-    }
+    } else if (tabs.length) activateTab(panes[0].active || tabs[0]);
     if (canShell && (s.terms || []).length) {
       let act = null;
       for (const o of s.terms) {   // older saves stored bare sid strings
@@ -1513,6 +1527,73 @@ function wireNav() {
   // choosing any action closes the menu (the action opens its own surface)
   menu.addEventListener("click", (e) => {
     if (e.target.closest("button, a")) menu.classList.remove("open");
+  });
+}
+
+// ---- sidebar width: dragged, and remembered ------------------------------
+// Which files you keep open decides how wide the tree needs to be, and that
+// does not change between sessions — so the width is a local preference, not
+// app state: stored in localStorage, restored before the first paint of the
+// layout, and clamped to the window so a width dragged on a 34" screen never
+// leaves a laptop with no editor left.
+const SBW_KEY = "kbSidebarW";
+const SBW_DEFAULT = 264, SBW_MIN = 140;
+const sbwMax = () => Math.max(SBW_MIN, Math.round(window.innerWidth * 0.6));
+
+function setSidebarWidth(px, persist) {
+  const w = Math.round(Math.min(Math.max(px, SBW_MIN), sbwMax()));
+  document.documentElement.style.setProperty("--sbw", w + "px");
+  if (persist) { try { localStorage.setItem(SBW_KEY, String(w)); } catch (e) { /* private mode */ } }
+  return w;
+}
+
+function restoreSidebarWidth() {
+  let w = SBW_DEFAULT;
+  try { w = parseInt(localStorage.getItem(SBW_KEY), 10) || SBW_DEFAULT; } catch (e) { /* ok */ }
+  setSidebarWidth(w, false);
+}
+// Applied at module eval, not in boot(): boot awaits the network, and a tree
+// that snaps from 264px to your width after the first fetch is a visible jump.
+restoreSidebarWidth();
+
+function wireSidebarResize() {
+  const bar = $("#sb-resizer");
+  if (!bar) return;   // cached older app.html
+  let startX = 0, startW = 0;
+  const onMove = (e) => setSidebarWidth(startW + (e.clientX - startX), false);
+  const onUp = (e) => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.body.classList.remove("sb-resizing");
+    setSidebarWidth(startW + (e.clientX - startX), true);
+    // panes size themselves off the editor column, and xterm needs telling
+    window.dispatchEvent(new Event("resize"));
+  };
+  bar.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || isMobile()) return;
+    e.preventDefault();
+    startX = e.clientX;
+    startW = $(".sidebar").getBoundingClientRect().width;
+    document.body.classList.add("sb-resizing");
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  });
+  bar.addEventListener("dblclick", () => {
+    setSidebarWidth(SBW_DEFAULT, true);
+    window.dispatchEvent(new Event("resize"));
+  });
+  // keyboard: the handle is a real focusable separator, so arrows resize it
+  bar.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowLeft" ? -16 : e.key === "ArrowRight" ? 16 : 0;
+    if (!step) return;
+    e.preventDefault();
+    setSidebarWidth($(".sidebar").getBoundingClientRect().width + step, true);
+  });
+  // a window narrowed after the fact must not keep a tree wider than the app
+  window.addEventListener("resize", () => {
+    const cur = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue("--sbw"), 10) || SBW_DEFAULT;
+    if (cur > sbwMax()) setSidebarWidth(cur, false);
   });
 }
 
@@ -1779,7 +1860,7 @@ async function moveEntry(srcPath, dst) {
   // keep affected editor tabs open, re-homed at the new path
   const affected = tabs.filter((t) => t.path === srcPath || t.path.startsWith(srcPath + "/"));
   const keepPath = active ? active.path : null;
-  const reopen = affected.map((t) => ({ old: t.path }));
+  const reopen = affected.map((t) => ({ old: t.path, pane: t.paneId }));
   affected.forEach((t) => _movingPaths.add(t.path));
   let j, r;
   try {
@@ -1803,7 +1884,7 @@ async function moveEntry(srcPath, dst) {
   for (const t of affected) closeTab(t);
   for (const it of reopen) {
     const np = remap(it.old);
-    try { await openPath(np, kindForPath(np)); } catch (e) { /* gone */ }
+    try { await openPath(np, kindForPath(np), it.pane); } catch (e) { /* gone */ }
   }
   affected.forEach((t) => _movingPaths.delete(t.path));
   // restore whatever tab was active before (re-homed if it was one that moved)
@@ -2251,6 +2332,241 @@ function openEntry(n) {
   else openPath(n.path, "doc");
 }
 
+// ---- editor panes: the split view ------------------------------------------
+// A pane is one column of the editor area: its own tab strip, its own editor
+// host, its own scroll. Panes exist because two documents side by side is the
+// whole reason to have a wide screen; you make one by dragging a tab onto the
+// left or right edge of an existing pane, exactly as in VS Code.
+//
+// The flat `tabs` array stays the single list of every open tab (order = strip
+// order); a tab's `paneId` says which column it lives in. Everything that
+// looked a tab up by path still works untouched.
+const panes = [];        // [{id, el, barEl, hostEl, dropEl, active, grow}]
+let paneSeq = 0;
+let activePaneId = null;
+let _dragTab = null;     // the tab currently being dragged, if any
+
+const paneById = (id) => panes.find((p) => p.id === id) || null;
+const paneOf = (t) => paneById(t.paneId) || panes[0];
+const paneTabs = (p) => tabs.filter((t) => t.paneId === p.id);
+const activePane = () => paneById(activePaneId) || panes[0];
+
+function insertPane(index) {
+  const el = document.createElement("div");
+  el.className = "pane";
+  const barEl = document.createElement("div");
+  barEl.className = "tabbar";
+  barEl.hidden = true;
+  const hostEl = document.createElement("div");
+  hostEl.className = "editor";
+  const dropEl = document.createElement("div");
+  dropEl.className = "pane-drop";
+  dropEl.appendChild(Object.assign(document.createElement("div"), { className: "pane-drop-ind" }));
+  el.append(barEl, hostEl, dropEl);
+  const p = { id: ++paneSeq, el, barEl, hostEl, dropEl, active: null, grow: 1 };
+  el.dataset.pane = String(p.id);
+  panes.splice(index, 0, p);
+  const host = $("#panes");
+  const before = panes[index + 1];
+  host.insertBefore(el, before ? before.el : null);
+  // Split handles are disposable, panes are NOT: re-inserting a pane element
+  // reloads any artifact iframe inside it, so only the handles get rebuilt.
+  normalizeSplits();
+  wirePane(p);
+  if (activePaneId === null) activePaneId = p.id;
+  return p;
+}
+
+function removePane(p) {
+  const i = panes.indexOf(p);
+  if (i < 0 || panes.length < 2) return;   // the last pane always stays
+  p.el.remove();
+  panes.splice(i, 1);
+  normalizeSplits();
+  if (activePaneId === p.id) activePaneId = (panes[i] || panes[i - 1]).id;
+}
+
+function normalizeSplits() {
+  const host = $("#panes");
+  host.querySelectorAll(":scope > .pane-split").forEach((s) => s.remove());
+  panes.forEach((p, i) => {
+    p.el.style.flexGrow = String(p.grow);
+    p.el.style.flexBasis = "0";
+    if (i) host.insertBefore(makeSplit(panes[i - 1], p), p.el);
+    // Single-pane selectors — the tests', and anything pasted into a console —
+    // must keep resolving, so the leftmost pane carries the historic ids.
+    if (i === 0) { p.barEl.id = "tabbar"; p.hostEl.id = "editor"; }
+    else { p.barEl.removeAttribute("id"); p.hostEl.removeAttribute("id"); }
+    p.barEl.dataset.testid = "tabbar";
+    p.hostEl.dataset.testid = "editor";
+  });
+  document.body.classList.toggle("split", panes.length > 1);
+}
+
+// Dragging the handle moves width between exactly two neighbours; the rest of
+// the row keeps its share, so a three-pane layout doesn't reshuffle itself.
+function makeSplit(left, right) {
+  const s = document.createElement("div");
+  s.className = "pane-split";
+  s.title = "Drag to resize";
+  s.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const x0 = e.clientX;
+    const lw = left.el.getBoundingClientRect().width;
+    const rw = right.el.getBoundingClientRect().width;
+    const total = lw + rw, sum = left.grow + right.grow, MIN = 160;
+    document.body.classList.add("pane-resizing");
+    const move = (ev) => {
+      const w = Math.min(Math.max(lw + ev.clientX - x0, MIN), total - MIN);
+      left.grow = sum * (w / total);
+      right.grow = sum - left.grow;
+      left.el.style.flexGrow = String(left.grow);
+      right.el.style.flexGrow = String(right.grow);
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      document.body.classList.remove("pane-resizing");
+      saveSession();
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  });
+  return s;
+}
+
+// Clicking anywhere in a pane makes it the one a new file opens into — and, as
+// in VS Code, makes ITS document the active one the header and toolbar describe.
+function focusPane(p) {
+  if (activePaneId === p.id) return;
+  activePaneId = p.id;
+  if (p.active) activateTab(p.active);
+  else { renderTabBar(); saveSession(); }
+}
+
+function wirePane(p) {
+  // Clicking into a pane focuses it — EXCEPT on its tab strip, where the tab's
+  // own click decides. focusPane re-renders the strip, and a strip rebuilt
+  // between pointerdown and click swallows the click that caused it: the tab
+  // you aimed at is gone by the time the browser looks for it.
+  p.el.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest(".tab")) focusPane(p);
+  }, true);
+  // — the tab strip: drop here to move the tab into this pane at this position
+  p.barEl.addEventListener("dragover", (e) => {
+    if (!_dragTab) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    markBarInsert(p, e.clientX);
+  });
+  p.barEl.addEventListener("dragleave", (e) => {
+    if (!p.barEl.contains(e.relatedTarget)) clearDropMarks();
+  });
+  p.barEl.addEventListener("drop", (e) => {
+    if (!_dragTab) return;
+    e.preventDefault(); e.stopPropagation();
+    const t = _dragTab;
+    endTabDrag();
+    moveTabToPane(t, p, barInsertIndex(p, e.clientX));
+  });
+  // — the body: middle = move into this pane, an edge = split off a new one
+  p.dropEl.addEventListener("dragover", (e) => {
+    if (!_dragTab) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    paintPaneHint(p, dropSide(p, e.clientX));
+  });
+  p.dropEl.addEventListener("dragleave", () => p.dropEl.classList.remove("over"));
+  p.dropEl.addEventListener("drop", (e) => {
+    if (!_dragTab) return;
+    e.preventDefault(); e.stopPropagation();
+    const t = _dragTab, side = dropSide(p, e.clientX);
+    endTabDrag();
+    if (side === "in") { moveTabToPane(t, p, paneTabs(p).length); return; }
+    // Splitting a pane's only tab off that same pane would just delete the pane
+    // it came from and rebuild it — nothing moves, so don't pretend it did.
+    if (paneOf(t) === p && paneTabs(p).length === 1) return;
+    const at = panes.indexOf(p) + (side === "right" ? 1 : 0);
+    moveTabToPane(t, insertPane(at), 0);
+  });
+}
+
+function dropSide(p, x) {
+  const r = p.dropEl.getBoundingClientRect();
+  const f = (x - r.left) / r.width;
+  return f < 0.28 ? "left" : f > 0.72 ? "right" : "in";
+}
+
+function paintPaneHint(p, side) {
+  const ind = p.dropEl.querySelector(".pane-drop-ind");
+  ind.style.top = "4px"; ind.style.bottom = "4px";
+  ind.style.left = side === "right" ? "50%" : "4px";
+  ind.style.right = side === "left" ? "50%" : "4px";
+  p.dropEl.classList.add("over");
+}
+
+function clearDropMarks() {
+  document.querySelectorAll(".tab.drop-before, .tab.drop-after")
+    .forEach((e) => e.classList.remove("drop-before", "drop-after"));
+  document.querySelectorAll(".tabbar.drop-end").forEach((e) => e.classList.remove("drop-end"));
+  for (const p of panes) p.dropEl.classList.remove("over");
+}
+
+function barInsertIndex(p, x) {
+  const els = [...p.barEl.querySelectorAll(".tab")];
+  for (let i = 0; i < els.length; i++) {
+    const r = els[i].getBoundingClientRect();
+    if (x < r.left + r.width / 2) return i;
+  }
+  return els.length;
+}
+
+function markBarInsert(p, x) {
+  clearDropMarks();
+  const els = [...p.barEl.querySelectorAll(".tab")];
+  const i = barInsertIndex(p, x);
+  if (i < els.length) els[i].classList.add("drop-before");
+  else if (els.length) els[els.length - 1].classList.add("drop-after");
+  else p.barEl.classList.add("drop-end");
+}
+
+function endTabDrag() {
+  _dragTab = null;
+  document.body.classList.remove("dragging-tab");
+  document.querySelectorAll(".tab.dragging").forEach((e) => e.classList.remove("dragging"));
+  clearDropMarks();
+}
+
+// Move a tab into `target` at position `index` of that pane's strip. The tab's
+// live mount travels with it: CodeMirror survives re-parenting untouched, and
+// an artifact iframe reloads — which is what re-parenting an iframe means, and
+// is fine, since an artifact re-runs from its own source either way.
+function moveTabToPane(t, target, index) {
+  const from = paneOf(t);
+  const cur = tabs.indexOf(t);
+  if (cur >= 0) tabs.splice(cur, 1);
+  t.paneId = target.id;
+  if (from !== target) target.hostEl.appendChild(t.el);
+  // Splice back into the flat list at the spot that yields `index` in the strip.
+  const list = tabs.filter((x) => x.paneId === target.id);
+  const at = !list.length ? tabs.length
+    : index >= list.length ? tabs.indexOf(list[list.length - 1]) + 1
+      : tabs.indexOf(list[index]);
+  tabs.splice(at, 0, t);
+  if (from !== target && !paneTabs(from).length) removePane(from);
+  else if (from !== target && from.active === t) from.active = paneTabs(from)[0] || null;
+  activePaneId = target.id;
+  activateTab(t);
+}
+
+function splitActiveTab(dir) {
+  if (!active) return;
+  const from = paneOf(active);
+  if (paneTabs(from).length < 2) return;   // nothing left behind = not a split
+  moveTabToPane(active, insertPane(panes.indexOf(from) + (dir > 0 ? 1 : 0)), 0);
+}
+
 // ---- editor tabs (VS-Code style) ------------------------------------------
 // Every open document or artifact is a tab. Each tab keeps its own live mount
 // (CodeMirror view + Yjs provider, or sandboxed iframe) in a hidden container,
@@ -2267,37 +2583,59 @@ function dirName(p) { return p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : 
 function isSecretPath(p) { return p.split("/").includes("_secrets"); }
 
 function renderTabBar() {
-  const bar = $("#tabbar");
-  bar.innerHTML = "";
-  bar.hidden = tabs.length === 0;
   const dup = {};
   tabs.forEach((t) => { dup[t.name] = (dup[t.name] || 0) + 1; });
-  for (const t of tabs) {
-    const el = document.createElement("div");
-    el.className = "tab" + (t === active ? " active" : "");
-    el.title = t.path;
-    el.dataset.path = t.path;
-    const icon = document.createElement("span");
-    icon.className = "tab-icon";
-    icon.innerHTML = t.kind === "artifact" ? I.artifact : t.kind === "secret" ? I.lock : I.doc;
-    const name = document.createElement("span");
-    name.className = "tab-name";
-    name.textContent = t.name;
-    el.append(icon, name);
-    if (dup[t.name] > 1 && dirName(t.path)) {   // disambiguate same-named files
-      const d = document.createElement("span");
-      d.className = "tab-dir";
-      d.textContent = dirName(t.path);
-      el.appendChild(d);
-    }
-    const x = document.createElement("button");
-    x.className = "tab-x"; x.title = "Close"; x.textContent = "×";
-    x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(t); });
-    el.appendChild(x);
-    el.addEventListener("click", () => activateTab(t));
-    el.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t); } });
-    bar.appendChild(el);
+  for (const p of panes) {
+    const list = paneTabs(p);
+    p.barEl.innerHTML = "";
+    // A lone empty pane keeps the placeholder screen; an empty strip in a split
+    // cannot happen (a pane is removed when its last tab leaves).
+    p.barEl.hidden = list.length === 0;
+    p.el.classList.toggle("focused", p.id === activePaneId);
+    for (const t of list) p.barEl.appendChild(tabEl(t, dup));
   }
+}
+
+function tabEl(t, dup) {
+  const el = document.createElement("div");
+  // .current = the tab this pane is showing; .active = the one the header, the
+  // toolbar and every shortcut act on. In a split they are different tabs, and
+  // an unfocused pane still has to say which of its files you are looking at.
+  el.className = "tab" + (t === paneOf(t).active ? " current" : "") + (t === active ? " active" : "");
+  el.title = t.path;
+  el.dataset.path = t.path;
+  const icon = document.createElement("span");
+  icon.className = "tab-icon";
+  icon.innerHTML = t.kind === "artifact" ? I.artifact : t.kind === "secret" ? I.lock : I.doc;
+  const name = document.createElement("span");
+  name.className = "tab-name";
+  name.textContent = t.name;
+  el.append(icon, name);
+  if (dup[t.name] > 1 && dirName(t.path)) {   // disambiguate same-named files
+    const d = document.createElement("span");
+    d.className = "tab-dir";
+    d.textContent = dirName(t.path);
+    el.appendChild(d);
+  }
+  const x = document.createElement("button");
+  x.className = "tab-x"; x.title = "Close"; x.textContent = "×";
+  x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(t); });
+  el.appendChild(x);
+  el.addEventListener("click", () => activateTab(t));
+  el.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t); } });
+  // Drag to reorder, to move into another pane, or onto a pane's edge to split.
+  // Deliberately NO text/plain payload: the tree's folder rows and the editor
+  // both accept dropped text, and a tab is not a path being pasted somewhere.
+  el.draggable = true;
+  el.addEventListener("dragstart", (e) => {
+    _dragTab = t;
+    document.body.classList.add("dragging-tab");
+    el.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("application/x-kb-tab", String(t.id)); } catch (err) { /* ok */ }
+  });
+  el.addEventListener("dragend", endTabDrag);
+  return el;
 }
 
 // ---- deep links: the open document IS the URL ------------------------------
@@ -2411,7 +2749,14 @@ function clearTabLoading(t) {
 
 function activateTab(t) {
   active = t;
-  for (const o of tabs) o.el.style.display = o === t ? "" : "none";
+  if (t) { activePaneId = t.paneId; paneOf(t).active = t; }
+  // Each pane shows its OWN active tab — switching panes must not blank the
+  // one you just came from. Only the global `active` follows the click.
+  for (const p of panes) {
+    const list = paneTabs(p);
+    if (!list.includes(p.active)) p.active = list[list.length - 1] || null;
+    for (const o of list) o.el.style.display = o === p.active ? "" : "none";
+  }
   renderDocTitle(t);
   setAccessBadge(t ? t.access : null);
   document.querySelectorAll(".tree-item").forEach((e) =>
@@ -2433,6 +2778,9 @@ function activateTab(t) {
 function closeTab(t) {
   const i = tabs.indexOf(t);
   if (i < 0) return;
+  const p = paneOf(t);
+  const inPane = paneTabs(p);
+  const j = inPane.indexOf(t);
   tabs.splice(i, 1);
   // Full teardown: the provider does NOT destroy its awareness (which keeps a
   // heartbeat interval) or the Y.Doc — without these, every closed doc tab
@@ -2442,18 +2790,24 @@ function closeTab(t) {
   if (t.ydoc) t.ydoc.destroy();
   t.view = t.provider = t.ydoc = t.frame = null;
   t.el.remove();
-  if (active === t) activateTab(tabs[i] || tabs[i - 1] || null);
-  else renderTabBar();
+  // The tab you get next is this pane's neighbour, not some other column's.
+  const rest = paneTabs(p);
+  if (p.active === t) p.active = rest[j] || rest[j - 1] || null;
+  const wasActive = active === t;
+  if (!rest.length && panes.length > 1) removePane(p);
+  if (wasActive) activateTab(p.active || paneTabs(activePane())[0] || tabs[0] || null);
+  else { renderTabBar(); saveSession(); }
 }
 
-async function openPath(path, kind) {
+async function openPath(path, kind, paneId) {
   closeNav();   // on mobile the drawer covers the editor — opening a file is leaving it
   const existing = tabs.find((t) => t.path === path);
   if (existing) { activateTab(existing); return; }
+  const pane = (paneId && paneById(paneId)) || activePane();
   const el = document.createElement("div");
   el.className = "tab-content";
-  $("#editor").appendChild(el);
-  const t = { id: ++tabSeq, path, kind, name: baseName(path), el,
+  pane.hostEl.appendChild(el);
+  const t = { id: ++tabSeq, path, kind, name: baseName(path), el, paneId: pane.id,
               view: null, provider: null, ydoc: null, frame: null,
               access: null, synced: false,
               mode: localStorage.getItem("kbEditMode") || "rich", modeComp: null };
@@ -3874,6 +4228,7 @@ function comboLabel(combo) {
   const map = IS_APPLE ? { Mod: "⌘", Ctrl: "⌃", Alt: "⌥", Shift: "⇧" }
                        : { Mod: "Ctrl", Ctrl: "Ctrl", Alt: "Alt", Shift: "Shift" };
   const pretty = { Backquote: "`", BracketLeft: "[", BracketRight: "]", Slash: "/",
+                   Backslash: "\\",
                    Escape: "Esc", Enter: "⏎", ArrowUp: "↑", ArrowDown: "↓",
                    ArrowLeft: "←", ArrowRight: "→", Delete: "Del" };
   return combo.split("+").map((p) => map[p] || pretty[p] || p).join(IS_APPLE ? "" : "+");
@@ -3898,6 +4253,10 @@ const BINDINGS = [
     label: "Go to tab 1…9", labelKeys: ["Alt+1…9", "Ctrl+Shift+1…9"], run: () => gotoTab(0) },
   { id: "closetab", keys: ["Alt+W"], group: "Navigate", term: true,
     label: "Close tab", when: hasTab, run: () => { if (active) closeTab(active); } },
+  { id: "splitright", keys: ["Alt+Backslash"], group: "Navigate",
+    when: () => !!active && paneTabs(paneOf(active)).length > 1,
+    label: "Split the editor right", hint: "or drag a tab to a pane's edge",
+    run: () => splitActiveTab(1) },
   { id: "focustree", keys: ["Mod+Shift+E", "Alt+E"], group: "Navigate",
     label: "Focus the file tree", run: focusTree },
   { id: "sidebar", keys: ["Alt+B"], group: "Navigate",
@@ -4085,11 +4444,12 @@ function closeTopModal() {
 }
 
 function cycleTab(d) {
-  if (tabs.length < 2) return;
-  const i = tabs.indexOf(active);
-  activateTab(tabs[(((i < 0 ? 0 : i) + d) % tabs.length + tabs.length) % tabs.length]);
+  const list = paneTabs(activePane());
+  if (list.length < 2) return;
+  const i = list.indexOf(active);
+  activateTab(list[(((i < 0 ? 0 : i) + d) % list.length + list.length) % list.length]);
 }
-function gotoTab(i) { if (tabs[i]) activateTab(tabs[i]); }
+function gotoTab(i) { const list = paneTabs(activePane()); if (list[i]) activateTab(list[i]); }
 function toggleSidebar() {
   if (isMobile()) {
     if (document.body.classList.toggle("nav-open")) revealActiveInTree(true);
@@ -4199,6 +4559,23 @@ function setFolderOpen(path, open) {
   rerenderTree();
   paintTreeCursor();
 }
+// A narrow tree ellipsises long names, and an ellipsis you cannot expand is
+// information you do not have. Hovering a truncated row shows the whole name as
+// a plain native tooltip — set only when it IS cut off, since a title on every
+// row would fire on every hover and say nothing new. Measured on hover, not at
+// render time: the row's action buttons appear on hover and shrink the label,
+// so the truncation you see is the one measured here.
+function wireTreeTooltips() {
+  $("#tree").addEventListener("mouseover", (e) => {
+    const row = e.target.closest(".tree-item");
+    if (!row) return;
+    const label = row.querySelector(".tlabel");
+    if (!label) return;
+    if (label.scrollWidth > label.clientWidth + 1) row.title = label.textContent;
+    else row.removeAttribute("title");
+  });
+}
+
 function wireTreeKeys() {
   const host = $("#tree");
   host.tabIndex = 0;
@@ -4734,7 +5111,7 @@ function wireNewDoc() {
 // editor (inside one, mediaExtension already handles it). Otherwise the drop
 // replaces the whole app with the raw file.
 function wireUpload() {
-  const ed = $("#editor");
+  const ed = $("#panes");
   ed.addEventListener("dragover", (e) => { e.preventDefault(); });
   window.addEventListener("dragover", (e) => e.preventDefault());
   window.addEventListener("drop", (e) => {
@@ -5734,6 +6111,11 @@ function sessionExpired() {
 async function boot() {
   // Before anything else, so even the boot requests below are covered.
   installSessionGuard();
+  insertPane(0);   // there is always at least one editor pane
+  // Safety net: a drag cancelled with Escape, or dropped on the desktop, still
+  // ends — and the pane drop overlays (which sit on top of the editor) must
+  // come back down even when no drop handler of ours ever ran.
+  document.addEventListener("dragend", endTabDrag);
   // Coming back to a tab that has been asleep: check immediately instead of
   // waiting up to 4s for the next poll (background tabs are throttled to about
   // once a minute, so the poll alone can feel slow at exactly the moment you
@@ -5746,7 +6128,7 @@ async function boot() {
   await loadWhoami();
   await loadTree();
   wireSearch(); wireNewDoc(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
-  wireShortcuts(); wireTreeKeys();
+  wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();
   // null-guarded: a browser holding a cached older app.html must not lose the
   // whole boot sequence over one missing button
   // icon + label markup lives in app.html now
