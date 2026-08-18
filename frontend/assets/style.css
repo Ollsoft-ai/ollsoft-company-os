@@ -162,13 +162,25 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 /* body stacks topbar / launchbar / layout; the layout takes what remains */
 body { display: flex; flex-direction: column; }
 .topbar { flex: 0 0 auto; }
-.layout { display: grid; grid-template-columns: 264px 1fr; flex: 1 1 auto; min-height: 0; }
+.layout { display: grid; grid-template-columns: var(--sbw, 264px) 5px 1fr;
+  flex: 1 1 auto; min-height: 0; }
 /* Alt+B on a wide screen: give the document the whole width. Scoped, so a
    window that shrinks into the drawer layout never keeps a hidden sidebar. */
 @media (min-width: 881px) {
   body.nav-hidden .layout { grid-template-columns: 1fr; }
-  body.nav-hidden .sidebar { display: none; }
+  body.nav-hidden .sidebar, body.nav-hidden .sb-resizer { display: none; }
 }
+/* The gutter between tree and editor IS the drag handle. It reads as part of
+   the editor's left margin until you point at it, so a resizable edge costs no
+   visual weight; the sidebar's own border-right stays the divider you see. */
+.sb-resizer { background: var(--bg); cursor: col-resize; position: relative; z-index: 5;
+  touch-action: none; }
+.sb-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; }
+.sb-resizer:hover, .sb-resizer:focus-visible, body.sb-resizing .sb-resizer {
+  background: var(--accent); outline: none; }
+/* while dragging, the whole page keeps the resize cursor and stops selecting
+   text under the pointer — otherwise a fast drag paints the tree blue */
+body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
 
 /* ── Launcher bar — one-tap company (blue) & personal (violet) shortcuts ──── */
 .launchbar { display: flex; align-items: center; gap: .35rem; flex: 0 0 auto;
@@ -358,7 +370,10 @@ body { display: flex; flex-direction: column; }
 
 /* ── rich (live-preview) editor: rendered but editable markdown ──────────── */
 .cm-rich .cm-scroller { font-family: var(--sans); line-height: 1.7; }
-.cm-rich .cm-content { padding: 1.1rem 0 40vh; max-width: 60rem; }
+/* No max-width: on a 34" screen a 60rem column left two thirds of the window
+   empty and wrapped prose in the middle of it. The document gets the whole
+   editor column — narrow it by widening the tree or splitting the editor. */
+.cm-rich .cm-content { padding: 1.1rem 0 40vh; }
 .cm-rich .cm-line { padding: .05rem 2.2rem; }
 .cm-rich .cm-h { font-weight: 600; color: #fff; line-height: 1.3; }
 .cm-rich .cm-h1 { font-size: 1.7rem; padding-top: .5rem; }
@@ -427,9 +442,41 @@ body { display: flex; flex-direction: column; }
 /* strikethrough on a checked task line for that "done" feel */
 .cm-rich .cm-line:has(.cm-task-toggle:checked) { color: var(--muted); }
 .editor { flex: 1; overflow: auto; position: relative; }
-#editor:empty::before { content: "Ctrl+P to jump to a file · Ctrl+` for a shell · ? for every shortcut";
+.editor:empty::before { content: "Ctrl+P to jump to a file · Ctrl+` for a shell · ? for every shortcut";
   position: absolute; inset: 0; display: grid; place-items: center;
-  font-family: var(--mono); font-size: .8rem; color: var(--faint); }
+  font-family: var(--mono); font-size: .8rem; color: var(--faint);
+  padding: 0 1rem; text-align: center; }
+
+/* ── Editor panes: the same document surface, side by side ────────────────
+   Drag a tab onto another pane's body to move it there, or onto its left/right
+   edge to split. Each pane owns its own tab strip and its own scroll; the
+   document header and markdown toolbar above them describe the ACTIVE pane. */
+.panes { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.pane { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0;
+  position: relative; }
+.pane + .pane, .pane-split + .pane { border-left: 1px solid var(--border); }
+/* Which pane a new file opens into is not guessable — mark it, quietly. */
+body.split .pane.focused > .tabbar { box-shadow: inset 0 2px 0 var(--accent-wash); }
+.pane-split { flex: 0 0 5px; background: var(--bg); cursor: col-resize; position: relative;
+  z-index: 5; touch-action: none; }
+.pane-split::after { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; }
+.pane-split:hover, body.pane-resizing .pane-split { background: var(--accent); }
+body.pane-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+
+/* The drop surface only exists while a tab is in flight — otherwise it would
+   sit on top of CodeMirror and swallow every click, and steal the file drops
+   the editor itself handles. */
+.pane-drop { position: absolute; inset: 0; z-index: 30; display: none; }
+body.dragging-tab .pane-drop { display: block; }
+.pane-drop-ind { position: absolute; display: none; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 2px solid var(--accent); pointer-events: none; }
+.pane-drop.over .pane-drop-ind { display: block; }
+.tab.dragging { opacity: .4; }
+/* where the tab will land in this strip */
+.tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+.tabbar.drop-end { box-shadow: inset -3px 0 0 var(--accent); }
 .tab-content { height: 100%; position: relative; }
 .artifact-frame { width: 100%; height: 100%; border: 0; background: #fff; }
 
@@ -466,16 +513,18 @@ body { display: flex; flex-direction: column; }
   border-right: 1px solid var(--border); cursor: pointer; color: var(--muted); font-size: .8rem;
   white-space: nowrap; max-width: 240px; border-top: 2px solid transparent; }
 .tab:hover { background: var(--panel); }
+.tab.current { background: var(--bg); color: var(--ink); }
 .tab.active { background: var(--bg); color: var(--ink); border-top-color: var(--accent); }
 .tab-icon { color: var(--faint); display: inline-flex; align-items: center; }
 .tab-icon .icon { width: 13px; height: 13px; }
 .tab.active .tab-icon { color: var(--accent); }
+.tab.current .tab-icon { color: var(--muted); }
 .tab-name { overflow: hidden; text-overflow: ellipsis; }
 .tab-dir { color: var(--faint); font-family: var(--mono); font-size: .62rem;
   overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
 .tab-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .95rem;
   line-height: 1; padding: 0 .15rem; border-radius: 4px; opacity: 0; }
-.tab:hover .tab-x, .tab.active .tab-x { opacity: 1; }
+.tab:hover .tab-x, .tab.current .tab-x, .tab.active .tab-x { opacity: 1; }
 .tab-x:hover { color: var(--ink); background: var(--border); }
 
 /* CodeMirror — the writing surface, tuned to the chassis */
@@ -946,8 +995,15 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .menu-launchers { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
     padding: .1rem .25rem .55rem; border-bottom: 1px solid var(--border); margin-bottom: .25rem; }
 
+  /* No side-by-side on a phone: two 180px editors are worse than one. Panes
+     opened on a desktop stay open — they just stack until the window grows. */
+  .panes { flex-direction: column; }
+  .pane-split { display: none; }
+  .pane + .pane, .pane-split + .pane { border-left: 0; border-top: 1px solid var(--border); }
+
   /* file tree becomes an over-content drawer */
   .layout { grid-template-columns: 1fr; }
+  .sb-resizer { display: none; }
   .sidebar { position: fixed; top: var(--tbh); bottom: 0; left: 0;
     width: min(84vw, 330px); z-index: 60; transform: translateX(-103%);
     transition: transform .22s ease; border-right: 1px solid var(--border);

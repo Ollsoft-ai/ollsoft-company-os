@@ -56,8 +56,11 @@
       </div>
       <div id="tree" class="tree" data-testid="tree"></div>
     </aside>
+    <!-- drag to widen the tree; double-click restores the default width -->
+    <div id="sb-resizer" class="sb-resizer" data-testid="sb-resizer" role="separator"
+         aria-orientation="vertical" tabindex="0" aria-label="Resize file tree"
+         title="Drag to resize · double-click to reset"></div>
     <section class="main-col">
-      <div id="tabbar" class="tabbar" data-testid="tabbar" hidden></div>
       <section class="editor-wrap">
         <div class="doc-title-bar">
           <span id="doc-title" data-testid="doc-title">No document open</span>
@@ -100,7 +103,11 @@
           <input id="up-video" type="file" accept="video/*,audio/*" multiple hidden />
           <input id="up-file" type="file" multiple hidden />
         </div>
-        <div id="editor" class="editor" data-testid="editor"></div>
+        <!-- One or more editor panes side by side. JS owns the children: every
+             pane is a tab strip + its own editor host, split by a drag handle.
+             The first pane carries id="tabbar"/id="editor" so single-pane
+             selectors (and deep links into the app) keep working. -->
+        <div id="panes" class="panes" data-testid="panes"></div>
       </section>
       <div id="terminal-panel" class="terminal-panel" hidden>
         <div id="term-resizer" class="term-resizer" title="Drag to resize"></div>
