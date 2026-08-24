@@ -167,7 +167,8 @@ EOF
       # must actually carry the kbtest- marker.
       tree)
         case "$val" in
-          "$REPO"/*kbtest-*) rm -rf "$val" && echo "  rm -r ${val#"$REPO"/}" ;;
+          "$REPO"/*kbtest-*|"$REPO"/users/kbt_*)
+            rm -rf "$val" && echo "  rm -r ${val#"$REPO"/}" ;;
           *) echo "  SKIP (not a namespaced tree): $val" >&2 ;;
         esac
         : ;;
@@ -236,7 +237,10 @@ add_user() {
   for g in "$@"; do usermod -aG "$g" "$u"; done
   record user "$u"
   install -d -m 700 -o "$u" -g "$u" "$REPO/users/$u"
-  record path "$REPO/users/$u"
+  # An ephemeral account's KB home belongs entirely to its run, and tests write
+  # into it — so rmdir would fail and leave the directory behind, exactly as it
+  # did for the shared area. The demo's homes stay `path`: those are real people.
+  [ -n "$NS" ] && record tree "$REPO/users/$u" || record path "$REPO/users/$u"
   runuser -u postgres -- psql -d "$PGDB" -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='$u') THEN CREATE ROLE "$u" LOGIN; END IF;

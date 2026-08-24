@@ -9,7 +9,7 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, expand_folder, login
-from kbenv import U, doc
+from kbenv import AREA, U, doc
 
 RO_DOC = ".claude/CLAUDE.md"   # owned root:kb-users 644 -> read-only to everyone
 
@@ -56,7 +56,7 @@ def test_readonly_edit_is_not_persisted(browser):
 def test_live_tree_shows_newly_created_file(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.wait_for_selector('.tree-item[data-path="company"]')
+    page.wait_for_selector(f'.tree-item[data-path="{AREA}"]')
     name = f"live_{int(time.time())}.md"
     # create a file out-of-band (as if a colleague made/shared it)
     c = httpx.Client(base_url=BASE, timeout=15)

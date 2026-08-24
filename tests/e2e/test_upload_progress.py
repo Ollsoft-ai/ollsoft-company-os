@@ -7,7 +7,7 @@ import time
 import httpx
 
 from conftest import BASE, CREDS, login
-from kbenv import U, doc
+from kbenv import AREA, U, doc
 
 
 def test_tree_upload_shows_ghost_row_with_progress(browser, tmp_path):
@@ -25,7 +25,7 @@ def test_tree_upload_shows_ghost_row_with_progress(browser, tmp_path):
         "offline": False, "latency": 0,
         "downloadThroughput": -1, "uploadThroughput": 700 * 1024})
 
-    row = page.locator('.tree-item[data-path="company"]')
+    row = page.locator(f'.tree-item[data-path="{AREA}"]')
     row.hover()
     with page.expect_file_chooser() as fc:
         row.locator('button[title="Upload files here"]').click()

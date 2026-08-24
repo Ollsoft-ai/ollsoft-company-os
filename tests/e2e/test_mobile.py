@@ -5,7 +5,7 @@ stay reachable with a finger."""
 import time
 
 from conftest import BASE, CREDS, dlg_fill, dlg_ok
-from kbenv import U, doc
+from kbenv import AREA, U, doc
 
 MOBILE = dict(viewport={"width": 390, "height": 844}, is_mobile=True,
               has_touch=True, device_scale_factor=3)
@@ -122,7 +122,7 @@ def test_tree_actions_via_row_toggle(browser):
     works with taps + in-app dialogs."""
     name = f"mob_{int(time.time())}.md"
     ctx, page = m_login(browser)
-    row = page.locator('.tree-item[data-path="company"]')
+    row = page.locator(f'.tree-item[data-path="{AREA}"]')
     row.locator(".tmore").click()
     page.wait_for_selector('[data-testid="ctx-menu"]')
     page.click('.ctx-item:has-text("New file")')

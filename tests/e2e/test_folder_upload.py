@@ -14,7 +14,7 @@ import time
 
 import httpx
 from conftest import BASE, dlg_ok, login
-from kbenv import CREDS, U, doc
+from kbenv import AREA, CREDS, U, doc
 
 TAG = str(int(time.time()))
 
@@ -39,7 +39,7 @@ def test_upload_folder_picker_recreates_the_tree(browser, tmp_path):
     ctx = browser.new_context()
     try:
         page = login(ctx, "alice")
-        row = '.tree-item[data-path="company"]'
+        row = f'.tree-item[data-path="{AREA}"]'
         page.wait_for_selector(row, timeout=8000)
         page.click(row, button="right")
         page.wait_for_selector('[data-testid="ctx-menu"]')
@@ -109,8 +109,8 @@ def test_drop_folder_uploads_subfolders_and_empty_dirs(browser):
     ctx = browser.new_context()
     try:
         page = login(ctx, "alice")
-        page.wait_for_selector('.tree-item[data-path="company"]', timeout=8000)
-        page.evaluate(DROP_JS, ["company", top])
+        page.wait_for_selector(f'.tree-item[data-path="{AREA}"]', timeout=8000)
+        page.evaluate(DROP_JS, [AREA, top])
 
         # a folder drop gets no browser confirmation, so the app asks once —
         # with the file count, because a mis-aimed drop can be enormous
