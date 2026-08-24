@@ -63,6 +63,6 @@ def test_live_tree_shows_newly_created_file(browser):
     c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     assert c.post("/fs/newfile", json={"path": doc(f"{name}")}).status_code == 200
     # the tree polls; the new file should appear on its own within a few seconds
-    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', timeout=8000)
     ctx.close()
     c.post("/api/fs/delete", json={"path": doc(f"{name}")})

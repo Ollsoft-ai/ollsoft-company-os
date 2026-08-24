@@ -5,7 +5,7 @@ stay reachable with a finger."""
 import time
 
 from conftest import BASE, CREDS, dlg_fill, dlg_ok
-from kbenv import doc
+from kbenv import U, doc
 
 MOBILE = dict(viewport={"width": 390, "height": 844}, is_mobile=True,
               has_touch=True, device_scale_factor=3)
@@ -15,7 +15,7 @@ def m_login(browser, user="alice"):
     ctx = browser.new_context(**MOBILE)
     page = ctx.new_page()
     page.goto(BASE + "/login")
-    page.fill('input[name="username"]', user)
+    page.fill('input[name="username"]', U(user))
     page.fill('input[name="password"]', CREDS[user])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")
@@ -85,7 +85,7 @@ def test_drawer_boots_open_and_closes_on_file_open(browser):
     assert not page.locator("#whoami").is_visible()      # desktop chrome is gone
     assert not page.locator(".brand-word").is_visible()
     # opening a document dismisses the drawer and shows the editor
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
     assert not nav_open(page)
     # the hamburger brings the tree back
@@ -127,16 +127,16 @@ def test_tree_actions_via_row_toggle(browser):
     page.wait_for_selector('[data-testid="ctx-menu"]')
     page.click('.ctx-item:has-text("New file")')
     dlg_fill(page, name)
-    page.wait_for_selector(f'.tab.active[data-path=doc("{name}")]', timeout=8000)
+    page.wait_for_selector(f'.tab.active[data-path="{doc(name)}"]', timeout=8000)
     assert not nav_open(page)                             # creating lands you in the doc
     # delete it again from the tree
     page.click("#nav-btn")
-    row = page.locator(f'.tree-item[data-path=doc("{name}")]')
+    row = page.locator(f'.tree-item[data-path="{doc(name)}"]')
     row.locator(".tmore").click()
     page.wait_for_selector('[data-testid="ctx-menu"]')
     page.click('.ctx-item.danger:has-text("Delete")')
     dlg_ok(page)
-    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', state="detached", timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', state="detached", timeout=8000)
     ctx.close()
 
 
@@ -380,7 +380,7 @@ def test_terminal_touch_swipe_sends_wheel_in_mouse_apps(browser):
 
 def test_doc_header_shows_filename_only(browser):
     ctx, page = m_login(browser)
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
     # the path collapses to its final segment; toolbar + mode switch stay usable
     crumbs = page.locator("#doc-title .crumb")
@@ -397,19 +397,19 @@ def test_drawer_opens_centred_on_the_active_file(browser):
     scrolls to it — even when its folder was collapsed, which used to leave the
     row unrendered and the highlight nowhere at all."""
     ctx, page = m_login(browser)
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
     assert not nav_open(page)
     # collapse everything behind the drawer's back
     page.click("#nav-btn")
     page.click('[data-testid="tree-fold"]')
     # collapsed rows stay in the DOM but are display:none — invisible highlight
-    assert not page.locator('.tree-item[data-path=doc("overview.md")]').is_visible()
+    assert not page.locator(f'.tree-item[data-path="{doc("overview.md")}"]').is_visible()
     page.mouse.click(370, 500)                       # close via scrim
     page.wait_for_function("() => !document.body.classList.contains('nav-open')")
     # reopening the drawer finds the file again: expanded, highlighted, in view
     page.click("#nav-btn")
-    row = page.locator('.tree-item[data-path=doc("overview.md")]')
+    row = page.locator(f'.tree-item[data-path="{doc("overview.md")}"]')
     assert row.is_visible()
     assert "active" in (row.get_attribute("class") or "")
     page.wait_for_timeout(400)                       # drawer slide-in
@@ -427,7 +427,7 @@ def test_toolbar_tap_keeps_editor_focus_and_selection(browser):
     the word gets wrapped — which only works if the selection survived."""
     ctx, page = m_login(browser)
     cdp = ctx.new_cdp_session(page)
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
     page.click(".cm-content")
     # select the first word of the document body programmatically
@@ -463,7 +463,7 @@ def test_mic_is_one_tap_away_and_steals_no_focus(browser):
     ctx, page = m_login(browser)
     assert page.locator("#mic-btn").is_visible()       # no ⋯ menu needed
     assert not page.locator("#topbar-actions").is_visible()
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
     page.click(".cm-content")
     page.wait_for_timeout(200)
@@ -602,7 +602,7 @@ def test_long_press_selects_and_lifting_copies(browser):
     ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"], **MOBILE)
     page = ctx.new_page()
     page.goto(BASE + "/login")
-    page.fill('input[name="username"]', "alice")
+    page.fill('input[name="username"]', U("alice"))
     page.fill('input[name="password"]', CREDS["alice"])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")

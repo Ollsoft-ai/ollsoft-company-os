@@ -23,7 +23,7 @@ def test_tabs_and_terminal_survive_reload(browser):
     page = login(ctx, "alice")
 
     # a doc tab + a live shell with state in it
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
     page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
@@ -113,7 +113,7 @@ def test_sync_badge_shows_live(browser):
     connection was how a whole pairing session looked broken."""
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_function("() => window.__kbpath === 'company/overview.md'")
     page.wait_for_selector(".sync-badge.live", timeout=8000)
     assert "live" in page.inner_text('[data-testid="sync-badge"]')

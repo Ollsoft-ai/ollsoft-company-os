@@ -16,27 +16,27 @@ def test_create_folder_and_file_then_delete(browser):
     row.hover()
     row.locator('button[title="New folder here"]').click()
     dlg_fill(page, name)
-    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', timeout=8000)
 
     # new file inside it (＋) — opens as a tab when created
-    row = page.locator(f'.tree-item[data-path=doc("{name}")]')
+    row = page.locator(f'.tree-item[data-path="{doc(name)}"]')
     row.hover()
     row.locator('button[title="New file here"]').click()
     dlg_fill(page, "note.md")
-    page.wait_for_selector(f'.tab.active[data-path=doc("{name}/note.md")]', timeout=8000)
+    page.wait_for_selector(f'.tab.active[data-path="{doc(f"{name}/note.md")}"]', timeout=8000)
 
     # delete the file (✕) — its tab must retire too
-    row = page.locator(f'.tree-item[data-path=doc("{name}/note.md")]')
+    row = page.locator(f'.tree-item[data-path="{doc(f"{name}/note.md")}"]')
     row.hover()
     row.locator("button.danger").click()
     dlg_ok(page)
-    page.wait_for_selector(f'.tab[data-path=doc("{name}/note.md")]', state="detached", timeout=8000)
-    page.wait_for_selector(f'.tree-item[data-path=doc("{name}/note.md")]', state="detached", timeout=8000)
+    page.wait_for_selector(f'.tab[data-path="{doc(f"{name}/note.md")}"]', state="detached", timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc(f"{name}/note.md")}"]', state="detached", timeout=8000)
 
     # delete the folder
-    row = page.locator(f'.tree-item[data-path=doc("{name}")]')
+    row = page.locator(f'.tree-item[data-path="{doc(name)}"]')
     row.hover()
     row.locator("button.danger").click()
     dlg_ok(page)
-    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', state="detached", timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', state="detached", timeout=8000)
     ctx.close()

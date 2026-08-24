@@ -81,7 +81,7 @@ def test_secret_viewer_masked_and_reveal(browser, setup):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     # _secrets auto-collapses, so open it before the secret row becomes visible
-    page.wait_for_selector('.tree-item[data-path=doc("_secrets")]', timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc("_secrets")}"]', timeout=8000)
     expand_folder(page, doc("_secrets"))
     page.wait_for_selector(f'.tree-item[data-path="{SECRET}"]', timeout=8000)
     page.click(f'.tree-item[data-path="{SECRET}"]')

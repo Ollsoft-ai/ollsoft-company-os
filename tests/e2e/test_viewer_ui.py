@@ -38,7 +38,7 @@ def test_viewer_browser_experience(browser, viewer):
     try:
         page = ctx.new_page()
         page.goto(BASE + "/login")
-        page.fill('input[name="username"]', viewer)
+        page.fill('input[name="username"]', U(viewer))
         page.fill('input[name="password"]', PW)
         page.click('button[type="submit"]')
         page.wait_for_url(BASE + "/")
@@ -50,7 +50,7 @@ def test_viewer_browser_experience(browser, viewer):
         assert page.locator('.launchbar .lchip.company', has_text="Overview").count() == 1
         assert page.locator('.launchbar .lchip.company', has_text="Shell thing").count() == 0
         # documents still open — and are editable (kb-users group write)
-        page.click('.tree-item[data-path=doc("overview.md")]')
+        page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
         page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
         page.wait_for_selector('#access-badge:not([hidden])')
         assert "write" in page.inner_text('#access-badge')

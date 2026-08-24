@@ -16,7 +16,7 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS
-from kbenv import doc
+from kbenv import U, doc
 
 LAT = 1200          # ms added to every request while a slow phase is under test
 USER = "alice"      # the same identity creates the fixture doc and views it
@@ -25,7 +25,7 @@ USER = "alice"      # the same identity creates the fixture doc and views it
 def login(ctx, user):
     page = ctx.new_page()
     page.goto(BASE + "/login")
-    page.fill('input[name="username"]', user)
+    page.fill('input[name="username"]', U(user))
     page.fill('input[name="password"]', CREDS[user])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")

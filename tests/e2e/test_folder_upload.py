@@ -49,7 +49,7 @@ def test_upload_folder_picker_recreates_the_tree(browser, tmp_path):
 
         # the ghost rows name the path INSIDE the folder, not just the basename
         page.wait_for_selector(".tree-item.uploading", timeout=8000)
-        page.wait_for_selector(f'.tree-item[data-path=doc("{top}/a.md")]', timeout=30000)
+        page.wait_for_selector(f'.tree-item[data-path="{doc(f"{top}/a.md")}"]', timeout=30000)
         page.wait_for_selector(".tree-item.uploading", state="hidden", timeout=15000)
 
         # every file landed where it came from, with its bytes
@@ -118,7 +118,7 @@ def test_drop_folder_uploads_subfolders_and_empty_dirs(browser):
         assert "2 files" in page.inner_text('[data-testid="dlg"]')
         dlg_ok(page)
 
-        page.wait_for_selector(f'.tree-item[data-path=doc("{top}/a.md")]', timeout=30000)
+        page.wait_for_selector(f'.tree-item[data-path="{doc(f"{top}/a.md")}"]', timeout=30000)
         page.wait_for_selector(".tree-item.uploading", state="hidden", timeout=15000)
 
         for rel, want in [("a.md", "# A\n"), ("sub/b.md", "# B\n")]:

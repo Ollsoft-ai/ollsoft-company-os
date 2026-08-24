@@ -11,6 +11,7 @@ is what these drive.
 import time
 
 import pytest
+from kbenv import U
 from conftest import BASE, CREDS
 
 USER = "alice"
@@ -19,7 +20,7 @@ USER = "alice"
 def login(ctx, user=USER):
     page = ctx.new_page()
     page.goto(BASE + "/login")
-    page.fill('input[name="username"]', user)
+    page.fill('input[name="username"]', U(user))
     page.fill('input[name="password"]', CREDS[user])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")
@@ -61,7 +62,7 @@ def test_can_sign_back_in_after_being_bounced(ctx):
     page = login(ctx)
     ctx.clear_cookies()
     page.wait_for_url("**/login", timeout=20000)
-    page.fill('input[name="username"]', USER)
+    page.fill('input[name="username"]', U(USER))
     page.fill('input[name="password"]', CREDS[USER])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")

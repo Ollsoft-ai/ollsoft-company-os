@@ -64,7 +64,7 @@ def page(ctx):
     p = ctx.new_page()
     _serve_dev(p)
     p.goto(BASE + "/login")
-    p.fill('input[name="username"]', "alice")
+    p.fill('input[name="username"]', U("alice"))
     p.fill('input[name="password"]', CREDS["alice"])
     p.click('button[type="submit"]')
     p.wait_for_url(BASE + "/")

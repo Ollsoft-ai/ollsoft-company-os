@@ -6,7 +6,7 @@ from kbenv import doc
 def test_artifact_writes_and_reads_a_file(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path=doc("dashboards/iotest.html")]')
+    page.click(f'.tree-item[data-path="{doc("dashboards/iotest.html")}"]')
     frame = page.frame_locator("iframe.artifact-frame")
     out = frame.locator("#out")
     out.wait_for(timeout=10000)
