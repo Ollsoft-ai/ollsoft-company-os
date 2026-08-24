@@ -33,7 +33,7 @@ def test_only_admins_reach_admin_api():
 def test_user_and_group_lifecycle():
     a = admin()
     try:
-        r = a.post("/admin/users", json={"username": TU, "first": "Test", "last": "User",
+        r = a.post("/admin/users", json={"username": U(TU), "first": "Test", "last": "User",
                                          "email": f"{TU}@example.com", "password": "TempPassphrase01"})
         assert r.status_code == 200, r.text
         # shows up in the list with profile + kb-users membership
@@ -42,25 +42,25 @@ def test_user_and_group_lifecycle():
         assert "kb-users" in users[TU]["groups"]
         # the new user can actually log in (PAM) and gets a working backend identity
         nc = httpx.Client(base_url=BASE, timeout=15)
-        assert nc.post("/login", data={"username": TU, "password": "TempPassphrase01"}).status_code == 200
+        assert nc.post("/login", data={"username": U(TU), "password": "TempPassphrase01"}).status_code == 200
         assert nc.get("/api/whoami").json()["user"] == TU
 
         # create a group and assign the user
         assert a.post("/admin/groups", json={"name": TG}).status_code == 200
         assert a.post("/admin/groups/member",
-                      json={"group": TG, "username": TU, "action": "add"}).status_code == 200
+                      json={"group": TG, "username": U(TU), "action": "add"}).status_code == 200
         groups = {g["name"]: g for g in a.get("/admin/list").json()["groups"]}
         assert TG in groups and TU in groups[TG]["members"]
         # and remove them again
         assert a.post("/admin/groups/member",
-                      json={"group": TG, "username": TU, "action": "remove"}).status_code == 200
+                      json={"group": TG, "username": U(TU), "action": "remove"}).status_code == 200
         groups = {g["name"]: g for g in a.get("/admin/list").json()["groups"]}
         assert TU not in groups[TG]["members"]
         # and the group itself can be deleted again
         assert a.post("/admin/groups/delete", json={"name": TG}).status_code == 200
         assert TG not in {g["name"] for g in a.get("/admin/list").json()["groups"]}
     finally:
-        a.post("/admin/users/delete", json={"username": TU})
+        a.post("/admin/users/delete", json={"username": U(TU)})
         a.post("/admin/groups/delete", json={"name": TG})   # idempotent cleanup
     # fully removed from the listing
     assert TU not in {u["username"] for u in a.get("/admin/list").json()["users"]}

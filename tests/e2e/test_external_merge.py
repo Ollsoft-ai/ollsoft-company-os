@@ -9,10 +9,10 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, dlg_fill, login
-from kbenv import U, doc
+from kbenv import U, doc as kbdoc
 
 TAG = str(int(time.time()))
-DOC = doc(f"extmerge_{TAG}.md")
+DOC = kbdoc(f"extmerge_{TAG}.md")
 DISK = f"/srv/kb/{DOC}"
 
 BASE_TEXT = (
@@ -45,7 +45,7 @@ def doc():
     state entirely.
     """
     global DOC, DISK
-    DOC = doc(f"extmerge_{int(time.time() * 1000)}.md")
+    DOC = kbdoc(f"extmerge_{int(time.time() * 1000)}.md")
     DISK = f"/srv/kb/{DOC}"
     k = api("alice")
     assert k.post("/api/file", json={"path": DOC}).status_code in (200, 409)

@@ -64,7 +64,7 @@ def scratch_doc():
     name = f"kbtest_ux_{int(time.time() * 1000)}"
     rel = doc(f"{name}.md")
     c = httpx.Client(base_url=BASE, timeout=30)
-    assert c.post("/login", data={"username": USER,
+    assert c.post("/login", data={"username": U(USER),
                                   "password": CREDS[USER]}).status_code == 200
     assert c.post("/fs/newfile", json={"path": rel}).status_code == 200
     assert c.post("/api/artifact/write",

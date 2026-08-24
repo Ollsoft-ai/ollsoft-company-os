@@ -8,6 +8,7 @@ so this module builds its OWN copy of the whole scenario through the product
 APIs as alice — a unique table, the stock dashboard pointed at it, a private
 file ACL-shared with carol — and tears every bit of it down again.
 """
+import subprocess
 import time
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from kbenv import U, doc
 TAG = str(int(time.time()))
 DIR = doc(f"kbtest_art_{TAG}")
 ART = f"{DIR}/dash.html"
-TABLE = f"u_alice.kbtest_readings_{TAG}"
+TABLE = f'u_{U("alice")}.kbtest_readings_{TAG}'
 
 
 def q(user, sql, params=None):
@@ -48,8 +49,21 @@ def scenario():
     sql(f"CREATE TABLE {TABLE} (id bigserial PRIMARY KEY, value int NOT NULL, "
         "at timestamptz DEFAULT now())")
     sql(f"INSERT INTO {TABLE} (value) SELECT (random()*100)::int FROM generate_series(1,20)")
-    sql("GRANT USAGE ON SCHEMA u_alice TO carol")
-    sql(f"GRANT SELECT, UPDATE, DELETE ON {TABLE} TO carol")
+
+    # The GRANTs go through psql, NOT through /api/artifact/query. That endpoint
+    # now refuses privilege statements on purpose: an artifact is authored by one
+    # person and opened by another with the VIEWER's database authority, so a
+    # GRANT inside one hands the author whatever the viewer can see. Setting the
+    # scenario up through the bridge would be using exactly the capability the
+    # guard exists to remove — and would silently stop testing it the day the
+    # guard worked.
+    def grant(stmt):
+        r = subprocess.run(["sudo", "-n", "-u", U("alice"), "psql", "-d", "kb", "-qc", stmt],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+    grant(f'GRANT USAGE ON SCHEMA u_{U("alice")} TO "{U("carol")}"')
+    grant(f'GRANT SELECT, UPDATE, DELETE ON {TABLE} TO "{U("carol")}"')
 
     # The dashboard: the stock randoms.html artifact, pointed at OUR table.
     src = Path(__file__).resolve().parents[2] / "defaults" / "artifacts" / "randoms.html"
@@ -60,7 +74,7 @@ def scenario():
     assert c.post("/api/artifact/write", json={"path": ART, "content": html}).status_code == 200
     # File side of the boundary: private + an explicit read ACL for carol only.
     r = c.post("/fs/props", json={"path": ART, "visibility": "private",
-                                  "acl_add": [{"type": "user", "name": "carol", "perms": "r"}]})
+                                  "acl_add": [{"type": "user", "name": U("carol"), "perms": "r"}]})
     assert r.status_code == 200, r.text
     yield
     c.post("/api/fs/delete", json={"path": DIR})
@@ -138,5 +152,5 @@ def test_uninvited_bob_is_blocked_two_ways():
 
 def test_query_runs_as_the_viewer():
     # The bridge proves identity: current_user is the viewer, not a shared role.
-    assert q("alice", "SELECT current_user")["rows"][0][0] == "alice"
-    assert q("carol", "SELECT current_user")["rows"][0][0] == "carol"
+    assert q("alice", "SELECT current_user")["rows"][0][0] == U("alice")
+    assert q("carol", "SELECT current_user")["rows"][0][0] == U("carol")

@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from conftest import BASE, CREDS, login
-from kbenv import U, doc
+from kbenv import U, doc as kbdoc
 
 SPOKEN = "the sync daemon owns the merge"
 HOLD_MS = 800          # comfortably past dictation.js's 450 ms hold threshold
@@ -85,7 +85,7 @@ def page(ctx):
 @pytest.fixture
 def doc(api):
     """A fresh, empty document per test."""
-    path = doc(f"kbtest_dict_{os.getpid()}_{uuid.uuid4().hex[:8]}.md")
+    path = kbdoc(f"kbtest_dict_{os.getpid()}_{uuid.uuid4().hex[:8]}.md")
     api.post("/api/file", json={"path": path})
     api.post("/api/artifact/write", json={"path": path, "content": "# scratch\n\nbaseline\n"})
     yield path
