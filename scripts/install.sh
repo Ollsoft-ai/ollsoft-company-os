@@ -181,9 +181,14 @@ chgrp kb-users "$REPO/users"    ; chmod 2775 "$REPO/users"
 chgrp kb-users "$REPO/company"  ; chmod 2775 "$REPO/company"
 setfacl -k "$REPO/company" 2>/dev/null || true
 setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/company"
-# Sticky bit: group members create freely at the top level but may only delete
-# what they own — protects the root-owned .gitignore.
-chmod +t "$REPO"
+# Sticky bit: group members create freely but may only rename/delete what they
+# OWN. Required on every group-writable container, not just the repo root: these
+# three are mode 2775 kb-users, and without +t any member could rename another
+# user's home aside and put their own directory in its place —
+# /srv/kb/users/<admin>/.claude/skills/ is loaded by that admin's agent, so that
+# was a path from "ordinary KB account" to "code runs as the admin". Same
+# primitive hijacked any projects/<name>. (2026-08-24 security review.)
+chmod +t "$REPO" "$REPO/users" "$REPO/company" "$REPO/projects"
 
 install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "$REPO/users/$ADMIN_USER"
 

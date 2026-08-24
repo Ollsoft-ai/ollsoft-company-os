@@ -68,7 +68,11 @@ SINCE=$(cat "$LAST_RUN_STAMP" 2>/dev/null || echo "")
 SINCE_ISO=$(date -d "@$SINCE" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "24 hours ago")
 
 WORK=$(mktemp -d /tmp/kb-maint-XXXXXX)
-chmod 755 "$WORK"
+# The agent runs as $OPERATOR and must traverse this dir, but the bundle holds
+# journal lines, Postgres output and document text from across the whole box —
+# 755 published all of it to every local account for the length of the run.
+chown "root:$OPERATOR" "$WORK" 2>/dev/null || true
+chmod 750 "$WORK"
 BUNDLE="$WORK/bundle.md"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -305,7 +309,11 @@ TOOLS=(
   "Bash(systemctl list-timers:*)" "Bash(systemctl --failed:*)"
   "Bash(sudo journalctl:*)" "Bash(journalctl:*)"
   "Bash(df:*)" "Bash(free:*)" "Bash(ps:*)" "Bash(ss -ltn)" "Bash(uptime:*)"
-  "Bash(ls:*)" "Bash(find:*)" "Bash(grep:*)" "Bash(head:*)" "Bash(tail:*)"
+  "Bash(ls:*)" "Bash(head:*)" "Bash(tail:*)"
+  # find/grep removed 2026-08-24: `find -exec` (and grep's pager/-f tricks) are
+  # general command-execution primitives, and this agent is fed attacker-writable
+  # text (health.md, filenames, journal lines). Read/Grep/Glob cover the same need
+  # without a shell. Do not re-add them.
   "Bash(wc:*)" "Bash(stat:*)" "Bash(cat /var/log/kb/*)" "Bash(sudo cat /var/log/kb/*)"
   "Bash(git log:*)" "Bash(git status:*)" "Bash(git diff:*)"
   "Bash(curl -s -o /dev/null -w * http://127.0.0.1:8300/)"
@@ -335,7 +343,7 @@ $( [ "$DRY_RUN" = 1 ] && echo "DRY RUN: do not CHANGE anything — no restarts, 
 if [ "$DRY_RUN" = 1 ]; then
   ALLOWED=("Read" "Grep" "Glob" "Bash(systemctl status:*)" "Bash(systemctl show:*)"
            "Bash(systemctl is-active:*)" "Bash(journalctl:*)" "Bash(sudo journalctl:*)"
-           "Bash(df:*)" "Bash(free:*)" "Bash(ls:*)" "Bash(find:*)" "Bash(grep:*)"
+           "Bash(df:*)" "Bash(free:*)" "Bash(ls:*)"
            "Bash(head:*)" "Bash(tail:*)" "Bash(cat /var/log/kb/*)" "Bash(sudo cat /var/log/kb/*)")
 else
   ALLOWED=("${TOOLS[@]}")
@@ -393,6 +401,9 @@ chmod 640 "$LOG" 2>/dev/null || true
 
 if [ "$DRY_RUN" = 0 ]; then
   cp "$REPORT" "$LAST_REPORT" 2>/dev/null || true
+  # Agent free-text: if anything ever induced it to quote a secret, this file
+  # must not be the place every account reads it from.
+  chmod 600 "$LAST_REPORT" 2>/dev/null || true
   date +%s > "$LAST_RUN_STAMP" 2>/dev/null || true
   : > "$RESTARTS_SNAPSHOT" 2>/dev/null || true
   for u in $UNITS; do
