@@ -19,12 +19,29 @@ set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO=/srv/kb
 UNDO=0
-DEMO_USERS=(alice bob carol)
+NS=""                            # --namespace <id>: isolate a test run
+# The demo users are declared at their add_user calls below, each with its own
+# group list. Teardown no longer needs a list here: it reads the manifest, so it
+# also removes users a PARTIAL run created, which a fixed list never did.
 PROJECT=acme                     # restricted project; alice+bob only
+
+# Everything this script creates is RECORDED here, and --undo removes exactly
+# what is recorded and nothing else.
+#
+# It used to remove a hardcoded list of paths instead — including
+# company/overview.md and company/onboarding.md. On a box where those documents
+# already existed and were written by a human, the seeder correctly SKIPPED them
+# (see seed(), which refuses to overwrite) and then --undo deleted them anyway.
+# It even printed "Documents you created yourself under company/ were left
+# alone" while doing it. A manifest makes that class of mistake impossible:
+# if we did not create it, we cannot remove it.
+MANIFEST_DIR=/var/lib/kb-seed
+MANIFEST="$MANIFEST_DIR/${NS:-demo}.manifest"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="${2:?}"; shift 2 ;;
+    --namespace) NS="${2:?}"; shift 2 ;;
     --undo) UNDO=1; shift ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -32,6 +49,12 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 say() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+
+# NS is known only after argument parsing.
+MANIFEST="$MANIFEST_DIR/${NS:-demo}.manifest"
+
+# record <kind> <value>   kind: path | user | group | pgrole
+record() { mkdir -p "$MANIFEST_DIR"; chmod 700 "$MANIFEST_DIR"; printf '%s\t%s\n' "$1" "$2" >> "$MANIFEST"; }
 
 # Read what the installer chose. Needed before the --undo branch, which also
 # talks to Postgres. Platform admins are members of the configured admin group:
@@ -45,29 +68,60 @@ fi
 
 # ---------------------------------------------------------------------------
 if [ "$UNDO" -eq 1 ]; then
-  say "removing demo content"
-  for u in "${DEMO_USERS[@]}"; do
-    id "$u" &>/dev/null || continue
-    pkill -KILL -u "$u" 2>/dev/null || true
-    runuser -u postgres -- psql -d "$PGDB" -tAc "SELECT 1 FROM pg_roles WHERE rolname='$u'" | grep -q 1 && {
-      runuser -u postgres -- psql -d "$PGDB" -qc "DROP OWNED BY \"$u\" CASCADE;" >/dev/null
-      runuser -u postgres -- psql -d "$PGDB" -qc "DROP ROLE IF EXISTS \"$u\";" >/dev/null
-    }
-    userdel -r "$u" 2>/dev/null || true
-    echo "  removed $u"
+  say "removing seeded content (${NS:-demo})"
+  if [ ! -f "$MANIFEST" ]; then
+    cat >&2 <<EOF
+No manifest at $MANIFEST — refusing to guess what to delete.
+
+This is deliberate. Earlier versions removed a fixed list of paths, which meant
+--undo could delete a document a human had written that merely shared a name
+with a seed file. If this demo was seeded by an older version, remove it by
+hand; from now on every seeded item is recorded and only recorded items go.
+EOF
+    exit 1
+  fi
+  # Reverse order: files before the directories that contain them.
+  tac "$MANIFEST" | while IFS=$'\t' read -r kind val; do
+    [ -n "${kind:-}" ] || continue
+    case "$kind" in
+      path)
+        # Refuse anything outside the repo, however the manifest got that way.
+        case "$val" in
+          "$REPO"/*) ;;
+          *) echo "  SKIP (outside repo): $val" >&2; continue ;;
+        esac
+        if [ -d "$val" ] && [ ! -L "$val" ]; then rmdir "$val" 2>/dev/null && echo "  rmdir ${val#"$REPO"/}"
+        elif [ -e "$val" ] || [ -L "$val" ]; then rm -f "$val" && echo "  rm    ${val#"$REPO"/}"
+        fi ;;
+      user)
+        id "$val" &>/dev/null || continue
+        pkill -KILL -u "$val" 2>/dev/null || true
+        if runuser -u postgres -- psql -d "$PGDB" -tAc \
+             "SELECT 1 FROM pg_roles WHERE rolname='$val'" | grep -q 1; then
+          runuser -u postgres -- psql -d "$PGDB" -qc "DROP OWNED BY \"$val\" CASCADE;" >/dev/null
+          runuser -u postgres -- psql -d "$PGDB" -qc "DROP ROLE IF EXISTS \"$val\";" >/dev/null
+        fi
+        userdel -r "$val" 2>/dev/null || true
+        echo "  user  $val" ;;
+      group) groupdel "$val" 2>/dev/null && { echo "  group $val"; : > "$MANIFEST.groups-went"; } ;;
+      # Credential files, outside the repo. Recorded rather than hardcoded for
+      # the same reason as everything else: only what we wrote gets removed.
+      extfile) [ -e "$val" ] && rm -f "$val" && echo "  rm    $val" ;;
+    esac
   done
-  rm -rf "${REPO:?}/projects/$PROJECT"
-  groupdel "proj-$PROJECT" 2>/dev/null || true
-  echo "  removed projects/$PROJECT"
-  for f in company/overview.md company/onboarding.md \
-           company/dashboards/randoms.html company/dashboards/iotest.html \
-           company/dashboards/scopetest.html company/dashboards/xsstest.html; do
-    rm -f "${REPO:?}/$f" && echo "  removed $f"
-  done
-  rmdir "${REPO:?}/company/dashboards" 2>/dev/null || true
-  rm -f /tmp/kb-test-creds.json /root/ollsoft-company-os-demo.txt
-  systemctl is-active --quiet kb-indexer && systemctl restart kb-indexer
-  echo "  demo removed. Documents you created yourself under company/ were left alone."
+  rm -f "$MANIFEST"
+  # Only when a group actually went: kbindexer's supplementary groups are fixed
+  # at exec, so it must be restarted to STOP seeing a removed project. Restarting
+  # it costs ~10 minutes of index staleness (the resweep re-inserts every block
+  # before inotify watches arm), so it is not something to do unconditionally.
+  if [ -e "$MANIFEST.groups-went" ]; then
+    rm -f "$MANIFEST.groups-went"
+    systemctl is-active --quiet kb-indexer && systemctl restart kb-indexer && \
+      echo "  kb-indexer restarted (group membership changed)"
+  fi
+  echo
+  echo "  Removed exactly what the manifest recorded. Anything you wrote yourself"
+  echo "  was never recorded, so it was never a candidate."
   exit 0
 fi
 
@@ -82,7 +136,10 @@ CREDS=/root/ollsoft-company-os-demo.txt
 TEST_CREDS=/tmp/kb-test-creds.json
 umask 077
 : > "$CREDS"
-groupadd -f "proj-$PROJECT"
+if ! getent group "proj-$PROJECT" >/dev/null; then
+  groupadd "proj-$PROJECT"
+  record group "proj-$PROJECT"
+fi
 usermod -aG "proj-$PROJECT" kbindexer
 
 
@@ -101,7 +158,9 @@ add_user() {
   PW["$u"]="$pw"
   printf '%s %s\n' "$u" "$pw" >> "$CREDS"
   for g in "$@"; do usermod -aG "$g" "$u"; done
+  record user "$u"
   install -d -m 700 -o "$u" -g "$u" "$REPO/users/$u"
+  record path "$REPO/users/$u"
   runuser -u postgres -- psql -d "$PGDB" -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='$u') THEN CREATE ROLE "$u" LOGIN; END IF;
@@ -132,6 +191,8 @@ chmod 600 "$TEST_CREDS"
 if ! chown "$TEST_CREDS_OWNER" "$TEST_CREDS" 2>/dev/null; then
   echo "  WARNING: could not chown $TEST_CREDS to $TEST_CREDS_OWNER" >&2
 fi
+record extfile "$TEST_CREDS"
+record extfile "$CREDS"
 echo "  test credentials -> $TEST_CREDS"
 
 # ---------------------------------------------------------------------------
@@ -140,7 +201,10 @@ say "restricted project: projects/$PROJECT"
 # 2770 + setgid: only proj-<name> members can even list it. This is the folder
 # that demonstrates the whole model — carol cannot see it in the file tree, and
 # a raw SQL query as carol returns none of its rows either.
-mkdir -p "$REPO/projects/$PROJECT"
+if [ ! -d "$REPO/projects/$PROJECT" ]; then
+  mkdir -p "$REPO/projects/$PROJECT"
+  record path "$REPO/projects/$PROJECT"
+fi
 chgrp "proj-$PROJECT" "$REPO/projects/$PROJECT"
 chmod 2770 "$REPO/projects/$PROJECT"
 setfacl -d -m u::rwx,g::rwx,o::- "$REPO/projects/$PROJECT"
@@ -150,9 +214,13 @@ say "seed documents"
 # ---------------------------------------------------------------------------
 seed() {  # seed <owner> <relpath>  <<<content   (only if missing)
   local owner=$1 rel=$2 full="$REPO/$2"
-  [ -e "$full" ] && { echo "  skip $rel (exists)"; cat >/dev/null; return 0; }
+  # An existing file is somebody else's document. Skipping it is why --undo must
+  # be manifest-driven: a skipped file is never recorded, so it can never be
+  # deleted by the teardown.
+  [ -e "$full" ] && { echo "  skip $rel (exists, left alone)"; cat >/dev/null; return 0; }
   cat > "$full"
   chown "$owner" "$full"
+  record path "$full"
   echo "  $rel"
 }
 
@@ -251,11 +319,15 @@ say "demo artifacts"
 # ---------------------------------------------------------------------------
 # Sandboxed HTML dashboards that query the database as the viewer. These are
 # also fixtures for tests/e2e — see defaults/artifacts/README.md.
-install -d -m 2775 -o alice -g kb-users "$REPO/company/dashboards"
+if [ ! -d "$REPO/company/dashboards" ]; then
+  install -d -m 2775 -o alice -g kb-users "$REPO/company/dashboards"
+  record path "$REPO/company/dashboards"
+fi
 for a in randoms iotest scopetest xsstest; do
   if [ ! -e "$REPO/company/dashboards/$a.html" ]; then
     install -m 664 -o alice -g kb-users "$SRC/defaults/artifacts/$a.html" \
             "$REPO/company/dashboards/$a.html"
+    record path "$REPO/company/dashboards/$a.html"
     echo "  company/dashboards/$a.html"
   fi
 done
