@@ -47,7 +47,9 @@ jobs:
         run: sudo bash scripts/install.sh --admin ciadmin
 
       - name: Seed the demo company
-        run: sudo bash scripts/seed-demo.sh
+        # The suite runs as alice (see the CLI test step), so the credentials
+        # file must belong to her — not to the account that ran sudo.
+        run: sudo KB_TEST_USER=alice bash scripts/seed-demo.sh
 
       - name: Permission model holds (carol must not reach the restricted project)
         run: |
