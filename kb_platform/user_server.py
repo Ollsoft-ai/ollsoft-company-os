@@ -109,10 +109,32 @@ def _name_key(name: str):
     return (cat, parts, name)  # raw name last: stable, total order for `a` vs `A`
 
 
+def _aud_key(path: Path):
+    """The readership of one path, or None when it cannot be read at all."""
+    try:
+        return common.readership_key(*common.stat_and_acl(path))
+    except OSError:
+        return None
+
+
+def _aud_flag(child, parent) -> str | None:
+    """How a child's readership differs from its folder's — None when it simply
+    follows along, which is almost everything and must stay unmarked."""
+    if child is None or parent is None or child == parent:
+        return None
+    cgid, call, cnamed = child
+    _pgid, pall, _pnamed = parent
+    if cgid is None and not call and not cnamed:
+        return "solo"          # nobody but the owner can read it
+    if call and not pall:
+        return "open"          # readable more widely than the folder it sits in
+    return "custom"            # a different set of people from the folder
+
+
 async def tree(request: web.Request) -> web.Response:
     root = common.REPO_ROOT
 
-    def walk(d: Path, depth: int) -> list:
+    def walk(d: Path, depth: int, parent_aud=None) -> list:
         out = []
         if depth > 12:
             return out
@@ -133,11 +155,18 @@ async def tree(request: web.Request) -> web.Response:
             except OSError:
                 continue
             access = {"read": os.access(p, os.R_OK), "write": os.access(p, os.W_OK)}
+            # depth 0/1 = the areas themselves and the project/team folders
+            # directly under them, where having your own audience IS the
+            # convention — flagging those would put a marker on every row and
+            # teach people to ignore all of them.
+            aud = _aud_key(p)
+            flag = _aud_flag(aud, parent_aud) if depth >= 1 else None
             if is_dir:
                 if not os.access(p, os.R_OK | os.X_OK):
                     continue
                 out.append({"name": e.name, "path": rel, "dir": True, "access": access,
-                            "children": walk(p, depth + 1)})
+                            **({"aud": flag} if flag else {}),
+                            "children": walk(p, depth + 1, aud)})
             else:
                 if not os.access(p, os.R_OK):
                     continue
@@ -148,10 +177,10 @@ async def tree(request: web.Request) -> web.Response:
                 else:
                     kind = "file"
                 out.append({"name": e.name, "path": rel, "dir": False, "kind": kind,
-                            "access": access})
+                            **({"aud": flag} if flag else {}), "access": access})
         return out
 
-    return web.json_response({"root": str(root), "tree": walk(root, 0)})
+    return web.json_response({"root": str(root), "tree": walk(root, 0, _aud_key(root))})
 
 
 async def read_file(request: web.Request) -> web.Response:
@@ -271,22 +300,6 @@ async def fs_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "deleted": rel, "was_dir": is_dir})
 
 
-def _reset_audience(dst: Path) -> None:
-    """Give a freshly copied tree the DESTINATION's audience: drop the ACL and
-    mode that came from the source and re-derive what the kernel would have
-    created here (common.reset_to_parent_audience). Best-effort — a copy that
-    lands slightly tight is recoverable; one that stays private inside a team
-    folder, or that carries a stranger's grant into it, is the bug being fixed."""
-    common.reset_to_parent_audience(dst, dst.is_dir())
-    if dst.is_dir():
-        # top-down, so each level is fixed before its children read it as parent
-        for dirpath, dirnames, filenames in os.walk(dst, followlinks=False):
-            for n in dirnames:
-                common.reset_to_parent_audience(Path(dirpath) / n, True)
-            for n in filenames:
-                common.reset_to_parent_audience(Path(dirpath) / n, False)
-
-
 def _fs_pair(data: dict) -> tuple[Path, Path, str, str] | web.Response:
     """Resolve + sanity-check a (src, dst) pair for rename/copy. Both must stay
     in the repo, src must not be a top-level area, dst must not sit at the repo
@@ -307,11 +320,69 @@ def _fs_pair(data: dict) -> tuple[Path, Path, str, str] | web.Response:
     return src, dst, rel_src, rel_dst
 
 
+def _audience_of(p: Path) -> dict:
+    """How wide an inode is open, in the panel's vocabulary."""
+    try:
+        st, entries = common.stat_and_acl(p)
+    except OSError:
+        return {"scope": "unknown", "group": "", "people": 0}
+    mode = common.effective_mode(st, entries)
+    try:
+        group = grp.getgrgid(st.st_gid).gr_name
+    except KeyError:
+        group = str(st.st_gid)
+    if mode & 0o004:
+        scope = "everyone"
+    elif mode & 0o040:
+        scope = "people"
+    else:
+        scope = "private"
+    try:
+        g = grp.getgrnam(group)
+        people = len(set(g.gr_mem) | {e.pw_name for e in pwd.getpwall()
+                                      if e.pw_gid == g.gr_gid}) - (1 if "kbindexer" in g.gr_mem else 0)
+    except KeyError:
+        people = 0
+    return {"scope": scope, "group": group, "people": max(people, 0)}
+
+
+async def fs_move_preview(request: web.Request) -> web.Response:
+    """Would this move change who can open the thing? Asked BEFORE the move, so
+    the app can put the question to the person dragging instead of quietly
+    publishing a private note into a team folder (or quietly carrying a team's
+    grant out of it)."""
+    data = await request.json()
+    src = common.resolve_repo_path(str(data.get("src", "")))
+    dst = common.resolve_repo_path(str(data.get("dst", "")))
+    if src is None or dst is None or not src.exists():
+        return web.json_response({"error": "bad path"}, status=400)
+    if not dst.parent.is_dir():
+        return web.json_response({"error": "destination folder does not exist"}, status=400)
+    cur, to = _audience_of(src), _audience_of(dst.parent)
+    same_dir = os.path.dirname(str(src)) == os.path.dirname(str(dst))
+    return web.json_response({
+        "changes": (not same_dir) and (cur["scope"] != to["scope"] or cur["group"] != to["group"]),
+        "same_dir": same_dir, "from": cur, "to": to,
+        "mine": os.lstat(src).st_uid == os.geteuid(),
+        "dst_folder": str(dst.parent.relative_to(common.REPO_ROOT)),
+    })
+
+
 async def fs_rename(request: web.Request) -> web.Response:
     """Move/rename AS the user — exactly what `mv` in their terminal could do
     (kernel needs write on both parent folders). The frontend retires and
-    reopens any affected editor tabs itself."""
-    got = _fs_pair(await request.json())
+    reopens any affected editor tabs itself.
+
+    Unlike `mv`, the moved thing then takes the DESTINATION's audience by
+    default (`audience: "keep"` opts out). A rename carries the inode over
+    untouched — same owner, group, mode and ACLs — and the destination's setgid
+    bit does not fire, because setgid only applies when the kernel creates a
+    child. So a private note dragged into a team folder stayed unreadable by
+    that team AND by the indexer (invisible in search, silently), while a file
+    dragged between two projects kept the first project's group. Copy has
+    re-homed for exactly this reason since it was written; move now matches."""
+    data = await request.json()
+    got = _fs_pair(data)
     if isinstance(got, web.Response):
         return got
     src, dst, rel_src, rel_dst = got
@@ -335,10 +406,23 @@ async def fs_rename(request: web.Request) -> web.Response:
                                  status=403)
     except OSError as e:
         return web.json_response({"error": str(e)}, status=400)
+    rehomed = False
+    if (data.get("audience") != "keep"
+            and os.path.dirname(rel_src) != os.path.dirname(rel_dst)):
+        # Only the owner may chmod/chgrp, so a move of someone else's file is
+        # left exactly as it arrived rather than half-applied — the response
+        # says so and the app surfaces it.
+        try:
+            if os.lstat(dst).st_uid == os.geteuid():
+                await asyncio.to_thread(common.reset_audience_tree, dst)
+                rehomed = True
+        except OSError:
+            pass
     # history sees a rename as delete-at-old + add-at-new — attribute both sides
     new_touched = [rel_dst + old[len(rel_src):] for old in old_touched]
     common.write_attrib_hint("rename", *old_touched, *new_touched)
-    return web.json_response({"ok": True, "src": rel_src, "dst": rel_dst})
+    return web.json_response({"ok": True, "src": rel_src, "dst": rel_dst,
+                              "rehomed": rehomed})
 
 
 async def fs_copy(request: web.Request) -> web.Response:
@@ -374,10 +458,10 @@ async def fs_copy(request: web.Request) -> web.Response:
             await asyncio.to_thread(shutil.copytree, src, dst, symlinks=False,
                                     copy_function=shutil.copy,
                                     ignore=shutil.ignore_patterns(".git", "*.kbtmp"))
-            await asyncio.to_thread(_reset_audience, dst)
+            await asyncio.to_thread(common.reset_audience_tree, dst)
         else:
             await asyncio.to_thread(shutil.copy, src, dst)
-            await asyncio.to_thread(_reset_audience, dst)
+            await asyncio.to_thread(common.reset_audience_tree, dst)
     except PermissionError:
         return web.json_response({"error": "permission denied"}, status=403)
     except shutil.Error as e:
@@ -970,7 +1054,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 20}
+            "jobs": jobs, "raw": raw, "v": 23}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
@@ -1429,6 +1513,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/artifact/raw", artifact_raw)
     app.router.add_post("/api/artifact/read", artifact_read)
     app.router.add_post("/api/artifact/write", artifact_write)
+    app.router.add_post("/api/fs/move-preview", fs_move_preview)
     app.router.add_get("/api/principals", principals)
     app.router.add_get("/api/launchers", launchers_get)
     app.router.add_post("/api/launchers", launchers_set)

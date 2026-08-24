@@ -23,8 +23,15 @@ repeating interruption.
 The heartbeat checks outcomes, not processes — it exists because a service can
 be `active` while serving garbage (an indexer once served a stale index for 90
 minutes while systemd showed green). It records state *changes* and writes the
-current state to `company/infrastructure/health.md` in the knowledgebase, where
+current state to `company/.infrastructure/health.md` in the knowledgebase, where
 humans and agents alike can read it.
+
+That folder is a **dot-directory on purpose**: readable to `kb-users` on disk and
+versioned by syncd, but the indexer prunes dot-dirs, so it is absent from
+`kb.blocks`, from search and from the app's file tree. Read the file by path;
+`rg`/Grep need `--hidden`. The heartbeat's staleness check prunes the same set as
+the indexer for the same reason — comparing a never-indexed file against
+`kb.files` is a permanent false STALE.
 
 It always **exits 0** when the check completes, even when it finds problems.
 Exiting non-zero made systemd log `Failed to start kb-heartbeat.service`, so

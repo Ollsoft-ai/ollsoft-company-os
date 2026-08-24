@@ -38,8 +38,15 @@ runuser -u postgres -- pg_isready -q 2>/dev/null || note "postgres not accepting
 # %p (full path) then strip the repo prefix — %P is relative to the FIND ROOT
 # (company/ or projects/), which produced paths kb.files has never heard of and
 # a false STALE alert on the very first quiet afternoon.
-newest=$(find "$REPO/company" "$REPO/projects" -name '*.md' -not -path '*/.git/*' \
-         -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)
+# The prune list must mirror the indexer's own (indexer.py: dirnames pruned on
+# startswith(".") and == "_secrets"). Comparing a file the indexer deliberately
+# never indexes against kb.files yields idx_t=0 and a PERMANENT false STALE —
+# which is exactly what this check's own output file does, now that it lives in
+# company/.infrastructure/. Dot-FILES are not pruned: kb-convert sidecars are
+# indexed on purpose and should still count.
+newest=$(find "$REPO/company" "$REPO/projects" \
+           -type d \( -name '.*' -o -name '_secrets' \) -prune -o \
+           -name '*.md' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)
 if [ -n "$newest" ]; then
   disk_t=${newest%% *}; disk_t=${disk_t%.*}
   rel=${newest#* }; rel=${rel#"$REPO"/}
@@ -82,7 +89,7 @@ STATE_FILE="$STATE_DIR/status"
 prev=$(cat "$STATE_FILE" 2>/dev/null || echo "OK")
 if [ ${#FAILS[@]} -eq 0 ]; then cur="OK"; else cur=$(printf '%s; ' "${FAILS[@]}"); fi
 
-H="$REPO/company/infrastructure/health.md"
+H="$REPO/company/.infrastructure/health.md"
 if [ "$cur" != "$prev" ] || [ ! -f "$H" ]; then
   if [ "$cur" = "OK" ]; then
     "$ALERT" "Company OS recovered" "All checks passing again." default white_check_mark || true
@@ -93,6 +100,10 @@ if [ "$cur" != "$prev" ] || [ ! -f "$H" ]; then
 
   # The OS reports on itself where everyone (agents included) can read it —
   # written only on CHANGE so syncd's auto-commit history stays quiet.
+  # `.infrastructure` is a dot-dir: readable to kb-users on disk and versioned
+  # by syncd, but pruned by the indexer, so it is NOT in kb.blocks and NOT in
+  # the app's tree or search. Agents must read the file, not grep for it
+  # (`rg` needs --hidden). Deliberate — see that folder's README.md.
   mkdir -p "$(dirname "$H")"
   {
     echo "# Platform health"

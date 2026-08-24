@@ -23,8 +23,10 @@ import re
 import socket
 import stat
 import subprocess
+import sys
 import threading
 import time
+import unicodedata
 import urllib.parse
 from pathlib import Path
 
@@ -283,7 +285,21 @@ def _acl_apply_fd(tfd: int, is_dir: bool, args: list[str]) -> None:
         except OSError:
             os.chmod(tmpf, stat.S_IMODE(os.fstat(tfd).st_mode))
         subprocess.run(["setfacl", *args, "--", tmpf], check=True, capture_output=True, timeout=5)
-        os.setxattr(tfd, _ACL_ACCESS, os.getxattr(tmpf, _ACL_ACCESS))
+        try:
+            acl = os.getxattr(tmpf, _ACL_ACCESS)
+        except OSError:
+            # No extended ACL left — the args only touched base entries (u::/g::/o::)
+            # or stripped the last named one. That is a real result, not a failure:
+            # take the plain mode setfacl computed and drop any ACL still on the
+            # target. Raising here 500'd every "share this folder with people who
+            # can all edit", the most ordinary case there is.
+            try:
+                os.removexattr(tfd, _ACL_ACCESS)
+            except OSError:
+                pass
+            os.fchmod(tfd, stat.S_IMODE(os.stat(tmpf).st_mode))
+        else:
+            os.setxattr(tfd, _ACL_ACCESS, acl)
     finally:
         os.unlink(tmpf)
     if is_dir:
@@ -305,6 +321,703 @@ def _acl_apply_fd(tfd: int, is_dir: bool, args: list[str]) -> None:
             os.rmdir(tmpd)
 
 
+# ---- people-centric sharing -------------------------------------------------
+# The share panel speaks PEOPLE ("who can open this, view or edit"); the
+# filesystem speaks owning groups, mode bits and POSIX ACLs. This block is the
+# only translation between the two, and it picks the mechanism per object so
+# that the everyday action — adding or removing one person — stays O(1):
+#
+#   folder + "can edit"  -> the folder's OWNING GROUP        (gpasswd, no walk)
+#   folder + "can view"  -> a companion "-v" group bound by a named-group ACL
+#                           (one recursive apply; membership is gpasswd after)
+#   file   + anyone      -> a named user ACL on that one inode
+#
+# Groups the platform created carry MANAGED_PREFIX, which is what licenses us to
+# rewrite their membership. A hand-made group (proj-*, team-*) is rewritten only
+# from the folder that OWNS it (_audience_root); editing a subfolder that merely
+# inherits it forks a fresh managed group instead, so "restrict this one
+# subfolder" can never silently rewrite the whole project's access list.
+MANAGED_PREFIX = "kbs-"
+EVERYONE_GROUP = common.EVERYONE_GROUP
+INDEXER_USER = "kbindexer"
+_ROLES = ("view", "edit")
+
+
+def _is_user_group(name: str) -> bool:
+    try:
+        pwd.getpwnam(name)
+        return True
+    except KeyError:
+        return False
+
+
+def _is_shared_group(name: str) -> bool:
+    """A group that can legitimately carry a folder's audience: platform gid
+    range, and not somebody's per-user primary group."""
+    try:
+        g = grp.getgrnam(name)
+    except KeyError:
+        return False
+    return 1000 <= g.gr_gid < 65000 and not _is_user_group(name)
+
+
+def _group_members(name: str) -> set[str]:
+    """Everyone the kernel counts as a member — secondary members AND anyone
+    whose PRIMARY group this is (they never appear in gr_mem)."""
+    try:
+        g = grp.getgrnam(name)
+    except KeyError:
+        return set()
+    return set(g.gr_mem) | {e.pw_name for e in pwd.getpwall() if e.pw_gid == g.gr_gid}
+
+
+def _primary_members(name: str) -> set[str]:
+    try:
+        gid = grp.getgrnam(name).gr_gid
+    except KeyError:
+        return set()
+    return {e.pw_name for e in pwd.getpwall() if e.pw_gid == gid}
+
+
+def _slug(text: str) -> str:
+    """A groupadd-safe stem from a folder name. Emoji and diacritics are the
+    norm here ("⚕️ olingo-medical") and groupadd accepts neither."""
+    s = unicodedata.normalize("NFKD", text)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-").lower()
+    return s[:20] or "share"
+
+
+def _new_managed_group(hint: str) -> str:
+    base = MANAGED_PREFIX + _slug(hint)
+    name = base
+    for n in range(2, 200):
+        try:
+            grp.getgrnam(name)
+        except KeyError:
+            break
+        name = f"{base}-{n}"
+    else:
+        raise OSError("no free managed group name")
+    if not _GROUP_RE.match(name):
+        raise OSError(f"bad managed group name {name}")
+    if _run(["groupadd", name]).returncode != 0:
+        raise OSError(f"groupadd {name} failed")
+    return name
+
+
+def _set_group_members(group: str, want: set[str]) -> set[str]:
+    """Make `group`'s membership exactly `want`. Returns the users whose
+    membership actually changed: their running backend was started by runuser
+    with the OLD supplementary gids, so until it is restarted the grant (or,
+    worse, its removal) does not apply to them."""
+    have = _group_members(group)
+    # A primary-group membership lives in /etc/passwd, not /etc/group — gpasswd
+    # -d cannot remove it and would just fail noisily.
+    fixed = _primary_members(group)
+    changed = set()
+    for u in sorted(want - have):
+        if _run(["gpasswd", "-a", u, group]).returncode == 0:
+            changed.add(u)
+    for u in sorted(have - want - fixed):
+        if _run(["gpasswd", "-d", u, group]).returncode == 0:
+            changed.add(u)
+    return changed
+
+
+def _restart_backends(users) -> None:
+    """Drop those users' per-user backends. A backend's credentials are fixed by
+    runuser at spawn, so a group change never reaches a running one; the hub
+    respawns it on the next request with the new group list. Needed on REMOVAL
+    too — a stale backend keeps serving what was just revoked."""
+    for u in sorted(set(users)):
+        if u == INDEXER_USER:
+            continue
+        _run(["pkill", "-KILL", "-u", u, "-f", "kb_platform.user_server"])
+
+
+def _used_gids() -> set[int]:
+    """Every group id anything in the repo is currently owned by. Walks
+    EVERYTHING, `_secrets/` included — _walk_repo's exclusions exist to stop us
+    granting access there, not to let us forget a folder that still depends on a
+    group we are about to delete."""
+    used = set()
+    for dirpath, dirnames, filenames in os.walk(common.REPO_ROOT, followlinks=False):
+        for n in [""] + dirnames + filenames:
+            path = os.path.join(dirpath, n)
+            try:
+                used.add(os.lstat(path).st_gid)
+            except OSError:
+                continue
+            # Named ACL groups count as "in use" too. A viewer group is NEVER an
+            # owning group — it exists only as a named entry — so counting owners
+            # alone reaped it the moment it was created and took every "can view"
+            # grant down with it.
+            for xattr in (_ACL_ACCESS, _ACL_DEFAULT):
+                try:
+                    raw = os.getxattr(path, xattr, follow_symlinks=False)
+                except OSError:
+                    continue
+                for tag, _perm, qual in common.parse_acl_bytes(raw) or ():
+                    if tag == common._ACL_GROUP:
+                        used.add(qual)
+    return used
+
+
+def _reap_orphan_groups() -> list[str]:
+    """Delete the groups the platform invented, once nothing carries them.
+
+    Sharing materialises a group per folder, and the folder can then be deleted,
+    re-shared or handed to a different audience — none of which the group hears
+    about. Without this they accumulate in /etc/group and in the admin panel
+    forever. One walk answers the question for every managed group at once, so
+    this is cheap enough to run on a timer as well as after a change."""
+    managed = [g for g in grp.getgrall() if g.gr_name.startswith(MANAGED_PREFIX)]
+    if not managed:
+        return []
+    used = _used_gids() | {e.pw_gid for e in pwd.getpwall()}
+    gone = []
+    for g in managed:
+        if g.gr_gid not in used and _run(["groupdel", g.gr_name]).returncode == 0:
+            gone.append(g.gr_name)
+    return gone
+
+
+def _audience_root(rel: str, group: str) -> bool:
+    """Is `rel` the topmost path carrying `group`? If an ancestor carries it too
+    then `rel` merely INHERITS that audience and must not rewrite it."""
+    try:
+        gid = grp.getgrnam(group).gr_gid
+    except KeyError:
+        return False
+    parent = os.path.dirname(rel)
+    while parent:
+        try:
+            if os.stat(common.REPO_ROOT / parent).st_gid == gid:
+                return False
+        except OSError:
+            pass
+        parent = os.path.dirname(parent)
+    return True
+
+
+def _named_effective(entries) -> tuple[dict, dict]:
+    """Named ACL grants with the MASK already applied — what the kernel really
+    gives, not what each entry claims on its own."""
+    if not entries:
+        return {}, {}
+    mask = 7
+    for tag, perm, _q in entries:
+        if tag == common._ACL_MASK:
+            mask = perm
+    users, groups = {}, {}
+    for tag, perm, qual in entries:
+        if tag == common._ACL_USER:
+            try:
+                users[pwd.getpwuid(qual).pw_name] = perm & mask
+            except KeyError:
+                pass
+        elif tag == common._ACL_GROUP:
+            try:
+                groups[grp.getgrgid(qual).gr_name] = perm & mask
+            except KeyError:
+                pass
+    return users, groups
+
+
+def _viewer_group(edit_group: str) -> str:
+    """Companion read-only group for a folder. Two groups, because an inode has
+    exactly one owning group but a folder routinely has both editors and
+    viewers; binding the second by named-group ACL keeps BOTH roles O(1) to
+    change afterwards."""
+    return (edit_group[:29] + "-v") if not edit_group.endswith("-v") else edit_group
+
+
+def _walk_repo(root: Path):
+    """Every non-symlink path under `root`, secrets excluded. Sharing must never
+    reach into a `_secrets/` folder: those are listable by the team on purpose,
+    while their contents are owner-only, and a recursive grant would publish
+    exactly the thing that must not be."""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames
+                       if not common.is_secret_path(str(Path(dirpath) / d))
+                       and not os.path.islink(os.path.join(dirpath, d))]
+        for n in dirnames:
+            yield Path(dirpath) / n, True
+        for n in filenames:
+            f = Path(dirpath) / n
+            if common.is_secret_path(str(f)) or f.is_symlink():
+                continue
+            yield f, False
+
+
+def _share_state(p: Path, rel: str, user: str) -> dict:
+    """Who can open this, as PEOPLE — the same question the panel asks, answered
+    from the inode itself (owning group, mode, ACLs) rather than from any
+    bookkeeping the platform would have to keep in sync."""
+    st, entries = common.stat_and_acl(p)
+    is_dir = stat.S_ISDIR(st.st_mode)
+    mode = common.effective_mode(st, entries)
+    owner = _owner_name(p) or str(st.st_uid)
+    group = grp.getgrgid(st.st_gid).gr_name if _grp_ok(st.st_gid) else str(st.st_gid)
+    named_u, named_g = _named_effective(entries)
+    profs = _profiles_load()
+
+    def label(u: str) -> str:
+        pr = profs.get(u, {})
+        return " ".join(x for x in (pr.get("first"), pr.get("last")) if x) or u
+
+    named_people = {u for u, perm in named_u.items() if u != INDEXER_USER and perm & 4}
+    named_groups = {g for g, perm in named_g.items() if perm & 4 and _is_shared_group(g)}
+    if (mode & 0o004) or ((mode & 0o040) and group == EVERYONE_GROUP):
+        scope = "everyone"
+    elif (mode & 0o040) or named_people or named_groups:
+        scope = "people"
+    else:
+        scope = "private"
+
+    people = [{"user": owner, "name": label(owner), "role": "owner",
+               "via": "owner", "fixed": True}]
+    seen = {owner}
+
+    def add(u: str, perm: int, via: str, src: str = ""):
+        if u in seen or u == INDEXER_USER or not perm & 4:
+            return
+        seen.add(u)
+        people.append({"user": u, "name": label(u),
+                       "role": "edit" if perm & 2 else "view", "via": via, "source": src})
+
+    if scope != "everyone" and (mode & 0o040) and group != EVERYONE_GROUP \
+            and _is_shared_group(group):
+        for m in sorted(_group_members(group)):
+            add(m, (mode >> 3) & 7, "group", group)
+    for g, perm in sorted(named_g.items()):
+        if g == EVERYONE_GROUP or not _is_shared_group(g):
+            continue
+        for m in sorted(_group_members(g)):
+            add(m, perm, "group", g)
+    for u, perm in sorted(named_u.items()):
+        add(u, perm, "person")
+
+    # Is this thing just following the folder it sits in? If so the panel says
+    # so and a Save that changes nothing changes nothing — without this, opening
+    # a file that merely inherits its team and pressing Save would silently
+    # convert it into a per-file grant list that stops tracking the folder.
+    inherited = False
+    if "/" in rel:
+        try:
+            inherited = (common.readership_key(st, entries)
+                         == common.readership_key(*common.stat_and_acl(p.parent)))
+        except OSError:
+            pass
+
+    vg = _viewer_group(group)
+    return {
+        "path": rel, "is_dir": is_dir, "scope": scope, "owner": owner,
+        "inherited": inherited, "parent": os.path.dirname(rel),
+        "owner_name": label(owner), "group": group,
+        "managed": group.startswith(MANAGED_PREFIX),
+        "audience_root": _audience_root(rel, group) if _is_shared_group(group) else True,
+        "viewer_group": vg if vg in {g for g in named_g} else None,
+        "secret": common.is_secret_path(rel),
+        "people": people,
+        "can_edit": _owns_or_admin(p, user),
+        "advanced": {"mode": oct(stat.S_IMODE(st.st_mode))[2:], "owner": owner,
+                     "group": group, "acls": _parse_acl(p)},
+    }
+
+
+def _pin(rel: str):
+    """(parent_fd, name, lstat) for `rel`, resolved without ever following a
+    symlink — every mutation below acts on a pinned fd, so a path swapped mid
+    call cannot redirect a root chown/chmod/setfacl somewhere else."""
+    pfd = common.opendir_beneath(os.path.dirname(rel))
+    name = os.path.basename(rel)
+    lst = os.stat(name, dir_fd=pfd, follow_symlinks=False)
+    return pfd, name, lst
+
+
+def _grant_indexer(tfd: int, is_dir: bool) -> None:
+    """Keep the search indexer able to READ a restricted file. Without this,
+    "only me" silently means "not searchable, even by me": kb-indexer runs as
+    kbindexer, and a file it cannot read has no rows in kb.blocks at all. RLS
+    still decides who may SEE those rows, so this widens nothing."""
+    _acl_apply_fd(tfd, is_dir, ["-m", f"u:{INDEXER_USER}:{'rx' if is_dir else 'r'}"])
+
+
+def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
+                 file_bits: int, indexer: bool = False) -> int:
+    """Bring the descendants that were FOLLOWING this folder along to its new
+    audience.
+
+    Only children whose group still matches the old one are touched — anything
+    carrying a different group is a deliberate override (a private note, a
+    sub-team folder) and is left exactly as it is.
+
+    Both halves matter, and the second one is easy to miss: without the chgrp
+    the new people can enter the folder and read nothing in it, and without
+    rewriting the OTHER bits as well as the group bits a file that was
+    company-readable stays company-readable inside a folder its owner has just
+    restricted to three people.
+    """
+    n = 0
+    for path, is_dir in _walk_repo(root):
+        try:
+            st = os.lstat(path)
+            if st.st_gid != old_gid:
+                continue
+            if new_gid != old_gid:
+                os.chown(path, -1, new_gid, follow_symlinks=False)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                         | (os.O_DIRECTORY if is_dir else 0))
+        except OSError:
+            continue
+        try:
+            target = (stat.S_IMODE(st.st_mode) & 0o700) | (dir_bits if is_dir else file_bits)
+            os.fchmod(fd, target)
+            # A chmod through an ACL writes the MASK, not group::, so anything
+            # carrying a named entry needs its base entries stated outright or
+            # the old group permission quietly survives the restriction. Stating
+            # them also re-raises the mask over the indexer grant, so the grant
+            # goes on in the SAME call and nothing chmods after it.
+            if indexer or common.acl_entries(fd) is not None:
+                args = _base_args(target)
+                if indexer:
+                    args += ["-m", f"u:{INDEXER_USER}:{'rx' if is_dir else 'r'}"]
+                _acl_apply_fd(fd, is_dir, args)
+            n += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            os.close(fd)
+    return n
+
+
+def _acl_walk(root: Path, args: list[str]) -> int:
+    """Apply one ACL change to a whole subtree, secrets excluded (_walk_repo),
+    each inode pinned. This is the one O(files) step in the model — it runs when
+    a viewer group is first bound to a folder; adding or removing a viewer after
+    that is a gpasswd on the group and touches no files at all."""
+    n = 0
+    for path, is_dir in _walk_repo(root):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                         | (os.O_DIRECTORY if is_dir else 0))
+        except OSError:
+            continue
+        try:
+            _acl_apply_fd(fd, is_dir, args)
+            n += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            os.close(fd)
+    return n
+
+
+def _perm_str(bits: int) -> str:
+    return ("r" if bits & 4 else "-") + ("w" if bits & 2 else "-") + ("x" if bits & 1 else "-")
+
+
+def _base_args(mode: int) -> list[str]:
+    """The three base ACL entries spelled out from a mode. Every setfacl below
+    states them explicitly, because setfacl SYNTHESISES a base from whatever it
+    finds when an entry is missing — and a default ACL invented that way carries
+    `group::---`, which silently cuts the folder's own team out of every file
+    created in it afterwards."""
+    return ["-m", f"u::{_perm_str((mode >> 6) & 7)}",
+            "-m", f"g::{_perm_str((mode >> 3) & 7)}",
+            "-m", f"o::{_perm_str(mode & 7)}"]
+
+
+def _acl_walk(root: Path, extra_dir: list[str], extra_file: list[str]) -> int:
+    """Apply an ACL change across a subtree, each item keeping its OWN base
+    entries (so a private note inside a shared folder stays private), secrets
+    excluded, every inode pinned.
+
+    This is the one O(files) step in the whole model. It runs when a viewer
+    group is first bound to a folder; adding or removing a viewer afterwards is
+    a gpasswd on that group and touches no files at all."""
+    n = 0
+    for path, is_dir in _walk_repo(root):
+        try:
+            st, entries = common.stat_and_acl(path)
+            args = _base_args(common.effective_mode(st, entries)) + (extra_dir if is_dir else extra_file)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                         | (os.O_DIRECTORY if is_dir else 0))
+        except OSError:
+            continue
+        try:
+            _acl_apply_fd(fd, is_dir, args)
+            n += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            os.close(fd)
+    return n
+
+
+def _share_apply(p: Path, rel: str, data: dict) -> dict:
+    """Move an inode to the requested audience. Returns what actually happened —
+    the panel reports it, and the caller uses `restart` to drop the backends
+    whose group list just went stale."""
+    scope = data.get("scope")
+    if scope not in ("everyone", "people", "private", "inherit"):
+        raise ValueError("scope must be everyone, people, private or inherit")
+    if common.is_secret_path(rel) and scope != "private":
+        raise ValueError("a file under _secrets/ is owner-only by design")
+
+    st0, entries0 = common.stat_and_acl(p)
+    before_u, before_g = _named_effective(entries0)
+    old_gid = st0.st_gid
+    old_group = grp.getgrgid(old_gid).gr_name if _grp_ok(old_gid) else ""
+    owner = _owner_name(p) or ""
+
+    roles: dict[str, str] = {}
+    for row in data.get("people") or []:
+        u, role = str(row.get("user", "")), row.get("role")
+        if not _NAME_RE.match(u) or role not in _ROLES:
+            raise ValueError("bad person entry")
+        pwd.getpwnam(u)
+        if u not in (owner, INDEXER_USER):
+            roles[u] = role
+    editors = {u for u, r in roles.items() if r == "edit"}
+    viewers = {u for u, r in roles.items() if r == "view"}
+
+    pfd, name, lst = _pin(rel)
+    if stat.S_ISLNK(lst.st_mode):
+        os.close(pfd)
+        raise ValueError("refusing to change a symlink")
+    is_dir = stat.S_ISDIR(lst.st_mode)
+    tfd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW
+                  | (os.O_DIRECTORY if is_dir else 0), dir_fd=pfd)
+    out = {"scope": scope, "changed": set(), "regrouped": 0, "acl_walked": 0,
+           "group": old_group, "share_with": []}
+    try:
+        if scope == "inherit":
+            os.close(tfd)
+            tfd = None
+            common.reset_audience_tree(p)
+            out["group"] = (grp.getgrgid(os.lstat(p).st_gid).gr_name
+                            if _grp_ok(os.lstat(p).st_gid) else "")
+            return out
+
+        if scope == "private":
+            for attr in ((_ACL_ACCESS, _ACL_DEFAULT) if is_dir else (_ACL_ACCESS,)):
+                try:
+                    os.removexattr(tfd, attr)
+                except OSError:
+                    pass
+            os.fchmod(tfd, 0o700 if is_dir else 0o600)
+            if not common.is_secret_path(rel):
+                _grant_indexer(tfd, is_dir)
+            if is_dir:
+                out["regrouped"] = _rehome_tree(p, old_gid, old_gid, 0o2000, 0o000,
+                                                indexer=not common.is_secret_path(rel))
+            return out
+
+        if scope == "everyone":
+            gid = grp.getgrnam(EVERYONE_GROUP).gr_gid
+            mode = 0o2775 if is_dir else 0o664
+            os.fchown(tfd, -1, gid)
+            os.fchmod(tfd, mode)
+            args = _base_args(mode)
+            for u in sorted(editors):
+                args += ["-m", f"u:{u}:{'rwx' if is_dir else 'rw'}"]
+            for u in sorted(set(before_u) - editors - {INDEXER_USER}):
+                args += ["-x", f"u:{u}"]
+            _acl_apply_fd(tfd, is_dir, args)
+            out["group"] = EVERYONE_GROUP
+            if is_dir and gid != old_gid:
+                out["regrouped"] = _rehome_tree(p, old_gid, gid, 0o2075, 0o064)
+                out["reaped"] = _reap_orphan_groups()
+            return out
+
+        # --- scope "people" --------------------------------------------------
+        if not is_dir:
+            # One inode, so no group is needed: named user ACLs are already O(1)
+            # and they say exactly what the panel says.
+            os.fchmod(tfd, 0o600)
+            args = _base_args(0o600)
+            for u in sorted(editors):
+                args += ["-m", f"u:{u}:rw"]
+            for u in sorted(viewers):
+                args += ["-m", f"u:{u}:r"]
+            if not common.is_secret_path(rel):
+                args += ["-m", f"u:{INDEXER_USER}:r"]
+            for u in sorted(set(before_u) - editors - viewers - {INDEXER_USER}):
+                args += ["-x", f"u:{u}"]
+            for g in sorted(before_g):
+                args += ["-x", f"g:{g}"]
+            _acl_apply_fd(tfd, is_dir, args)
+            out["share_with"] = [("u", u) for u in sorted(editors | viewers)]
+            return out
+
+        # A folder: the owning group carries "can edit" so that adding a person
+        # later is one gpasswd and no filesystem walk at all.
+        # Mutate a group ONLY from the folder that owns it. Being a group we
+        # created is not enough: a subfolder that merely inherited it would
+        # rewrite the whole subtree's access list while the person thinks they
+        # are restricting one folder.
+        reuse = (_is_shared_group(old_group) and old_group != EVERYONE_GROUP
+                 and _audience_root(rel, old_group))
+        g = old_group if reuse else _new_managed_group(os.path.basename(rel))
+        out["group"] = g
+        out["forked"] = not reuse and bool(old_group)
+        # The owner belongs in their own folder's group. Without it the kernel
+        # blocks them from chgrp'ing anything INTO the folder (you may only give
+        # a file away to a group you belong to), so moving a note in left it on
+        # its old group; and a file a teammate creates there is reachable to the
+        # owner only through the group they were not in. Skip system owners —
+        # files made with "New document" take the folder's owner, which under
+        # company/ is root.
+        members = editors | {INDEXER_USER}
+        if owner and lst.st_uid >= 1000:
+            members.add(owner)
+        out["changed"] |= _set_group_members(g, members)
+        gid = grp.getgrnam(g).gr_gid
+        if gid != old_gid:
+            os.fchown(tfd, -1, gid)
+        os.fchmod(tfd, 0o2770)
+
+        vg = _viewer_group(g)
+        bind_viewers = bool(viewers)
+        if bind_viewers:
+            try:
+                grp.getgrnam(vg)
+            except KeyError:
+                if not _GROUP_RE.match(vg) or _run(["groupadd", vg]).returncode != 0:
+                    raise OSError(f"groupadd {vg} failed")
+            out["changed"] |= _set_group_members(vg, viewers | {INDEXER_USER})
+
+        args = _base_args(0o2770)
+        args += ["-m", f"g:{vg}:rx"] if bind_viewers else (
+            ["-x", f"g:{vg}"] if vg in before_g else [])
+        for u in sorted(set(before_u) - {INDEXER_USER}):
+            args += ["-x", f"u:{u}"]
+        for gg in sorted(set(before_g) - ({vg} if bind_viewers else set())):
+            args += ["-x", f"g:{gg}"]
+        _acl_apply_fd(tfd, is_dir, args)
+        os.fchmod(tfd, 0o2770)      # setfacl rewrote the mode's group bits (mask)
+
+        if gid != old_gid:
+            out["regrouped"] = _rehome_tree(p, old_gid, gid, 0o2070, 0o060)
+            out["reaped"] = _reap_orphan_groups()
+        if bind_viewers and vg not in before_g:
+            out["acl_walked"] = _acl_walk(p, ["-m", f"g:{vg}:rx"], ["-m", f"g:{vg}:r"])
+        elif not bind_viewers and vg in before_g:
+            out["acl_walked"] = _acl_walk(p, ["-x", f"g:{vg}"], ["-x", f"g:{vg}"])
+            _set_group_members(vg, set())
+        out["share_with"] = [("g", g)] + ([("g", vg)] if bind_viewers else [])
+        return out
+    finally:
+        if tfd is not None:
+            os.close(tfd)
+        os.close(pfd)
+
+
+# --- login throttle ---------------------------------------------------------
+# Nothing else rate-limits POST /login: PAM here is bare pam_unix with no
+# faillock, so without this the endpoint answers guesses as fast as it can hash
+# them. Cloudflare Access covers the open internet; this covers everyone already
+# past it — a colleague, a borrowed laptop, anything reaching the tunnel.
+#
+# Two independent counters, because the two attacks look different:
+#   per ACCOUNT  one victim, any number of sources (spraying a known username)
+#   per SOURCE   one attacker, any number of usernames (enumerating the company)
+# Whichever trips first locks that key ALONE: locking the account `krystof` must
+# never lock out the people sharing his office IP, and vice versa.
+#
+# In-memory on purpose. A hub restart clears the counters, which is fine — a
+# restart is not attacker-reachable — and it keeps the login path free of I/O.
+LOGIN_MAX_FAILS = 8        # failures inside the window before that key locks
+LOGIN_WINDOW = 300.0       # seconds a failure keeps counting
+LOGIN_LOCK = 900.0         # seconds a tripped key stays locked
+LOGIN_FAIL_DELAY = 0.5     # seconds every wrong answer costs, lock or not
+LOGIN_MAX_KEYS = 4096      # hard cap so a forged source header cannot grow this
+
+
+class LoginThrottle:
+    """Failure counting for POST /login, keyed independently by account and by
+    source. Clocked with time.monotonic(), so a clock step cannot unlock a key
+    early."""
+
+    def __init__(self) -> None:
+        self._fails: dict[str, list[float]] = {}
+        self._until: dict[str, float] = {}
+
+    def retry_after(self, keys: list[str], now: float) -> int:
+        """Seconds the caller must wait; 0 means the attempt may proceed."""
+        return max((int(self._until[k] - now) + 1 for k in keys
+                    if self._until.get(k, 0.0) > now), default=0)
+
+    def record_failure(self, keys: list[str], now: float) -> list[str]:
+        """Count one wrong password against every key. Returns those that just
+        locked, so the caller can say so out loud exactly once."""
+        self._prune(now)
+        locked = []
+        for k in keys:
+            hits = [t for t in self._fails.get(k, ()) if now - t < LOGIN_WINDOW]
+            hits.append(now)
+            self._fails[k] = hits
+            if len(hits) >= LOGIN_MAX_FAILS:
+                self._until[k] = now + LOGIN_LOCK
+                del self._fails[k]          # the lock replaces the history
+                locked.append(k)
+        return locked
+
+    def clear(self, keys: list[str]) -> None:
+        """A correct password forgives that account's and that source's history —
+        otherwise a day of typos eventually locks someone who knows their own
+        password."""
+        for k in keys:
+            self._fails.pop(k, None)
+            self._until.pop(k, None)
+
+    def _prune(self, now: float) -> None:
+        for k, t in list(self._until.items()):
+            if t <= now:
+                del self._until[k]
+        for k, hits in list(self._fails.items()):
+            if not hits or now - hits[-1] >= LOGIN_WINDOW:
+                del self._fails[k]
+        if len(self._fails) > LOGIN_MAX_KEYS:    # only reachable by forging the
+            for k in sorted(self._fails,         # source header from ON the box
+                            key=lambda k: self._fails[k][-1])[:LOGIN_MAX_KEYS // 2]:
+                del self._fails[k]
+
+
+def _login_source(request: web.Request) -> str:
+    """Where an attempt came from, or "" when there is no meaningful answer.
+
+    cloudflared and caddy are local processes, so request.remote is always
+    127.0.0.1 and worthless on its own. CF-Connecting-IP is stamped by Cloudflare
+    and cannot be forged from outside the tunnel. A process already ON this box
+    could forge it — but it is then past every boundary this throttle defends,
+    and the per-account counter still catches it.
+
+    A bare loopback caller (no proxy header at all) gets "" rather than
+    "127.0.0.1": every local process would otherwise share one counter, so a
+    test run or a stray script could lock out the whole box's own traffic.
+    """
+    for h in ("CF-Connecting-IP", "X-Forwarded-For"):
+        v = request.headers.get(h, "")
+        if v:
+            return v.split(",")[0].strip()[:64]
+    remote = request.remote or ""
+    return "" if remote in ("127.0.0.1", "::1", "") else remote[:64]
+
+
+def _login_keys(request: web.Request, user: str) -> list[str]:
+    """The throttle keys one attempt counts against. The account key is always
+    present; the source key only when the source is real (see _login_source)."""
+    keys = [f"user:{user.lower()}"]
+    src = _login_source(request)
+    if src:
+        keys.append(f"from:{src}")
+    return keys
+
+
 class Hub:
     def __init__(self):
         self.key = common.load_session_key()
@@ -313,6 +1026,7 @@ class Hub:
         self._syncd_session: aiohttp.ClientSession | None = None
         self._stt_key = self._load_stt_key()
         self._stt_used: dict[str, tuple[str, int]] = {}   # user -> (utc day, bytes)
+        self._throttle = LoginThrottle()
 
     # --- identity -----------------------------------------------------------
     def current_user(self, request: web.Request) -> str | None:
@@ -441,8 +1155,26 @@ class Hub:
         data = await request.post()
         user = str(data.get("username", "")).strip()
         pw = str(data.get("password", ""))
+        now = time.monotonic()
+        keys = _login_keys(request, user)
+        wait = self._throttle.retry_after(keys, now)
+        if wait:
+            # Deliberately the same message whether the account or the source is
+            # locked: telling an attacker WHICH one tripped tells them whether
+            # the username exists.
+            return web.json_response(
+                {"error": f"too many failed sign-ins \u2014 try again in "
+                          f"{wait // 60 + 1} min"},
+                status=429, headers={"Retry-After": str(wait)})
         if not pam_auth.authenticate(user, pw):
+            for k in self._throttle.record_failure(keys, now):
+                print(f"kb-hub: login locked {k} for {int(LOGIN_LOCK)}s after "
+                      f"{LOGIN_MAX_FAILS} failures", file=sys.stderr, flush=True)
+            # Every wrong answer costs this, lock or no lock — otherwise the
+            # first LOGIN_MAX_FAILS guesses are free and as fast as the network.
+            await asyncio.sleep(LOGIN_FAIL_DELAY)
             return web.json_response({"error": "invalid credentials"}, status=401)
+        self._throttle.clear(keys)
         tok = common.make_token(self.key, {"user": user})
         resp = web.json_response({"ok": True, "user": user})
         resp.set_cookie(common.COOKIE_NAME, tok, httponly=True, samesite="Lax",
@@ -576,16 +1308,6 @@ class Hub:
     # (write-to-parent for create; own-or-admin for property changes) before
     # doing anything. All operations are bounded to the repo tree.
 
-    def _inherit_mode(self, parent_mode: int) -> int:
-        mode = 0o644
-        if parent_mode & 0o020:      # parent group-writable -> file group rw
-            mode |= 0o060
-        elif parent_mode & 0o040:    # parent group-readable -> file group r
-            mode |= 0o040
-        if parent_mode & 0o004:      # parent other-readable -> file other r
-            mode |= 0o004
-        return mode
-
     def _create_inheriting(self, rel: str, data: bytes | None, exclusive: bool = False,
                            owner: tuple[int, int] | None = None,
                            force_mode: int | None = None) -> str:
@@ -603,15 +1325,35 @@ class Hub:
         try:
             pst = os.fstat(pfd)
             own = owner or (pst.st_uid, pst.st_gid)
-            mode = force_mode if force_mode is not None else self._inherit_mode(pst.st_mode)
             flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
             flags |= os.O_EXCL if exclusive else os.O_TRUNC
-            fd = os.open(name, flags, mode, dir_fd=pfd)
+            # common.birth_mode, not a local rule. The old one started from a
+            # hardcoded 0o644 and only ever ADDED bits, so a new document was
+            # born world-readable no matter how closed its folder was — 0o644
+            # inside a private 0700 folder, 0o664 inside a 2770 team folder. It
+            # also read st_mode's group bits, which on an ACL-bearing folder are
+            # the MASK rather than the group's own permission.
+            secret = common.is_secret_path(rel)
+            mode = (force_mode if force_mode is not None
+                    else common.birth_mode(pfd, False, rel))
+            # Where the folder carries a default ACL the kernel's inheritance is
+            # the correct answer, and a restrictive create mode would clamp its
+            # mask to nothing — voiding every entry it just granted.
+            inherit_acl = force_mode is None and not secret and common.inherits_acl(pfd)
+            if inherit_acl:
+                old_umask = os.umask(0)
+                try:
+                    fd = os.open(name, flags, 0o666, dir_fd=pfd)
+                finally:
+                    os.umask(old_umask)
+            else:
+                fd = os.open(name, flags, mode, dir_fd=pfd)
             try:
                 if data:
                     os.write(fd, data)
                 os.fchown(fd, *own)
-                os.fchmod(fd, mode)
+                if not inherit_acl:
+                    os.fchmod(fd, mode)   # the create mode was cut by our umask
             finally:
                 os.close(fd)
         finally:
@@ -768,6 +1510,13 @@ class Hub:
                 if has_acl:
                     gperm = "---" if vis == "private" else ("rwx" if is_dir else "rw-")
                     _acl_apply_fd(tfd, is_dir, ["-m", f"g::{gperm}"])
+                # "Private" must not also mean "not searchable". kb-indexer runs
+                # as kbindexer; a file it cannot read has NO rows in kb.blocks,
+                # so making a note private used to drop it out of search for its
+                # own owner. RLS still decides who may see those rows, so this
+                # grant widens nothing — it only keeps the index complete.
+                if vis == "private" and not common.is_secret_path(rel):
+                    _grant_indexer(tfd, is_dir)
             shared_with = []   # (flag, name) grantees to make the path reachable for
             for a in data.get("acl_add", []):
                 kind, aname, perms = a.get("type"), a.get("name", ""), a.get("perms", "")
@@ -839,6 +1588,67 @@ class Hub:
                 os.close(dfd)
             parent = os.path.dirname(parent)
         return granted
+
+    # --- sharing, in people ------------------------------------------------
+    # /fs/props is the octal view (kept, behind the panel's Advanced drawer);
+    # these two are the everyday one. Same authorization either way: only the
+    # owner or an admin may change who can open something.
+
+    async def fs_share_get(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        rel_in = request.query.get("path", "")
+        p = common.resolve_repo_path(rel_in)
+        if p is None or not p.exists():
+            return web.json_response({"error": "not found"}, status=404)
+        rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+        uid, gids = _uid_gids(user)
+        if not _fs_can(p, uid, gids, False) and not _is_admin(user):
+            return web.json_response({"error": "no access"}, status=403)
+        try:
+            return web.json_response(_share_state(p, rel, user))
+        except (OSError, KeyError) as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def fs_share_set(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        data = await request.json()
+        p = common.resolve_repo_path(data.get("path", ""))
+        if p is None or not p.exists():
+            return web.json_response({"error": "not found"}, status=404)
+        if not _owns_or_admin(p, user):
+            return web.json_response({"error": "only the owner (or an admin) can change who has access"},
+                                     status=403)
+        rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+        try:
+            res = await asyncio.to_thread(_share_apply, p, rel, data)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except KeyError:
+            return web.json_response({"error": "no such user or group"}, status=400)
+        except (OSError, subprocess.SubprocessError) as e:
+            return web.json_response({"error": str(e)}, status=500)
+        # A grant nobody can reach is a dead grant: open the ancestors just
+        # enough (traverse, no listing) for the new audience to get here.
+        traversed = (self._grant_ancestor_traverse(rel, res["share_with"])
+                     if res.get("share_with") else [])
+        # kbindexer joins every shared group, but it is a service account with no
+        # session to reload — reporting it would put "kbindexer" in front of the
+        # user on every single share.
+        changed = sorted(res["changed"] - {INDEXER_USER})
+        # Their backends were started by runuser with the old group list, so
+        # neither the grant nor its removal reaches them until they restart.
+        await asyncio.to_thread(_restart_backends, changed)
+        return web.json_response({
+            "ok": True, "scope": res["scope"], "group": res.get("group", ""),
+            "forked": bool(res.get("forked")), "restarted": changed,
+            "regrouped": res.get("regrouped", 0), "acl_walked": res.get("acl_walked", 0),
+            "granted_traverse": traversed,
+            "state": _share_state(p, rel, user),
+        })
 
     # --- admin: user & group management (sudo-group admins only, runs as root) ---
     def _require_admin(self, request: web.Request) -> str | None:
@@ -1239,8 +2049,11 @@ class Hub:
             return web.json_response({"error": "first and last name are required"}, status=400)
         if not _EMAIL_RE.match(email):
             return web.json_response({"error": "invalid email"}, status=400)
-        if len(pw) < 6:
-            return web.json_response({"error": "password must be at least 6 characters"}, status=400)
+        # A KB password is also an SSH password (port 2007, rclone uses it), so
+        # it is exposed to online guessing that this box cannot see. Six
+        # characters is not a password; twelve of anything memorable is.
+        if len(pw) < 12:
+            return web.json_response({"error": "password must be at least 12 characters \u2014 use a short phrase"}, status=400)
         try:
             pwd.getpwnam(u)
             return web.json_response({"error": "user already exists"}, status=409)
@@ -1400,7 +2213,11 @@ class Hub:
         flag = "-a" if action == "add" else "-d"
         if _run(["gpasswd", flag, user, group]).returncode != 0:
             return web.json_response({"error": "membership change failed"}, status=500)
-        return web.json_response({"ok": True})
+        # runuser fixed this user's supplementary gids when their backend was
+        # spawned, so without this the change reaches the filesystem but not the
+        # app — the classic "I added them and they still can't see it".
+        await asyncio.to_thread(_restart_backends, [user])
+        return web.json_response({"ok": True, "restarted": [user]})
 
     async def _bridge_ws(self, request, target_session, target_url, extra_headers):
         server_ws = web.WebSocketResponse(heartbeat=30, max_msg_size=16 * 1024 * 1024)
@@ -1467,6 +2284,8 @@ def make_app() -> web.Application:
     app.router.add_post("/fs/upload", hub.fs_upload)
     app.router.add_get("/fs/props", hub.fs_props_get)
     app.router.add_post("/fs/props", hub.fs_props_set)
+    app.router.add_get("/fs/share", hub.fs_share_get)
+    app.router.add_post("/fs/share", hub.fs_share_set)
     # Admin (sudo-group only): user + group management, run as root.
     app.router.add_get("/admin/me", hub.admin_me)
     app.router.add_get("/admin/list", hub.admin_list)
@@ -1489,6 +2308,21 @@ def make_app() -> web.Application:
     # Everything under /api/* is proxied to the per-user backend.
     app.router.add_route("*", "/api/{tail:.*}", hub.proxy_http)
 
+    async def _reap_loop(app):
+        """Deleting a shared folder leaves its managed group behind with nothing
+        to tell us — so sweep, rather than hoping every path remembers to."""
+        while True:
+            await asyncio.sleep(1800)
+            try:
+                await asyncio.to_thread(_reap_orphan_groups)
+            except Exception:
+                pass
+
+    async def on_startup(app):
+        app["reaper"] = asyncio.create_task(_reap_loop(app))
+
+    app.on_startup.append(on_startup)
+
     async def on_cleanup(app):
         h: Hub = app["hub"]
         for s in h._user_sessions.values():
@@ -1497,6 +2331,13 @@ def make_app() -> web.Application:
             await h._syncd_session.close()
 
     app.on_cleanup.append(on_cleanup)
+
+    async def _stop_reaper(app):
+        t = app.get("reaper")
+        if t:
+            t.cancel()
+
+    app.on_cleanup.append(_stop_reaper)
     return app
 
 

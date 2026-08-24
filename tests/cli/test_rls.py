@@ -75,17 +75,22 @@ def test_making_a_file_private_revokes_search_quickly():
     so it does not care who owns company/overview.md on this box or which OS
     user runs the suite — both burned earlier incarnations of this test.
 
-    Sealing semantics (570eb4c) are asserted deliberately: a private (0600)
-    file is unreadable to the INDEXER itself, so its rows are sealed and it
-    vanishes from every user's content search — the owner's included. The
-    index never serves content the kernel would deny it; the owner still has
-    the file itself, the tree, and filename search."""
+    Sealing used to take the OWNER's own search down with it (570eb4c): a 0600
+    file is unreadable to the indexer, so its rows were dropped for everyone.
+    (Only meaningful for a file the actor owns — see the creation call below.)
+    Making a note private and losing it from your own search is not a privacy
+    guarantee, it is a bug, so "private" now also leaves `u:kbindexer:r` behind.
+    RLS is unaffected and is what this test pins: the CONTENT must disappear
+    from every other user's search, and stay in the owner's."""
     token = f"pangovault{int(time.time())}"
     rel = f"company/kbtest_privacy_{token}.md"
     c = httpx.Client(base_url=BASE, timeout=15)
     r = c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
     assert r.status_code == 200
-    assert c.post("/fs/newfile", json={"path": rel}).status_code == 200
+    # /api/file, not /fs/newfile: the latter gives a new file the PARENT
+    # folder's owner (root, under company/), and this test is about what the
+    # OWNER keeps — it has to actually create one.
+    assert c.post("/api/file", json={"path": rel}).status_code == 200
     assert c.post("/api/artifact/write",
                   json={"path": rel, "content": f"# note\n\nthe {token} ledger\n"}).status_code == 200
     try:
@@ -101,12 +106,9 @@ def test_making_a_file_private_revokes_search_quickly():
                 break
             time.sleep(0.3)
         assert gone, "going private must remove the file from carol's search within seconds"
-        # Sealed for the owner too — poll, the same sweep does both.
-        deadline = time.time() + 4
-        while time.time() < deadline and rel in search("alice", token):
-            time.sleep(0.3)
-        assert rel not in search("alice", token), \
-            "a 0600 file is unreadable to the indexer, so its CONTENT must seal for everyone"
+        # …but the owner keeps their own file in their own search.
+        assert rel in search_has("alice", token, rel, timeout=10), \
+            "going private must not take the file out of the OWNER's search"
 
         # …and coming back is symmetric.
         assert c.post("/fs/props", json={"path": rel, "visibility": "company"}).status_code == 200

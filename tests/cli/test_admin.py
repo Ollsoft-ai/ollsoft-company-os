@@ -35,7 +35,7 @@ def test_user_and_group_lifecycle():
     a = admin()
     try:
         r = a.post("/admin/users", json={"username": TU, "first": "Test", "last": "User",
-                                         "email": f"{TU}@example.com", "password": "TempPass01"})
+                                         "email": f"{TU}@example.com", "password": "TempPassphrase01"})
         assert r.status_code == 200, r.text
         # shows up in the list with profile + kb-users membership
         users = {u["username"]: u for u in a.get("/admin/list").json()["users"]}
@@ -43,7 +43,7 @@ def test_user_and_group_lifecycle():
         assert "kb-users" in users[TU]["groups"]
         # the new user can actually log in (PAM) and gets a working backend identity
         nc = httpx.Client(base_url=BASE, timeout=15)
-        assert nc.post("/login", data={"username": TU, "password": "TempPass01"}).status_code == 200
+        assert nc.post("/login", data={"username": TU, "password": "TempPassphrase01"}).status_code == 200
         assert nc.get("/api/whoami").json()["user"] == TU
 
         # create a group and assign the user
@@ -79,13 +79,13 @@ def test_guards_reject_dangerous_actions():
     assert cl("bob").post("/admin/groups/delete", json={"name": "proj-acme"}).status_code == 403
     # input validation
     assert a.post("/admin/users", json={"username": "Bad Name", "first": "a", "last": "b",
-                                        "email": "x@y.z", "password": "abcdef"}).status_code == 400
+                                        "email": "x@y.z", "password": "TempPassphrase01"}).status_code == 400
     assert a.post("/admin/users", json={"username": "okname", "first": "a", "last": "b",
-                                        "email": "not-an-email", "password": "abcdef"}).status_code == 400
+                                        "email": "not-an-email", "password": "TempPassphrase01"}).status_code == 400
     assert a.post("/admin/users", json={"username": "okname", "first": "a", "last": "b",
-                                        "email": "x@y.z", "password": "short"}).status_code == 400
+                                        "email": "x@y.z", "password": "Eleven-char"}).status_code == 400
 
 
 def test_non_admin_cannot_create_user():
     assert cl("carol").post("/admin/users", json={"username": "evil", "first": "e", "last": "e",
-                                                   "email": "e@e.e", "password": "abcdef"}).status_code == 403
+                                                   "email": "e@e.e", "password": "TempPassphrase01"}).status_code == 403

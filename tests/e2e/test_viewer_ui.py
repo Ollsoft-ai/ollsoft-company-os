@@ -7,7 +7,7 @@ import pytest
 from conftest import BASE, CREDS
 
 VU = f"vwui{int(time.time()) % 100000}"
-PW = "ViewPass01"
+PW = "ViewPassphrase01"
 
 
 def api(user, password=None):
