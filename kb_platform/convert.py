@@ -359,22 +359,52 @@ class Converter:
         rel = src.relative_to(self.root) if src.is_relative_to(self.root) else src
         try:
             spec = source_acl_spec(src)
-            tmp = side.with_name(side.name + ".kbtmp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            # SECURITY: every step below acts on a pinned directory fd and an
+            # O_NOFOLLOW fd, never on a re-resolvable path string. The old shape
+            # opened a PREDICTABLE `.<name>.md.kbtmp` with O_CREAT|O_TRUNC and no
+            # O_NOFOLLOW: anyone who could write the directory (company/ and every
+            # project folder are group-writable) could pre-plant a symlink there,
+            # drop a source document whose extracted text they control, and have
+            # kb-convert — running as kbindexer, which is in EVERY project group —
+            # truncate and rewrite the symlink's target. Same discipline as
+            # syncd's flush (see syncd.py, _flush).
+            if src.is_relative_to(self.root):
+                pfd = common.opendir_beneath(str(src.parent.relative_to(self.root)))
+            else:
+                pfd = os.open(str(src.parent), os.O_RDONLY | os.O_DIRECTORY)
             try:
-                with os.fdopen(fd, "w") as f:
-                    f.write(compose_sidecar(src.name, sha, status, body, note))
-            except Exception:
-                tmp.unlink(missing_ok=True)
-                raise
-            r = subprocess.run(["setfacl", "--set", spec, "--", str(tmp)],
-                               capture_output=True, text=True, timeout=5)
-            if r.returncode != 0:
-                # fail CLOSED: better an owner-only sidecar than an over-shared one
-                os.chmod(tmp, 0o600)
-                log.warning("setfacl failed for %s (%s) — sidecar left owner-only",
-                            rel, r.stderr.strip())
-            os.replace(tmp, side)
+                # Randomised name + O_EXCL: an attacker cannot pre-create it, and
+                # O_EXCL refuses an existing entry (a planted symlink included).
+                tmpname = f"{side.name}.{os.urandom(6).hex()}.kbtmp"
+                fd = os.open(tmpname,
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=pfd)
+                try:
+                    os.write(fd, compose_sidecar(src.name, sha, status, body,
+                                                 note).encode("utf-8"))
+                    # Address the file by its fd, not its name: setfacl re-resolves
+                    # a path argument and would be a second chance to swap targets.
+                    r = subprocess.run(
+                        ["setfacl", "--set", spec, "--", f"/proc/self/fd/{fd}"],
+                        capture_output=True, text=True, timeout=5)
+                    if r.returncode != 0:
+                        # fail CLOSED: better an owner-only sidecar than an over-shared one
+                        os.fchmod(fd, 0o600)
+                        log.warning("setfacl failed for %s (%s) — sidecar left owner-only",
+                                    rel, r.stderr.strip())
+                except Exception:
+                    try:
+                        os.unlink(tmpname, dir_fd=pfd)
+                    except OSError:
+                        pass
+                    raise
+                finally:
+                    os.close(fd)
+                # renameat: never follows a symlink at the destination — it
+                # replaces the entry itself.
+                os.replace(tmpname, side.name, src_dir_fd=pfd, dst_dir_fd=pfd)
+            finally:
+                os.close(pfd)
         except OSError as e:
             log.warning("cannot write sidecar for %s: %s", rel, e)
             return None

@@ -119,7 +119,12 @@ add_user carol kb-users                    # deliberately NOT on the project
 chmod 600 "$CREDS"
 printf '{"alice":"%s","bob":"%s","carol":"%s"}\n' \
   "${PW[alice]}" "${PW[bob]}" "${PW[carol]}" > "$TEST_CREDS"
-chmod 644 "$TEST_CREDS"   # the suite runs as an unprivileged developer account
+# 0600, NOT 0644: this file holds three working passwords, and one of them
+# (alice) is in the admin group. World-readable put them in reach of every
+# local account. The suite runs as the developer who seeded, so 0600 is enough;
+# if you need another account to read it, chown it to that account.
+chmod 600 "$TEST_CREDS"
+chown "${SUDO_USER:-root}" "$TEST_CREDS" 2>/dev/null || true
 echo "  test credentials -> $TEST_CREDS"
 
 # ---------------------------------------------------------------------------

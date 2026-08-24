@@ -846,6 +846,25 @@ async def search(request: web.Request) -> web.Response:
             files_task.cancel()
 
 
+_SQL_COMMENT_RE = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
+# Privilege/ownership/role changes, and the loopholes that reach them indirectly
+# (DO blocks and EXECUTE run dynamic SQL; COPY ... TO PROGRAM/FROM touches the
+# filesystem as the server). No artifact on this box uses any of them — verified
+# across all 25 artifact documents before this was added.
+_PRIVILEGE_SQL = re.compile(
+    r"\b(?:GRANT|REVOKE"
+    r"|CREATE\s+(?:ROLE|USER|GROUP)|ALTER\s+(?:ROLE|USER|GROUP)|DROP\s+(?:ROLE|USER)"
+    r"|OWNER\s+TO|SECURITY\s+DEFINER"
+    r"|COPY\b[^;]*\b(?:TO|FROM)\b"
+    r"|\bDO\b\s*\$|EXECUTE\s+FORMAT|SET\s+ROLE|SET\s+SESSION\s+AUTHORIZATION)\b",
+    re.I)
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """Comments are the cheapest way to hide a keyword from a lexical check."""
+    return _SQL_COMMENT_RE.sub(" ", sql)
+
+
 async def artifact_query(request: web.Request) -> web.Response:
     """The artifact query bridge. Runs the SQL AS THIS USER (peer auth), so
     Postgres privileges — RLS on kb, schema grants on u_* — are the entire
@@ -860,11 +879,37 @@ async def artifact_query(request: web.Request) -> web.Response:
     params = data.get("params", []) or []
     if not isinstance(sql, str) or not sql.strip():
         return web.json_response({"error": "no sql"}, status=400)
+    # An artifact is authored by one person and OPENED BY ANOTHER, and this runs
+    # the author's SQL with the VIEWER's Postgres authority. RLS keeps the viewer
+    # from reading what they could not read anyway — but nothing stopped the
+    # author's SQL from copying the viewer's own visible rows somewhere the
+    # AUTHOR can reach, e.g.
+    #     CREATE TABLE u_<viewer>.x AS SELECT text FROM kb.blocks;
+    #     GRANT SELECT ON u_<viewer>.x TO <author>;
+    # which turns "carol opened bob's dashboard" into bob reading carol's
+    # private indexed documents.
+    #
+    # The handing-over step is a privilege change, so that is what is refused.
+    # Plain INSERT/UPDATE/DELETE/CREATE TABLE stay allowed on purpose: six live
+    # artifacts here (obed, pixel, piskvorky, wordle, planning-poker,
+    # i-love-claude) write on every use, and a blanket read-only would break them.
+    #
+    # HONEST LIMIT: this is a lexical check on the statement text. It stops the
+    # exfil chain above and every accidental variant, but it is not a parser —
+    # sufficiently creative SQL could evade it. The structural fix (a consent gate
+    # before opening someone else's artifact) is a UX change, not a patch here.
+    if _PRIVILEGE_SQL.search(_strip_sql_comments(sql)):
+        return web.json_response(
+            {"error": "an artifact may not change privileges, roles or ownership"},
+            status=403)
     conn = await _adb()
     if conn is None:
         return web.json_response({"error": "db offline"}, status=503)
     try:
         async with conn.cursor() as cur:
+            # A runaway artifact query used to be able to sit on this user's only
+            # connection indefinitely.
+            await cur.execute("SET statement_timeout = '30s'")
             await cur.execute(sql, params)
             if cur.description:
                 cols = [d.name for d in cur.description]

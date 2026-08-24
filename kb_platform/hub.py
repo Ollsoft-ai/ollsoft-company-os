@@ -42,6 +42,15 @@ _HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer",
         "upgrade", "proxy-authorization", "proxy-authenticate", "content-length",
         "content-encoding"}
 
+# Headers the hub ASSERTS to a backend. They must never survive from the client:
+# proxy_http copies request.headers into a plain dict and only then sets
+# X-KB-User, so a client sending the name in different case ("x-kb-user: bob")
+# left BOTH entries in the outgoing request — the backend's case-insensitive
+# lookup can then read the attacker's value. Harmless today (user_server trusts
+# only the uid it actually runs as and treats the header as "claimed"), but it is
+# a trust header on a proxy boundary; strip it on the way in.
+_ASSERTED = {"x-kb-user", "x-kb-auth"}
+
 # Members of this group may edit permissions of ANY file (platform admins);
 # everyone else may only edit files they own. Configurable via KB_ADMIN_GROUP
 # (see common.py) because the admin group is `sudo` on Debian/Ubuntu but
@@ -359,6 +368,21 @@ def _is_shared_group(name: str) -> bool:
     except KeyError:
         return False
     return 1000 <= g.gr_gid < 65000 and not _is_user_group(name)
+
+
+def _caller_may_rewrite(group: str, caller: str) -> bool:
+    """May `caller` rewrite `group`'s membership? Only if they are already in it
+    (or are a platform admin). Read live from NSS, not from the caller's process
+    credentials: a backend keeps the group list runuser gave it at spawn, so a
+    member added moments ago would otherwise fail this check until it restarts."""
+    if not caller:
+        return False
+    if _is_admin(caller):
+        return True
+    try:
+        return grp.getgrnam(group).gr_gid in _uid_gids(caller)[1]
+    except KeyError:
+        return False
 
 
 def _group_members(name: str) -> set[str]:
@@ -757,7 +781,7 @@ def _acl_walk(root: Path, extra_dir: list[str], extra_file: list[str]) -> int:
     return n
 
 
-def _share_apply(p: Path, rel: str, data: dict) -> dict:
+def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
     """Move an inode to the requested audience. Returns what actually happened —
     the panel reports it, and the caller uses `restart` to drop the backends
     whose group list just went stale."""
@@ -859,8 +883,23 @@ def _share_apply(p: Path, rel: str, data: dict) -> dict:
         # created is not enough: a subfolder that merely inherited it would
         # rewrite the whole subtree's access list while the person thinks they
         # are restricting one folder.
+        # SECURITY: reusing a group means REWRITING ITS ROSTER (_set_group_members
+        # below makes membership exactly `members`). Authorization for that is
+        # membership of the group, not ownership of this inode — otherwise owning
+        # any throwaway folder, chgrp'ing it onto a hand-made team-*/proj-* group
+        # and calling /fs/share rewrote that team's roster: attacker in, everyone
+        # else out. (fs_props_set now refuses the chgrp too; this is the second
+        # lock, and it also covers a group arriving by setgid inheritance, a move
+        # or a restored backup rather than by an explicit chgrp.)
+        # NOT gated on MANAGED_PREFIX on purpose: on a real deployment many
+        # folders are their own audience root under a hand-made proj-*/team-*
+        # group created before the sharing panel existed, and requiring
+        # "kbs-" would fork them onto a new group and silently evict every member
+        # the panel did not list. Membership is the check that closes the hole
+        # without breaking that.
         reuse = (_is_shared_group(old_group) and old_group != EVERYONE_GROUP
-                 and _audience_root(rel, old_group))
+                 and _audience_root(rel, old_group)
+                 and _caller_may_rewrite(old_group, caller))
         g = old_group if reuse else _new_managed_group(os.path.basename(rel))
         out["group"] = g
         out["forked"] = not reuse and bool(old_group)
@@ -1244,7 +1283,8 @@ class Hub:
             return web.json_response({"error": "unauthenticated"}, status=401)
         sess = await self.ensure_backend(user)
         url = "http://kb" + request.rel_url.raw_path_qs
-        headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
+        headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in _HOP and k.lower() not in _ASSERTED}
         headers["X-KB-User"] = user
         body = await request.read()
         try:
@@ -1461,6 +1501,19 @@ class Hub:
             return web.json_response({"error": "only the owner (or an admin) can change this"},
                                     status=403)
         rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+        # _secrets/ files ARE shareable through this endpoint — that is the
+        # documented design (tests/cli/test_secrets.py: "shared with the normal
+        # permissions UI"), and the containment guarantee is about git, the index
+        # and the CRDT relay, not about ACLs. What must NOT happen is the ADMIN
+        # override reaching them: ADMIN_GROUP is "sudo" here, so _owns_or_admin
+        # let any platform admin widen someone else's secret from the root hub,
+        # silently and with no share record. The owner keeps full control.
+        if (common.is_secret_path(rel) and _owner_name(p) != user
+                and (data.get("owner") or data.get("group") or data.get("acl_add")
+                     or data.get("visibility") in ("team", "company"))):
+            return web.json_response(
+                {"error": "only the owner can widen access to a file under _secrets/"},
+                status=403)
         # Reach the target without following symlinks and pin it by a real fd, so
         # a swapped path can't redirect the root chown/setfacl. All mutations act
         # on the fd (fchown / xattr), never on a re-traversable path string.
@@ -1480,10 +1533,36 @@ class Hub:
             if data.get("owner"):
                 if not _NAME_RE.match(data["owner"]):
                     return web.json_response({"error": "bad user name"}, status=400)
+                # Giving a file AWAY forges provenance: the old shape let any
+                # owner set st_uid to root or another account while keeping write
+                # access via group or ACL, producing a file that DISPLAYS as
+                # someone else's and is still attacker-controlled. Only an admin
+                # may reassign, and never below the human uid range.
+                if data["owner"] != user:
+                    if not _is_admin(user):
+                        return web.json_response(
+                            {"error": "only an admin can change the owner"}, status=403)
+                    if pwd.getpwnam(data["owner"]).pw_uid < 1000:
+                        return web.json_response(
+                            {"error": "refusing to hand a file to a system account"},
+                            status=400)
                 os.fchown(tfd, pwd.getpwnam(data["owner"]).pw_uid, -1)
             if data.get("group"):
                 if not _NAME_RE.match(data["group"]):
                     return web.json_response({"error": "bad group name"}, status=400)
+                # SECURITY: authorization for chgrp is GROUP MEMBERSHIP, not inode
+                # ownership. The old shape gated only on _owns_or_admin(inode), so
+                # owning any throwaway folder let a non-member chgrp it onto
+                # any team-*/proj-* group; combined with _share_apply's group
+                # reuse that rewrote the whole roster (see _share_apply). The
+                # kernel enforces exactly this rule for non-root chgrp — the hub
+                # runs as root, so it must re-derive it.
+                if not _is_admin(user):
+                    _, cgids = _uid_gids(user)
+                    if grp.getgrnam(data["group"]).gr_gid not in cgids:
+                        return web.json_response(
+                            {"error": "you can only set a group you belong to"},
+                            status=403)
                 os.fchown(tfd, -1, grp.getgrnam(data["group"]).gr_gid)
             if data.get("visibility"):
                 # base-mode presets — the "who can even see this" dial the modal
@@ -1624,7 +1703,7 @@ class Hub:
                                      status=403)
         rel = str(p.relative_to(common.REPO_ROOT.resolve()))
         try:
-            res = await asyncio.to_thread(_share_apply, p, rel, data)
+            res = await asyncio.to_thread(_share_apply, p, rel, data, user)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         except KeyError:
