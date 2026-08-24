@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from conftest import BASE, CREDS, login
-from kbenv import U, doc
+from kbenv import U, doc as kbdoc
 
 # A tiny synthetic MP4 generated at test time. The point of these tests is the
 # upload/scope/CSP path, not the codec — so we never depend on a real media file
@@ -64,7 +64,7 @@ def api():
 @pytest.fixture(scope="module")
 def doc():
     c = api()
-    rel = doc(f"tbltest_{int(time.time())}.md")
+    rel = kbdoc(f"tbltest_{int(time.time())}.md")
     assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)
     assert c.post("/api/artifact/write",
                   json={"path": rel, "content": TABLE_DOC}).status_code == 200
@@ -75,7 +75,7 @@ def doc():
 @pytest.fixture(scope="module")
 def video_doc():
     c = api()
-    folder = doc(f"vidembed_{int(time.time())}")
+    folder = kbdoc(f"vidembed_{int(time.time())}")
     assert c.post("/api/fs/mkdir", json={"path": folder}).status_code == 200
     with open(SRC_MP4, "rb") as fh:
         up = c.post(f"/api/upload?dir={folder}", files={"file": ("clip.mp4", fh, "video/mp4")})
@@ -179,7 +179,7 @@ def long_doc():
     """A table far below the fold. CodeMirror parses incrementally, so this one
     is NOT in the syntax tree when the document opens."""
     c = api()
-    rel = doc(f"longtbl_{int(time.time())}.md")
+    rel = kbdoc(f"longtbl_{int(time.time())}.md")
     body = "# Long\n\n" + ("filler paragraph line\n\n" * 400) + \
            "| A | B |\n| --- | --- |\n| x | y |\n"
     assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)

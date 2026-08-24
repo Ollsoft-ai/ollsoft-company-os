@@ -20,12 +20,12 @@ def api(user, password=None):
 @pytest.fixture(scope="module")
 def viewer():
     a = api("alice")
-    r = a.post("/admin/users", json={"username": VU, "first": "View", "last": "Only",
+    r = a.post("/admin/users", json={"username": U(VU), "first": "View", "last": "Only",
                                      "email": f"{VU}@example.com", "password": PW,
                                      "kind": "viewer"})
     assert r.status_code == 200, r.text
     yield VU
-    a.post("/admin/users/delete", json={"username": VU})
+    a.post("/admin/users/delete", json={"username": U(VU)})
 
 
 def test_viewer_browser_experience(browser, viewer):

@@ -95,7 +95,7 @@ def test_permissions_modal_adds_acl(browser):
     c = httpx.Client(base_url=BASE, timeout=15)
     c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     for pth in (target, home("alice"), "users"):
-        c.post("/fs/props", json={"path": pth, "acl_remove": [{"type": "user", "name": "bob"}]})
+        c.post("/fs/props", json={"path": pth, "acl_remove": [{"type": "user", "name": U("bob")}]})
     ctx.close()
 
 
