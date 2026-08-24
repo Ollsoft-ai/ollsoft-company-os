@@ -182,13 +182,20 @@ chgrp kb-users "$REPO/company"  ; chmod 2775 "$REPO/company"
 setfacl -k "$REPO/company" 2>/dev/null || true
 setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/company"
 # Sticky bit: group members create freely but may only rename/delete what they
-# OWN. Required on every group-writable container, not just the repo root: these
-# three are mode 2775 kb-users, and without +t any member could rename another
-# user's home aside and put their own directory in its place —
-# /srv/kb/users/<admin>/.claude/skills/ is loaded by that admin's agent, so that
-# was a path from "ordinary KB account" to "code runs as the admin". Same
-# primitive hijacked any projects/<name>. (2026-08-24 security review.)
-chmod +t "$REPO" "$REPO/users" "$REPO/company" "$REPO/projects"
+# OWN. Needed on the containers that hold OTHER PEOPLE'S DIRECTORIES, because
+# without it any member could rename another user's home aside and put their own
+# directory in its place — users/<admin>/.claude/skills/ is loaded by that
+# admin's agent, so that was a path from "ordinary KB account" to "code runs as
+# the admin". The same primitive hijacked any projects/<name>.
+#
+# NOT on company/. That directory holds shared DOCUMENTS at its top level, and
+# with fs.protected_regular=2 (default since Linux 4.19) a sticky, group-writable
+# directory also blocks O_CREAT opens of files you do not own — which is what
+# `open(path,"w")` and a shell `>` both issue. Setting +t there silently made
+# every top-level company document read-only to everyone except its author,
+# while access(2) still reported it writable. company/ is a deliberate
+# free-for-all; protect the subdirectories that are not, like this:
+chmod +t "$REPO" "$REPO/users" "$REPO/projects"
 
 install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "$REPO/users/$ADMIN_USER"
 
