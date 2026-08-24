@@ -46,19 +46,22 @@ jobs:
       - name: Installer is idempotent (second run must succeed)
         run: sudo bash scripts/install.sh --admin ciadmin
 
-      - name: Seed the demo company
-        # The suite runs as alice (see the CLI test step), so the credentials
-        # file must belong to her — not to the account that ran sudo.
-        run: sudo KB_TEST_USER=alice bash scripts/seed-demo.sh
+      - name: Seed the test fixtures
+        # A fixed namespace rather than letting conftest pick one: pytest runs as
+        # a demo account with no passwordless sudo, so it cannot seed for itself.
+        # KB_TEST_NS in the test step below makes conftest use what we seeded
+        # here and skip its own lifecycle. KB_TEST_USER decides who owns the
+        # 0600 credentials file — the account that will run the suite.
+        run: sudo KB_TEST_USER=kbt_ci_alice bash scripts/seed-demo.sh --namespace ci
 
       - name: Permission model holds (carol must not reach the restricted project)
         run: |
-          sudo -u carol test -r /srv/kb/projects/acme/plan.md \
+          sudo -u kbt_ci_carol test -r /srv/kb/projects/kbtest-ci-acme/plan.md \
             && { echo "::error::carol can read a restricted file"; exit 1; }
-          sudo -u alice test -r /srv/kb/projects/acme/plan.md \
+          sudo -u kbt_ci_alice test -r /srv/kb/projects/kbtest-ci-acme/plan.md \
             || { echo "::error::alice cannot read her own project file"; exit 1; }
-          rows=$(sudo -u carol psql -d kb -At -c \
-            "SELECT count(*) FROM kb.blocks WHERE file_path LIKE 'projects/acme/%'")
+          rows=$(sudo -u kbt_ci_carol psql -d kb -At -c \
+            "SELECT count(*) FROM kb.blocks WHERE file_path LIKE 'projects/kbtest-ci-acme/%'")
           [ "$rows" = "0" ] || { echo "::error::RLS leaked $rows rows to carol"; exit 1; }
 
       # Parts of tests/cli deliberately bypass the app — direct psql, chmod, and
@@ -91,7 +94,7 @@ jobs:
           # alice must be able to reach the checkout to import conftest
           chmod a+x "$HOME" "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE" || true
           sudo chmod -R a+rX "$GITHUB_WORKSPACE"
-          sudo -u alice env HOME=/home/alice \
+          sudo -u kbt_ci_alice env HOME=/home/kbt_ci_alice KB_TEST_NS=ci \
             /opt/kb-testvenv/bin/python -m pytest tests/cli -q --maxfail=5
 
       - name: Diagnostics on failure
@@ -102,22 +105,23 @@ jobs:
           echo '--- indexer log (its own unit only; the others flood with runuser noise) ---'
           sudo journalctl -u kb-indexer -n 80 --no-pager || true
           echo '--- seeded file ownership and modes ---'
-          sudo ls -la /srv/kb /srv/kb/company /srv/kb/company/dashboards || true
-          sudo getfacl -p /srv/kb/company /srv/kb/company/overview.md 2>/dev/null || true
+          sudo ls -la /srv/kb /srv/kb/company/kbtest-ci /srv/kb/company/kbtest-ci/dashboards || true
+          sudo getfacl -p /srv/kb/company/kbtest-ci /srv/kb/company/kbtest-ci/overview.md 2>/dev/null || true
           echo '--- can kbindexer actually read the file? ---'
-          sudo -u kbindexer test -r /srv/kb/company/overview.md \
+          sudo -u kbindexer test -r /srv/kb/company/kbtest-ci/overview.md \
             && echo 'kbindexer CAN read overview.md' || echo 'kbindexer CANNOT read overview.md'
           echo '--- what the index holds for it ---'
           sudo -u postgres psql -d kb -c \
-            "SELECT path, owner_name, group_name, to_hex(mode) AS mode, to_timestamp(mtime) FROM kb.files WHERE path='company/overview.md'" || true
+            "SELECT path, owner_name, group_name, to_hex(mode) AS mode, to_timestamp(mtime) FROM kb.files WHERE path='company/kbtest-ci/overview.md'" || true
           sudo -u postgres psql -d kb -c \
-            "SELECT line, checked, left(text,45) FROM kb.blocks WHERE file_path='company/overview.md' AND kind='task'" || true
+            "SELECT line, checked, left(text,45) FROM kb.blocks WHERE file_path='company/kbtest-ci/overview.md' AND kind='task'" || true
           echo '--- on-disk truth ---'
-          sudo grep -n 'Ship the knowledgebase' /srv/kb/company/overview.md || true
+          sudo grep -n 'Ship the knowledgebase' /srv/kb/company/kbtest-ci/overview.md || true
           sudo cat /etc/kb/kb.env || true
 
-      - name: Uninstall the demo cleanly
-        run: sudo bash scripts/seed-demo.sh --undo
+      - name: Remove the test fixtures cleanly
+        if: always()
+        run: sudo bash scripts/seed-demo.sh --namespace ci --undo
 
   shellcheck:
     name: shellcheck

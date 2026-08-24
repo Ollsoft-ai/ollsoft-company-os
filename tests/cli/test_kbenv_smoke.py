@@ -4,7 +4,9 @@ from kbenv import BASE, U, PW, doc, proj, home, full, NS, AREA
 
 
 def test_namespace_is_fresh():
-    assert NS and NS.startswith("p"), NS
+    # No assumption about the prefix: conftest generates "p<hex>", while CI seeds
+    # a fixed namespace and passes it in through KB_TEST_NS.
+    assert NS, "running against the un-namespaced demo, not an isolated run"
     assert AREA == f"company/kbtest-{NS}"
 
 
