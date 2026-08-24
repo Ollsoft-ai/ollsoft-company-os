@@ -3,7 +3,7 @@ with ✕ — the app's own prompt/confirm dialogs handled like a real user would
 import time
 
 from conftest import dlg_fill, dlg_ok, login
-from kbenv import doc
+from kbenv import AREA, doc
 
 
 def test_create_folder_and_file_then_delete(browser):
@@ -12,7 +12,7 @@ def test_create_folder_and_file_then_delete(browser):
     page = login(ctx, "alice")
 
     # new folder under company (⊞ appears on hover)
-    row = page.locator('.tree-item[data-path="company"]')
+    row = page.locator(f'.tree-item[data-path="{AREA}"]')
     row.hover()
     row.locator('button[title="New folder here"]').click()
     dlg_fill(page, name)

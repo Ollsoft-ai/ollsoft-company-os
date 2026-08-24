@@ -11,7 +11,7 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login
-from kbenv import U, doc
+from kbenv import AREA, U, doc
 
 TAG = str(int(time.time()))
 FOLDER = doc(f"panes_{TAG}")
@@ -101,7 +101,7 @@ def test_truncated_tree_name_gets_a_tooltip(browser, docs):
         assert row.get_attribute("title") == LONG_NAME
 
         # a name that fits gets no tooltip — otherwise every row would nag
-        short = page.locator('.tree-item[data-path="company"]')
+        short = page.locator(f'.tree-item[data-path="{AREA}"]')
         short.hover()
         page.wait_for_timeout(150)
         assert short.get_attribute("title") is None

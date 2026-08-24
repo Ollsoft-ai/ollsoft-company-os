@@ -28,7 +28,7 @@ def browser():
 
 
 def login(context, user):
-    from kbenv import BASE, CREDS, U
+    from kbenv import AREA, BASE, CREDS, U
     page = context.new_page()
     page.goto(BASE + "/login")
     page.fill('input[name="username"]', U(user))
@@ -36,6 +36,15 @@ def login(context, user):
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")
     page.wait_for_selector('[data-testid="tree"] .tree-item')
+    # This run's documents live one level deeper than company/, so open that
+    # folder before handing the page over. company/ itself is expanded by
+    # default, which is the behaviour these tests were written against; without
+    # this every test that reaches a fixture through the tree would have to
+    # expand it by hand.
+    try:
+        expand_folder(page, AREA)
+    except Exception:
+        pass          # a test that never touches the tree should not fail here
     return page
 
 

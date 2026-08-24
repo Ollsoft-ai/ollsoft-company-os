@@ -4,7 +4,7 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, dlg_fill, dlg_ok, login
-from kbenv import U, doc, home
+from kbenv import AREA, U, doc, home
 
 TAG = str(int(time.time()))
 
@@ -39,7 +39,7 @@ def test_collapse_and_expand_all(browser):
     assert page.locator(inner).is_visible()               # expanded by default
     page.click('[data-testid="tree-fold"]')               # collapse all
     assert not page.locator(inner).is_visible()
-    assert page.locator('.tree-item[data-path="company"]').is_visible()
+    assert page.locator(f'.tree-item[data-path="{AREA}"]').is_visible()
     page.click('[data-testid="tree-fold"]')               # now it expands all
     assert page.locator(inner).is_visible()
     ctx.close()
@@ -58,8 +58,8 @@ def test_create_file_via_folder_button(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     name = f"uicreate_{TAG}.md"
-    page.hover('.tree-item[data-path="company"]')
-    page.click('.tree-item[data-path="company"] .tbtn[title="New file here"]')
+    page.hover(f'.tree-item[data-path="{AREA}"]')
+    page.click(f'.tree-item[data-path="{AREA}"] .tbtn[title="New file here"]')
     dlg_fill(page, name)
     page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', timeout=6000)
     # created in company/ -> inherits root ownership
