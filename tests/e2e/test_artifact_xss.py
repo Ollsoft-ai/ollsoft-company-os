@@ -6,9 +6,10 @@ Two independent walls must hold:
      so even data the viewer is allowed to see can't be exfiltrated.
 """
 from conftest import BASE, CREDS, login
+from kbenv import doc
 
-XSS = "company/dashboards/xsstest.html"
-GOOD = "company/dashboards/randoms.html"
+XSS = doc("dashboards/xsstest.html")
+GOOD = doc("dashboards/randoms.html")
 
 
 def test_hostile_artifact_cannot_exfiltrate(browser):

@@ -4,14 +4,13 @@ import subprocess
 import time
 
 import httpx
+from kbenv import BASE, CREDS, U, doc, proj
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 
 def client(user):
     c = httpx.Client(base_url=BASE, timeout=20)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200
     return c
 
@@ -21,10 +20,10 @@ def test_attachment_upload_and_permissioned_serving():
     kry = client("alice")
     # Upload into the confidential acme folder.
     files = {"file": ("secret.txt", b"acme attachment payload", "text/plain")}
-    r = kry.post("/api/upload", params={"dir": "projects/acme"}, files=files)
+    r = kry.post("/api/upload", params={"dir": proj()}, files=files)
     assert r.status_code == 200, r.text
     link = r.json()["path"]  # projects/acme/_files/secret.txt
-    assert link == "projects/acme/_files/secret.txt"
+    assert link == proj("_files/secret.txt")
 
     # Owner + teammate can fetch it.
     assert kry.get("/api/attachment", params={"path": link}).status_code == 200
@@ -43,7 +42,7 @@ def test_checkbox_roundtrip():
     kry = client("alice")
     tasks = kry.get("/api/tasks").json()["tasks"]
     target = next(t for t in tasks
-                  if t["path"] == "company/overview.md" and "Ship the knowledgebase" in t["text"])
+                  if t["path"] == doc("overview.md") and "Ship the knowledgebase" in t["text"])
     initial = target["checked"]
     expect = not initial
 

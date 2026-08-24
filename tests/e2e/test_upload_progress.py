@@ -7,6 +7,7 @@ import time
 import httpx
 
 from conftest import BASE, CREDS, login
+from kbenv import U, doc
 
 
 def test_tree_upload_shows_ghost_row_with_progress(browser, tmp_path):
@@ -39,10 +40,10 @@ def test_tree_upload_shows_ghost_row_with_progress(browser, tmp_path):
         "        return el && /\\d+%/.test(el.textContent); }", timeout=10000)
 
     # the ghost resolves into the real tree row, and no ghost remains
-    page.wait_for_selector(f'.tree-item[data-path="company/{name}"]', timeout=30000)
+    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', timeout=30000)
     page.wait_for_selector(".tree-item.uploading", state="hidden", timeout=5000)
     ctx.close()
 
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
-    c.post("/api/fs/delete", json={"path": f"company/{name}"})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
+    c.post("/api/fs/delete", json={"path": doc(f"{name}")})

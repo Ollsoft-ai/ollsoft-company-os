@@ -16,6 +16,7 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS
+from kbenv import doc
 
 LAT = 1200          # ms added to every request while a slow phase is under test
 USER = "alice"      # the same identity creates the fixture doc and views it
@@ -61,7 +62,7 @@ def scratch_doc():
     test times out looking for it. Going through the API makes ownership and
     mode correct by construction, whoever runs the suite."""
     name = f"kbtest_ux_{int(time.time() * 1000)}"
-    rel = f"company/{name}.md"
+    rel = doc(f"{name}.md")
     c = httpx.Client(base_url=BASE, timeout=30)
     assert c.post("/login", data={"username": USER,
                                   "password": CREDS[USER]}).status_code == 200

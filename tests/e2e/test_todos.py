@@ -6,13 +6,14 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, login
+from kbenv import U, doc, proj
 
-TODOS = "company/todos.html"
+TODOS = doc("todos.html")
 
 
 def q(user, sql, params=None):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c.post("/api/artifact/query", json={"sql": sql, "params": params or []}).json()
 
 
@@ -21,8 +22,8 @@ def test_todo_data_is_rls_scoped():
     sql = "SELECT file_path FROM kb.blocks WHERE kind='task'"
     kry = {r[0] for r in q("alice", sql)["rows"]}
     carol = {r[0] for r in q("carol", sql)["rows"]}
-    assert any(p.startswith("projects/acme/") for p in kry), "alice should see acme tasks"
-    assert not any(p.startswith("projects/acme/") for p in carol), \
+    assert any(p.startswith(proj()) for p in kry), "alice should see acme tasks"
+    assert not any(p.startswith(proj()) for p in carol), \
         "carol must NOT see acme tasks in the todo aggregate"
     assert any(p.startswith("company/") for p in carol), "carol sees company tasks"
 
@@ -32,9 +33,9 @@ def test_assigned_to_me_query():
     # demo seed skips documents that already exist), so plant our OWN task doc
     # via the product API, wait for the indexer, and assert the 'mine' query
     # (current_user = ANY(assignees), still under RLS) surfaces exactly it.
-    path = f"company/kbtest_todo_{int(time.time())}.md"
+    path = doc(f"kbtest_todo_{int(time.time())}.md")
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     assert c.post("/api/file", json={"path": path}).status_code == 200
     c.post("/api/artifact/write", json={
         "path": path,
@@ -61,7 +62,7 @@ def test_assigned_to_me_query():
 def test_todos_artifact_mine_and_all(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path="company/todos.html"]')
+    page.click('.tree-item[data-path=doc("todos.html")]')
     frame = page.frame_locator("iframe.artifact-frame")
     frame.locator("#who").wait_for(timeout=10000)
     frame.locator(".task, .empty").first.wait_for(timeout=10000)
@@ -78,7 +79,7 @@ def test_todos_artifact_mine_and_all(browser):
 def test_todos_artifact_hides_acme_for_carol(browser):
     ctx = browser.new_context()
     page = login(ctx, "carol")
-    page.click('.tree-item[data-path="company/todos.html"]')
+    page.click('.tree-item[data-path=doc("todos.html")]')
     frame = page.frame_locator("iframe.artifact-frame")
     frame.locator("#who").wait_for(timeout=10000)
     frame.locator("#tab-all").click()
@@ -90,7 +91,7 @@ def test_todos_artifact_hides_acme_for_carol(browser):
 def test_toggle_from_todos_writes_file(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path="company/todos.html"]')
+    page.click('.tree-item[data-path=doc("todos.html")]')
     frame = page.frame_locator("iframe.artifact-frame")
     frame.locator("#who").wait_for(timeout=10000)
     frame.locator("#tab-all").click()

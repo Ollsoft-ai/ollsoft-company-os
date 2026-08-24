@@ -12,15 +12,15 @@ import time
 import httpx
 import pytest
 from conftest import BASE, dlg_fill, login, open_doc, doc_text
+from kbenv import CREDS, U, doc
 
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-DIR = f"company/uiux_{TAG}"
+DIR = doc(f"uiux_{TAG}")
 
 
 def http(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 

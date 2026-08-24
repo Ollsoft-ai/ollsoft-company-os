@@ -13,6 +13,7 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, dlg_fill, expand_folder, login
+from kbenv import U, doc
 
 # a real 2x2 red PNG (so naturalWidth>0 proves it decoded, not just embedded)
 RED_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP8"
@@ -21,7 +22,7 @@ RED_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP8"
 
 def api(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -52,7 +53,7 @@ def cleanup(paths):
 
 
 def test_rich_default_renders_constructs(browser):
-    doc = f"company/rich_r_{int(time.time())}.md"
+    doc = doc(f"rich_r_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -81,7 +82,7 @@ def test_rich_default_renders_constructs(browser):
 
 
 def test_cursor_reveals_syntax(browser):
-    doc = f"company/rich_c_{int(time.time())}.md"
+    doc = doc(f"rich_c_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -98,7 +99,7 @@ def test_cursor_reveals_syntax(browser):
 
 
 def test_mode_switch_persists_across_reload(browser):
-    doc = f"company/rich_m_{int(time.time())}.md"
+    doc = doc(f"rich_m_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -120,7 +121,7 @@ def test_mode_switch_persists_across_reload(browser):
 
 
 def test_toolbar_bold_and_heading(browser):
-    doc = f"company/rich_t_{int(time.time())}.md"
+    doc = doc(f"rich_t_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -147,7 +148,7 @@ def test_toolbar_bold_and_heading(browser):
 
 
 def test_toolbar_task_list(browser):
-    doc = f"company/rich_tl_{int(time.time())}.md"
+    doc = doc(f"rich_tl_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -165,7 +166,7 @@ def test_toolbar_task_list(browser):
 
 
 def test_checkbox_toggle_writes_back_to_source(browser):
-    doc = f"company/rich_cb_{int(time.time())}.md"
+    doc = doc(f"rich_cb_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -183,7 +184,7 @@ def test_checkbox_toggle_writes_back_to_source(browser):
 
 
 def test_screenshot_paste_stores_and_renders(browser):
-    doc = f"company/rich_paste_{int(time.time())}.md"
+    doc = doc(f"rich_paste_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -218,7 +219,7 @@ def test_screenshot_paste_stores_and_renders(browser):
 
 
 def test_file_drop_inserts_link_not_image(browser):
-    doc = f"company/rich_drop_{int(time.time())}.md"
+    doc = doc(f"rich_drop_{int(time.time())}.md")
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
@@ -238,7 +239,7 @@ def test_file_drop_inserts_link_not_image(browser):
         }""")
         assert "[notes.txt](_files/notes.txt)" in src, src
         assert "![notes.txt]" not in src, "a non-image must be a plain link, not an embed"
-        cleanup([doc, "company/_files/notes.txt"])
+        cleanup([doc, doc("_files/notes.txt")])
     finally:
         ctx.close()
 
@@ -270,7 +271,7 @@ DRAG_LINK_JS = """async ([src, xoff]) => {
 
 def test_tree_row_dropped_into_doc_links_it(browser):
     tag = f"linkdrop_{int(time.time())}"
-    folder = f"company/{tag}"
+    folder = doc(f"{tag}")
     doc = f"{folder}/deep/note.md"
     c = api("alice")
     assert c.post("/api/fs/mkdir", json={"path": folder}).status_code == 200
@@ -349,7 +350,7 @@ def test_readonly_doc_has_no_toolbar_and_locked_checkboxes(browser):
 def test_fenced_code_block_renders_with_copy_button(browser):
     """``` fences render as a styled block whose copy button puts the code —
     and only the code, not the fences — on the clipboard."""
-    doc = f"company/codeblk_{int(time.time())}.md"
+    doc = doc(f"codeblk_{int(time.time())}.md")
     ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
     page = login(ctx, "alice")
     try:
@@ -375,8 +376,8 @@ def test_internal_md_link_opens_a_tab_not_a_download(browser):
     instead of opening it — and ../ was never resolved, so a sibling link could
     not have found the file anyway."""
     stamp = int(time.time())
-    folder = f"company/linkdir_{stamp}"
-    target = f"company/linked note {stamp}.md"          # a space -> %20 in the link
+    folder = doc(f"linkdir_{stamp}")
+    target = doc(f"linked note {stamp}.md")          # a space -> %20 in the link
     doc = f"{folder}/linkfrom_{stamp}.md"
     api("alice").post("/api/fs/mkdir", json={"path": folder})
     ctx = browser.new_context()

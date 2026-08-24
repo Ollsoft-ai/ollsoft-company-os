@@ -7,6 +7,7 @@ about people who were already there (the re-announce-on-join fix)."""
 import time
 
 from conftest import BASE, CREDS, dlg_fill
+from kbenv import U, doc
 
 
 def login(ctx, user):
@@ -51,14 +52,14 @@ def open_shared(browser, cleanup_paths, doc):
 def _cleanup(paths):
     import httpx
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     for p in paths:
         c.post("/api/fs/delete", json={"path": p})
 
 
 def test_presence_shows_all_viewers_both_sides(browser):
     paths = []
-    (ck, cj), k, j = open_shared(browser, paths, f"company/pres_{int(time.time())}.md")
+    (ck, cj), k, j = open_shared(browser, paths, doc(f"pres_{int(time.time())}.md"))
     try:
         kp, jp = presence_titles(k), presence_titles(j)
         assert any("alice (you)" in t for t in kp) and any(t.startswith("bob") for t in kp), kp
@@ -71,7 +72,7 @@ def test_presence_shows_all_viewers_both_sides(browser):
 
 def test_remote_cursor_renders_with_name_in_rich_view(browser):
     paths = []
-    (ck, cj), k, j = open_shared(browser, paths, f"company/cur_{int(time.time())}.md")
+    (ck, cj), k, j = open_shared(browser, paths, doc(f"cur_{int(time.time())}.md"))
     try:
         # bob moves his cursor onto "fourth line here"
         j.evaluate("() => { const v=window.__kbview; const l=v.state.doc.line(5);"
@@ -89,7 +90,7 @@ def test_remote_cursor_renders_with_name_in_rich_view(browser):
 
 def test_distinct_colors_per_user(browser):
     paths = []
-    (ck, cj), k, j = open_shared(browser, paths, f"company/col_{int(time.time())}.md")
+    (ck, cj), k, j = open_shared(browser, paths, doc(f"col_{int(time.time())}.md"))
     try:
         colors = k.evaluate(
             "() => [...document.querySelectorAll('#presence .presence-avatar')]"
@@ -101,7 +102,7 @@ def test_distinct_colors_per_user(browser):
 
 def test_presence_drops_when_a_viewer_leaves(browser):
     paths = []
-    (ck, cj), k, j = open_shared(browser, paths, f"company/leave_{int(time.time())}.md")
+    (ck, cj), k, j = open_shared(browser, paths, doc(f"leave_{int(time.time())}.md"))
     try:
         assert len(presence_titles(k)) == 2
         # bob closes the document tab -> his awareness state is removed

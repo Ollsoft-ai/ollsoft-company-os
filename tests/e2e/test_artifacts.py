@@ -14,16 +14,17 @@ from pathlib import Path
 import httpx
 import pytest
 from conftest import BASE, CREDS, login
+from kbenv import U, doc
 
 TAG = str(int(time.time()))
-DIR = f"company/kbtest_art_{TAG}"
+DIR = doc(f"kbtest_art_{TAG}")
 ART = f"{DIR}/dash.html"
 TABLE = f"u_alice.kbtest_readings_{TAG}"
 
 
 def q(user, sql, params=None):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c.post("/api/artifact/query", json={"sql": sql, "params": params or []}).json()
 
 
@@ -32,7 +33,7 @@ def scenario():
     """Build the scenario exactly the way the demo seed tells the story, but
     under unique names so nothing pre-existing is touched or depended on."""
     c = httpx.Client(base_url=BASE, timeout=30)
-    r = c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    r = c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     assert r.status_code == 200, r.text
 
     def sql(stmt, params=None):
@@ -68,7 +69,7 @@ def scenario():
 
 def tree_paths(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     out, stack = [], list(c.get("/api/tree").json()["tree"])
     while stack:
         n = stack.pop()

@@ -23,9 +23,8 @@ import time
 import httpx
 
 from kb_platform.indexer import compute_visibility
+from kbenv import BASE, CREDS, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 # Deliberately spans visibility profiles: alice/bob are in acme, carol is not.
 AUDIT_USERS = ["alice", "bob", "carol"]
 
@@ -42,6 +41,10 @@ def vis(files, users=("alice", "bob", "carol")):
     return compute_visibility(files, GROUPS, users)
 
 
+# NOTE: everything below feeds SYNTHETIC rows to compute_visibility and never
+# touches the filesystem, so these paths are deliberately literal — running them
+# through this run's namespace would leave a gap at the intermediate directory
+# and every ancestor-traversal case would fail for the wrong reason.
 # --- one mode class applies, and its denial is final ------------------------
 
 def test_owner_class_denial_is_final():
@@ -164,7 +167,7 @@ def test_rls_confines_each_user_to_their_own_rows():
 def _as_user(user, sql):
     """Run SQL as `user` through the artifact bridge (peer auth as them)."""
     c = httpx.Client(base_url=BASE, timeout=30)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, f"login failed for {user}"
     r = c.post("/api/artifact/query", json={"sql": sql, "params": []})
     assert r.status_code == 200, f"{user}: {r.text[:200]}"

@@ -8,6 +8,7 @@ import pytest
 
 from kb_platform import common
 from kb_platform import convert
+from kbenv import doc
 
 
 # ---- naming and the hidden/indexed split -----------------------------------
@@ -21,15 +22,15 @@ def test_sidecar_naming_round_trip():
 
 
 @pytest.mark.parametrize("rel,expected", [
-    ("company/_files/.report.docx.md", True),
+    (doc("_files/.report.docx.md"), True),
     (".Talk.pptx.md", True),
     ("a/b/.data.xlsx.md", True),
     ("a/.scan.pdf.md", True),
     ("a/.old.doc.md", True),
-    ("company/report.docx.md", False),     # no dot prefix: a normal doc
-    ("company/.hidden.md", False),         # dot-md without a source suffix
-    ("company/.report.docx", False),       # not markdown
-    ("company/report.docx", False),
+    (doc("report.docx.md"), False),     # no dot prefix: a normal doc
+    (doc(".hidden.md"), False),         # dot-md without a source suffix
+    (doc(".report.docx"), False),       # not markdown
+    (doc("report.docx"), False),
     (".claude", False),
 ])
 def test_is_derived_sidecar(rel, expected):
@@ -39,12 +40,12 @@ def test_is_derived_sidecar(rel, expected):
 @pytest.mark.parametrize("rel,hidden", [
     (".claude/skills/x/SKILL.md", True),   # dot-dir trees stay machinery
     (".git/config", True),
-    ("company/.claude/x.md", True),
-    ("company/.notes.md", True),           # plain dot-files stay hidden
+    (doc(".claude/x.md"), True),
+    (doc(".notes.md"), True),           # plain dot-files stay hidden
     (".gitignore", True),
-    ("company/.report.docx.md", False),    # THE exception: derived sidecars index
-    ("company/a.md", False),
-    ("company/sub/b.md", False),
+    (doc(".report.docx.md"), False),    # THE exception: derived sidecars index
+    (doc("a.md"), False),
+    (doc("sub/b.md"), False),
 ])
 def test_is_hidden_rel(rel, hidden):
     assert common.is_hidden_rel(rel) is hidden

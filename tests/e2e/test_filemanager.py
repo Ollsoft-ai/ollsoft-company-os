@@ -4,13 +4,14 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, dlg_fill, dlg_ok, login
+from kbenv import U, doc, home
 
 TAG = str(int(time.time()))
 
 
 def props(user, path):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c.get("/fs/props", params={"path": path}).json()
 
 
@@ -34,7 +35,7 @@ def test_claude_visible_and_folders_collapse(browser):
 def test_collapse_and_expand_all(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    inner = '.tree-item[data-path="company/overview.md"]'
+    inner = '.tree-item[data-path=doc("overview.md")]'
     assert page.locator(inner).is_visible()               # expanded by default
     page.click('[data-testid="tree-fold"]')               # collapse all
     assert not page.locator(inner).is_visible()
@@ -47,7 +48,7 @@ def test_collapse_and_expand_all(browser):
 def test_access_badge_reflects_permissions(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path="company/overview.md"]')
+    page.click('.tree-item[data-path=doc("overview.md")]')
     page.wait_for_selector('#access-badge:not([hidden])')
     assert "write" in page.inner_text('#access-badge')
     ctx.close()
@@ -60,13 +61,13 @@ def test_create_file_via_folder_button(browser):
     page.hover('.tree-item[data-path="company"]')
     page.click('.tree-item[data-path="company"] .tbtn[title="New file here"]')
     dlg_fill(page, name)
-    page.wait_for_selector(f'.tree-item[data-path="company/{name}"]', timeout=6000)
+    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', timeout=6000)
     # created in company/ -> inherits root ownership
-    assert props("alice", f"company/{name}")["owner"] == "root"
+    assert props("alice", doc(f"{name}"))["owner"] == "root"
     # remove it again (company/ is group-writable, so the parent-write check passes)
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
-    c.post("/api/fs/delete", json={"path": f"company/{name}"})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
+    c.post("/api/fs/delete", json={"path": doc(f"{name}")})
     ctx.close()
 
 
@@ -74,7 +75,7 @@ def test_permissions_modal_adds_acl(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     # alice owns his private file, so he can edit its ACLs.
-    target = "users/alice/private.md"
+    target = home("alice", "private.md")
     page.hover(f'.tree-item[data-path="{target}"]')
     page.click(f'.tree-item[data-path="{target}"] .tbtn[title="Permissions"]')
     page.wait_for_selector('#pm-addacl')
@@ -92,8 +93,8 @@ def test_permissions_modal_adds_acl(browser):
     # Clean up: undo the share AND the auto-granted ancestor traverse, so the
     # "bob can't read alice's private" invariant is restored for other tests.
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
-    for pth in (target, "users/alice", "users"):
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
+    for pth in (target, home("alice"), "users"):
         c.post("/fs/props", json={"path": pth, "acl_remove": [{"type": "user", "name": "bob"}]})
     ctx.close()
 
@@ -105,9 +106,9 @@ def test_machinery_folders_collapsed_by_default(browser):
     import time as _t
     import httpx
     tag = str(int(_t.time()))
-    base = f"company/mach_{tag}"
+    base = doc(f"mach_{tag}")
     c = httpx.Client(base_url="http://127.0.0.1:8300", timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     c.post("/api/fs/mkdir", json={"path": base})
     c.post("/api/fs/mkdir", json={"path": f"{base}/_files"})
     c.post("/api/fs/mkdir", json={"path": f"{base}/notes"})

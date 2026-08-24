@@ -8,14 +8,13 @@ import time
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc, proj
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 
 def search(user, q):
     c = httpx.Client(base_url=BASE, timeout=15)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200
     res = c.get("/api/search", params={"q": q}).json()
     assert res.get("db") is True, "index must be online"
@@ -40,14 +39,14 @@ def search_has(user, q, path, timeout=6):
 # --- RLS filters confidential indexed content per user ---------------------
 def test_acme_secret_visible_only_to_team():
     # zebrafish lives in the confidential acme plan, which IS indexed.
-    assert "projects/acme/plan.md" in search_has("alice", "zebrafish", "projects/acme/plan.md")
-    assert "projects/acme/plan.md" in search_has("bob", "zebrafish", "projects/acme/plan.md")
+    assert proj("plan.md") in search_has("alice", "zebrafish", proj("plan.md"))
+    assert proj("plan.md") in search_has("bob", "zebrafish", proj("plan.md"))
     assert search("carol", "zebrafish") == set(), "carol must not see acme via search"
 
 
 def test_company_content_visible_to_all():
     for u in ("alice", "bob", "carol"):
-        assert "company/overview.md" in search_has(u, "quarterly", "company/overview.md")
+        assert doc("overview.md") in search_has(u, "quarterly", doc("overview.md"))
 
 
 def test_rls_direct_psql_as_alice():
@@ -83,9 +82,9 @@ def test_making_a_file_private_revokes_search_quickly():
     RLS is unaffected and is what this test pins: the CONTENT must disappear
     from every other user's search, and stay in the owner's."""
     token = f"pangovault{int(time.time())}"
-    rel = f"company/kbtest_privacy_{token}.md"
+    rel = doc(f"kbtest_privacy_{token}.md")
     c = httpx.Client(base_url=BASE, timeout=15)
-    r = c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    r = c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     assert r.status_code == 200
     # /api/file, not /fs/newfile: the latter gives a new file the PARENT
     # folder's owner (root, under company/), and this test is about what the

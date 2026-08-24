@@ -6,14 +6,15 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login, open_doc, doc_text
+from kbenv import U, doc
 
 TAG = str(int(time.time()))
-DOC = f"company/hist_{TAG}.md"
+DOC = doc(f"hist_{TAG}.md")
 
 
 def api(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 

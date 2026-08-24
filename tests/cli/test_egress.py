@@ -10,18 +10,17 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-ART = "company/dashboards/egresstest.html"
-SECRET = f"company/_secrets/egkey_{TAG}.env"
+ART = doc("dashboards/egresstest.html")
+SECRET = doc(f"_secrets/egkey_{TAG}.env")
 KEY = f"topsecret_{TAG}"
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=30)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -48,7 +47,7 @@ def setup():
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     k = cl("alice")
-    k.post("/api/fs/mkdir", json={"path": "company/_secrets"})
+    k.post("/api/fs/mkdir", json={"path": doc("_secrets")})
     assert k.post("/fs/newfile", json={"path": SECRET}).status_code == 200
     k.post("/api/artifact/write", json={"path": SECRET, "content": KEY + "\n"})
     assert k.post("/fs/newfile", json={"path": ART}).status_code in (200, 409)
@@ -79,10 +78,10 @@ def test_allowlisted_call_with_secret_injection(setup):
 def test_multipart_file_forwarding(setup):
     port = setup
     k = cl("alice")
-    up = k.post("/api/upload", params={"dir": "company/dashboards"},
+    up = k.post("/api/upload", params={"dir": doc("dashboards")},
                 files={"file": (f"eg_{TAG}.bin", b"A" * 5000, "application/octet-stream")})
     assert up.status_code == 200, up.text
-    fpath = f"company/dashboards/_files/eg_{TAG}.bin"
+    fpath = doc(f"dashboards/_files/eg_{TAG}.bin")
     r = k.post("/egress", json={
         "artifact": ART, "url": f"http://127.0.0.1:{port}/stt", "method": "POST",
         "form": {"fields": {"model_id": "scribe_v1"},
@@ -96,7 +95,7 @@ def test_denials(setup):
     port = setup
     k = cl("alice")
     # an artifact with no grant has no network
-    assert k.post("/egress", json={"artifact": "company/todos.html",
+    assert k.post("/egress", json={"artifact": doc("todos.html"),
                                    "url": f"http://127.0.0.1:{port}/"}).status_code == 403
     # a domain outside the allowlist is refused
     assert k.post("/egress", json={"artifact": ART,
@@ -124,13 +123,13 @@ def test_delegated_non_admin_and_agent_can_manage_network(setup):
     ignores malformed hand-edits."""
     port = setup
     k = cl("alice")
-    art2 = "company/dashboards/egressdelegate.html"
+    art2 = doc("dashboards/egressdelegate.html")
     assert k.post("/fs/newfile", json={"path": art2}).status_code in (200, 409)
     assert cl("bob").get("/admin/egress").json()["can_edit"] is False
     assert cl("bob").post("/admin/egress",
                            json={"artifact": art2, "domains": ["x.com"]}).status_code == 403
     r = k.post("/fs/props", json={"path": ".claude/egress.json",
-                                  "acl_add": [{"type": "user", "name": "bob", "perms": "rw"}]})
+                                  "acl_add": [{"type": "user", "name": U("bob"), "perms": "rw"}]})
     assert r.status_code == 200, r.text
     try:
         j = cl("bob")
@@ -154,7 +153,7 @@ def test_delegated_non_admin_and_agent_can_manage_network(setup):
         assert "../../etc/passwd" not in ents and "notes.txt" not in ents
     finally:
         k.post("/fs/props", json={"path": ".claude/egress.json",
-                                  "acl_remove": [{"type": "user", "name": "bob"}]})
+                                  "acl_remove": [{"type": "user", "name": U("bob")}]})
         k.post("/admin/egress", json={"artifact": art2, "domains": []})
         k.post("/api/fs/delete", json={"path": art2})
     assert cl("bob").get("/admin/egress").json()["can_edit"] is False

@@ -13,24 +13,23 @@ import time
 import aiohttp
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-SECRET = f"company/_secrets/apikey_{TAG}.env"
+SECRET = doc(f"_secrets/apikey_{TAG}.env")
 MARKER = f"verysecret_{TAG}"
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
 @pytest.fixture(scope="module")
 def secret_file():
     k = cl("alice")
-    k.post("/api/fs/mkdir", json={"path": "company/_secrets"})   # idempotent-ish
+    k.post("/api/fs/mkdir", json={"path": doc("_secrets")})   # idempotent-ish
     r = k.post("/fs/newfile", json={"path": SECRET})
     assert r.status_code == 200, r.text
     w = k.post("/api/artifact/write", json={"path": SECRET, "content": f"ELEVEN_KEY={MARKER}\n"})
@@ -40,21 +39,24 @@ def secret_file():
 
 
 def test_secret_is_born_private(secret_file):
-    st = os.stat(f"/srv/kb/{secret_file}")
-    assert stat.S_IMODE(st.st_mode) == 0o600
-    assert pwd.getpwuid(st.st_uid).pw_name == "alice"
+    # Through /fs/props, not a local os.stat: a _secrets folder is born 0700 and
+    # owned by whoever made it, so the account running the suite cannot even
+    # traverse into it — which is the guarantee, not a failure.
+    pr = cl("alice").get("/fs/props", params={"path": secret_file}).json()
+    assert pr["mode"] == "600", pr
+    assert pr["owner"] == U("alice"), pr
     assert cl("bob").get("/api/file", params={"path": secret_file}).status_code == 403
 
 
 def test_sharing_works_like_any_file(secret_file):
     k = cl("alice")
     r = k.post("/fs/props", json={"path": secret_file,
-                                  "acl_add": [{"type": "user", "name": "bob", "perms": "r"}]})
+                                  "acl_add": [{"type": "user", "name": U("bob"), "perms": "r"}]})
     assert r.status_code == 200, r.text
     j = cl("bob").get("/api/file", params={"path": secret_file})
     assert j.status_code == 200 and MARKER in j.json()["content"]
     k.post("/fs/props", json={"path": secret_file,
-                              "acl_remove": [{"type": "user", "name": "bob"}]})
+                              "acl_remove": [{"type": "user", "name": U("bob")}]})
     assert cl("bob").get("/api/file", params={"path": secret_file}).status_code == 403
 
 
@@ -75,7 +77,7 @@ def test_never_indexed_even_when_group_readable(secret_file):
 
 def test_never_in_git_and_git_is_root_only(secret_file):
     k = cl("alice")
-    probe = f"company/gitprobe_{TAG}.md"
+    probe = doc(f"gitprobe_{TAG}.md")
     k.post("/api/file", json={"path": probe})       # force a snapshot cycle
     state = {}
     deadline = time.time() + 25

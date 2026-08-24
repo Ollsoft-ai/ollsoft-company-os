@@ -14,16 +14,15 @@ import time
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, L, U, doc, people
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-DIR = f"company/share_{TAG}"
+DIR = doc(f"share_{TAG}")
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 
@@ -33,9 +32,9 @@ def backend_v(c) -> int:
     return r.json().get("v", 0) if r.status_code == 200 else 0
 
 
-def share(c, path, scope, people=()):
+def share(c, path, scope, pairs=()):
     return c.post("/fs/share", json={"path": path, "scope": scope,
-                                     "people": [{"user": u, "role": r} for u, r in people]})
+                                     "people": people(pairs)})
 
 
 def state(c, path):
@@ -45,7 +44,8 @@ def state(c, path):
 
 
 def roles(st):
-    return {p["user"]: p["role"] for p in st["people"]}
+    # Back to logical names, so the assertions read "bob", not kbt_<ns>_bob.
+    return {L(p["user"]): p["role"] for p in st["people"]}
 
 
 def can_open(user, path):

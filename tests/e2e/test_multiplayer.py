@@ -9,15 +9,16 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login, open_doc, doc_text, insert_at, insert_at_end
+from kbenv import U, doc
 
-COLLAB = "company/collab.md"
+COLLAB = doc("collab.md")
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _remove_fixture_doc_afterwards():
     yield
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     c.post("/api/fs/delete", json={"path": COLLAB})
 
 
@@ -32,7 +33,7 @@ def git_count():
 
 def _ensure_collab_doc():
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     c.post("/api/file", json={"path": COLLAB})  # 200 or 409 if it already exists
     # seed one line so editors have content to sync
     with open(f"/srv/kb/{COLLAB}", "w") as f:

@@ -7,11 +7,12 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login
+from kbenv import U, doc
 
 
 def api(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -30,7 +31,7 @@ def _restore_real_company_buttons():
 
 
 def test_company_button_reaches_everyone_and_opens_artifact(browser):
-    set_company([{"label": "Pulse", "kind": "file", "target": "company/cron-demo/pulse.html"}])
+    set_company([{"label": "Pulse", "kind": "file", "target": doc("cron-demo/pulse.html")}])
     try:
         ctx = browser.new_context()
         page = login(ctx, "bob")          # NOT an admin — company buttons still show
@@ -53,7 +54,7 @@ def test_admin_manages_company_buttons_via_modal(browser):
         page.click('[data-testid="launcher-manage"]')
         page.fill('[data-testid="lnch-label-company"]', label)
         page.select_option('[data-testid="lnch-kind-company"]', "file")
-        page.fill('[data-testid="lnch-target-company"]', "company/overview.md")
+        page.fill('[data-testid="lnch-target-company"]', doc("overview.md"))
         page.click('[data-testid="lnch-add-company"]')
         page.wait_for_selector(f'.launchbar .lchip.company:has-text("{label}")', timeout=8000)
         # remove it again from inside the modal
@@ -112,7 +113,7 @@ def test_api_authz_and_validation():
     assert r.status_code == 400, r.text
     # a valid personal write round-trips
     r = api("bob").post("/api/launchers",
-                         json={"buttons": [{"label": "ok", "kind": "file", "target": "company/overview.md"}]})
+                         json={"buttons": [{"label": "ok", "kind": "file", "target": doc("overview.md")}]})
     assert r.status_code == 200, r.text
     assert api("bob").get("/api/launchers").json()["mine"][0]["label"] == "ok"
     api("bob").post("/api/launchers", json={"buttons": []})

@@ -6,15 +6,14 @@ kernel — not application code — enforces every access. Attacks must fail clo
 import json
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc, home, proj
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 
 def client(user=None):
     c = httpx.Client(base_url=BASE, timeout=15, follow_redirects=False)
     if user:
-        r = c.post("/login", data={"username": user, "password": CREDS[user]})
+        r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
         assert r.status_code == 200, f"login {user}: {r.status_code} {r.text}"
     return c
 
@@ -38,8 +37,8 @@ def tree_paths(c):
 def test_whoami_is_kernel_identity(user):
     c = client(user)
     j = c.get("/api/whoami").json()
-    assert j["user"] == user, "backend must run AS the logged-in user"
-    assert j["claimed"] == user
+    assert j["user"] == U(user), "backend must run AS the logged-in user"
+    assert j["claimed"] == U(user)   # the hub asserts the real account name
 
 
 # --- permission matrix (the tree a user can see) ---------------------------
@@ -50,46 +49,46 @@ def test_tree_visibility_matrix():
 
     # Everyone sees company docs.
     for p in kp, jp, ip:
-        assert "company/overview.md" in p
-        assert "company/onboarding.md" in p
+        assert doc("overview.md") in p
+        assert doc("onboarding.md") in p
 
     # Acme project: alice + bob yes, carol NO.
-    assert "projects/acme/plan.md" in kp
-    assert "projects/acme/plan.md" in jp
-    assert "projects/acme" not in ip and "projects/acme/plan.md" not in ip
+    assert proj("plan.md") in kp
+    assert proj("plan.md") in jp
+    assert proj() not in ip and proj("plan.md") not in ip
 
     # Private dirs: only the owner.
-    assert "users/alice/private.md" in kp
-    assert "users/alice/private.md" not in jp
-    assert "users/bob/private.md" in jp
-    assert "users/bob/private.md" not in ip
+    assert home("alice", "private.md") in kp
+    assert home("alice", "private.md") not in jp
+    assert home("bob", "private.md") in jp
+    assert home("bob", "private.md") not in ip
 
 
 # --- direct read authorization (kernel-enforced) ---------------------------
 def test_carol_cannot_read_acme_via_api():
     c = client("carol")
-    r = c.get("/api/file", params={"path": "projects/acme/plan.md"})
+    r = c.get("/api/file", params={"path": proj("plan.md")})
     assert r.status_code == 403, f"carol read acme must be denied, got {r.status_code}"
     assert "zebrafish" not in r.text
 
 
 def test_bob_cannot_read_alice_private():
     c = client("bob")
-    r = c.get("/api/file", params={"path": "users/alice/private.md"})
+    r = c.get("/api/file", params={"path": home("alice", "private.md")})
     assert r.status_code == 403
     assert "aardvark" not in r.text
 
 
 def test_owner_can_read_own_private():
     c = client("alice")
-    r = c.get("/api/file", params={"path": "users/alice/private.md"})
+    r = c.get("/api/file", params={"path": home("alice", "private.md")})
     assert r.status_code == 200 and "aardvark" in r.json()["content"]
 
 
 # --- path traversal --------------------------------------------------------
 @pytest.mark.parametrize("evil", [
     "../../etc/passwd", "..%2f..%2f..%2fetc%2fpasswd",
-    "/etc/passwd", "company/../../../etc/shadow",
+    "/etc/passwd", doc("../../../etc/shadow"),
 ])
 def test_path_traversal_blocked(evil):
     c = client("alice")
@@ -106,7 +105,7 @@ def test_symlink_escape_denied(tmp_path):
     c = client("alice")
     # alice creates a symlink inside his own private dir -> bob's private file.
     import subprocess
-    link = "users/alice/escape.md"
+    link = home("alice", "escape.md")
     subprocess.run(["ln", "-sf", "/srv/kb/users/bob/private.md",
                     f"/srv/kb/{link}"], check=False)
     r = c.get("/api/file", params={"path": link})

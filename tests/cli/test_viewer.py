@@ -10,9 +10,8 @@ import time
 import aiohttp
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 VU = f"vw{int(time.time()) % 100000}"
 PW = "ViewPassphrase01"
 NOLOGIN = "/usr/sbin/nologin"
@@ -20,7 +19,7 @@ NOLOGIN = "/usr/sbin/nologin"
 
 def cl(user, password=None):
     c = httpx.Client(base_url=BASE, timeout=25)
-    r = c.post("/login", data={"username": user, "password": password or CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": password or CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 
@@ -86,7 +85,7 @@ def test_viewer_logs_into_webapp_but_cannot_exec(viewer):
 
 def test_viewer_can_still_edit_files(viewer):
     v = cl(viewer, PW)
-    path = f"company/vwdoc_{VU}.md"
+    path = doc(f"vwdoc_{VU}.md")
     assert v.post("/fs/newfile", json={"path": path}).status_code == 200
     assert v.post("/api/fs/delete", json={"path": path}).status_code == 200
 
@@ -113,10 +112,10 @@ def test_toggle_between_viewer_and_full(viewer):
 
 def test_shell_toggle_guards(viewer):
     a = cl("alice")
-    assert a.post("/admin/users/shell", json={"username": "alice", "shell": False}).status_code == 400
+    assert a.post("/admin/users/shell", json={"username": U("alice"), "shell": False}).status_code == 400
     assert a.post("/admin/users/shell", json={"username": "root", "shell": True}).status_code == 400
     assert cl("bob").post("/admin/users/shell",
-                           json={"username": "carol", "shell": False}).status_code == 403
+                           json={"username": U("carol"), "shell": False}).status_code == 403
 
 
 def test_delete_clears_cron_deny(viewer):

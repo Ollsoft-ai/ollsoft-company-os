@@ -9,17 +9,16 @@ import time
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-DIR = f"company/vis_{TAG}"
+DIR = doc(f"vis_{TAG}")
 DOC = f"{DIR}/plan.md"
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -64,12 +63,12 @@ def test_acl_grant_reopens_for_one_colleague(folder):
     k = cl("alice")
     # "only me and bob": private dir + one ACL grant
     r = k.post("/fs/props", json={"path": DIR,
-                                  "acl_add": [{"type": "user", "name": "bob", "perms": "rwx"}]})
+                                  "acl_add": [{"type": "user", "name": U("bob"), "perms": "rwx"}]})
     assert r.status_code == 200, r.text
     assert cl("bob").get("/api/file", params={"path": DOC}).status_code == 200
     assert cl("carol").get("/api/file", params={"path": DOC}).status_code == 403
     # revoke -> locked out again
-    k.post("/fs/props", json={"path": DIR, "acl_remove": [{"type": "user", "name": "bob"}]})
+    k.post("/fs/props", json={"path": DIR, "acl_remove": [{"type": "user", "name": U("bob")}]})
     assert cl("bob").get("/api/file", params={"path": DOC}).status_code == 403
 
 

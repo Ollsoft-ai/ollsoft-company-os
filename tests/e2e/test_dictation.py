@@ -20,6 +20,7 @@ import httpx
 import pytest
 
 from conftest import BASE, CREDS, login
+from kbenv import U, doc
 
 SPOKEN = "the sync daemon owns the merge"
 HOLD_MS = 800          # comfortably past dictation.js's 450 ms hold threshold
@@ -45,7 +46,7 @@ def mic_browser(browser):
 @pytest.fixture(scope="module")
 def api():
     c = httpx.Client(base_url=BASE, timeout=30)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     yield c
 
 
@@ -84,7 +85,7 @@ def page(ctx):
 @pytest.fixture
 def doc(api):
     """A fresh, empty document per test."""
-    path = f"company/kbtest_dict_{os.getpid()}_{uuid.uuid4().hex[:8]}.md"
+    path = doc(f"kbtest_dict_{os.getpid()}_{uuid.uuid4().hex[:8]}.md")
     api.post("/api/file", json={"path": path})
     api.post("/api/artifact/write", json={"path": path, "content": "# scratch\n\nbaseline\n"})
     yield path

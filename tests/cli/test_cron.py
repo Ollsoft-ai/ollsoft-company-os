@@ -6,16 +6,15 @@ import json
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 MARK = "kb-cron-test-marker"
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 
@@ -50,7 +49,7 @@ def test_cron_available_to_every_user():
     for u in ("alice", "bob", "carol"):
         d = listing(cl(u))
         assert d["available"] is True, f"{u} must be able to use cron"
-        assert d["user"] == u, "the crontab shown must belong to the caller"
+        assert d["user"] == U(u), "the crontab shown must belong to the caller"
 
 
 def test_add_pause_resume_remove_lifecycle():

@@ -9,13 +9,14 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, expand_folder, login
+from kbenv import U, doc
 
 RO_DOC = ".claude/CLAUDE.md"   # owned root:kb-users 644 -> read-only to everyone
 
 
 def get_file(user, path):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c.get("/api/file", params={"path": path}).json()
 
 
@@ -59,9 +60,9 @@ def test_live_tree_shows_newly_created_file(browser):
     name = f"live_{int(time.time())}.md"
     # create a file out-of-band (as if a colleague made/shared it)
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
-    assert c.post("/fs/newfile", json={"path": f"company/{name}"}).status_code == 200
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
+    assert c.post("/fs/newfile", json={"path": doc(f"{name}")}).status_code == 200
     # the tree polls; the new file should appear on its own within a few seconds
-    page.wait_for_selector(f'.tree-item[data-path="company/{name}"]', timeout=8000)
+    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', timeout=8000)
     ctx.close()
-    c.post("/api/fs/delete", json={"path": f"company/{name}"})
+    c.post("/api/fs/delete", json={"path": doc(f"{name}")})

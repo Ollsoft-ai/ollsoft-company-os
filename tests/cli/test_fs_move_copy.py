@@ -8,16 +8,15 @@ import time
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-DIR = f"company/mvcp_{TAG}"
+DIR = doc(f"mvcp_{TAG}")
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 
@@ -84,7 +83,7 @@ def test_copy_file_owned_by_copier(k):
     assert open(f"/srv/kb/{DIR}/b copy.md").read() == "hello\n"
     assert open(f"/srv/kb/{DIR}/b.md").read() == "hello\n"       # source untouched
     import pwd
-    assert pwd.getpwuid(os.stat(f"/srv/kb/{DIR}/b copy.md").st_uid).pw_name == "alice"
+    assert pwd.getpwuid(os.stat(f"/srv/kb/{DIR}/b copy.md").st_uid).pw_name == U("alice")
     # no silent overwrite
     assert k.post("/api/fs/copy", json={"src": f"{DIR}/b.md", "dst": f"{DIR}/b copy.md"}).status_code == 409
 

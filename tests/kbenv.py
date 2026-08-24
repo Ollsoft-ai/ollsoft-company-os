@@ -53,19 +53,45 @@ BASE = f"http://127.0.0.1:{os.environ.get('KB_HUB_PORT', '8300')}"
 
 _USERS = _d["users"]
 LOGICAL = tuple(_USERS)              # ("alice", "bob", "carol")
+_REAL_TO_LOGICAL = {v["name"]: k for k, v in _USERS.items()}
 
 
 def U(logical: str) -> str:
-    """Logical name -> the account that actually exists on this box."""
-    return _USERS[logical]["name"]
+    """Logical name -> the account that actually exists on this box.
+
+    An unknown name passes through unchanged: tests that create their own
+    account (the viewer tests mint one through /admin/users) already hold a real
+    username, and they should be able to hand it to the same helper as the
+    seeded ones rather than special-casing.
+    """
+    who = _USERS.get(logical)
+    return who["name"] if who else logical
 
 
 def PW(logical: str) -> str:
     return _USERS[logical]["password"]
 
 
-# Real username -> password, for tests that iterate over everyone.
-CREDS = {v["name"]: v["password"] for v in _USERS.values()}
+def L(real: str) -> str:
+    """The inverse of U(): a real account name -> the logical name the tests use.
+
+    Needed whenever a username comes BACK from the API — a share panel lists
+    kbt_<ns>_bob, and the assertion next to it says "bob". Unknown names pass
+    through, so accounts a test minted itself compare as themselves.
+    """
+    return _REAL_TO_LOGICAL.get(real, real)
+
+
+def people(pairs):
+    """[("bob", "edit")] -> the API's [{"user": <real>, "role": "edit"}]."""
+    return [{"user": U(u), "role": r} for u, r in pairs]
+
+
+# Keyed by LOGICAL name, because that is what the suite already writes:
+# `CREDS[user]` with user="alice" keeps working untouched. Real account names
+# are accepted too, so a test that already resolved one still looks up.
+CREDS = {k: v["password"] for k, v in _USERS.items()}
+CREDS.update({v["name"]: v["password"] for v in _USERS.values()})
 
 
 def doc(name: str) -> str:
