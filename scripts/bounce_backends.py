@@ -21,16 +21,41 @@ unless you pass --yes.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import httpx
 from playwright.sync_api import sync_playwright
 
 BASE = "http://127.0.0.1:8300"
-CREDS_FILE = "/tmp/kb-test-creds.json"
+# Whatever seeding is currently in place. A namespaced test run writes
+# /tmp/kb-test-creds-<ns>.json; the human demo writes the un-suffixed name. Both
+# shapes are read below, and neither is required to exist — this tool drives the
+# product as real people, so it needs a password for each account it bounces.
+CREDS_FILE = os.environ.get("KB_TEST_CREDS") or next(
+    (str(f) for f in sorted(Path("/tmp").glob("kb-test-creds*.json"))), "")
 MIN_V = 20          # bump together with _cron_listing's "v" in user_server.py
+
+
+def load_creds():
+    """logical-or-real name -> password, tolerating both credential shapes."""
+    if not CREDS_FILE or not Path(CREDS_FILE).exists():
+        raise SystemExit(
+            "no credentials file found (looked for /tmp/kb-test-creds*.json).\n"
+            "This tool logs in AS each user to have them drop their own backend,\n"
+            "rather than having root reach into their processes, so it needs their\n"
+            "passwords. Seed a fixture first:\n"
+            "    sudo bash scripts/seed-demo.sh --namespace tmp\n"
+            "or pass KB_TEST_CREDS=/path/to/creds.json")
+    d = json.load(open(CREDS_FILE))
+    if "users" in d:                      # namespaced shape
+        out = {k: v["password"] for k, v in d["users"].items()}
+        out.update({v["name"]: v["password"] for v in d["users"].values()})
+        return out
+    return d                              # legacy flat shape
 
 
 def http(user, creds):
@@ -98,12 +123,14 @@ def main():
     ap = argparse.ArgumentParser()
     # Default to every user in the creds file rather than a hardcoded list —
     # the accounts differ per box (demo users in CI, real people in production).
-    ap.add_argument("users", nargs="*",
-                    default=sorted(json.load(open(CREDS_FILE)).keys()))
+    # Resolved AFTER parsing, not as an argparse default: reading the file
+    # eagerly made even --help fail when no fixture was seeded.
+    ap.add_argument("users", nargs="*")
     ap.add_argument("--yes", action="store_true", help="don't ask before ending shell sessions")
     args = ap.parse_args()
-    users = args.users or ["bob", "carol"]
-    creds = json.load(open(CREDS_FILE))
+    creds_all = load_creds()
+    users = args.users or sorted(creds_all)
+    creds = creds_all
 
     todo = []
     for u in users:
