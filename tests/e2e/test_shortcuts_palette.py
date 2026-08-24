@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from conftest import BASE, CREDS, login
-from kbenv import U, doc, proj
+from kbenv import NS, U, doc, proj
 
 SCRATCH = doc(f"kbtest_keys_{os.getpid()}.md")
 SCRATCH_BODY = "# scratch\n\nkbtest scratch document\n"
@@ -33,6 +33,20 @@ def page(browser):
     finally:
         ctx.close()
         api.post("/api/fs/delete", json={"path": SCRATCH})
+
+
+def mine(query):
+    """A palette query that can only match THIS run's files.
+
+    The palette ranks a shorter path higher, so on a box with real content
+    "todos" finds company/todos.html before company/kbtest-<ns>/todos.html.
+    That is quick-open behaving correctly; the assertions below were written
+    against a box where the only documents were the fixture's. Including the
+    namespace makes the intent — "find MY file by name" — actually testable.
+    Out-of-order matching is a feature the palette already has (see
+    test_partial_and_out_of_order_names_match).
+    """
+    return f"{NS} {query}" if NS else query
 
 
 def palette(page, query=None, key="Control+p"):
@@ -57,7 +71,7 @@ def cursor(page):
 # --- the reported bug, through the UI ---------------------------------------
 
 def test_quick_open_finds_a_file_by_name(page):
-    items = palette(page, "todos")
+    items = palette(page, mine("todos"))
     # content hits (path:line) may already sit above the file section — the
     # best FILE match is what quick-open is about
     files = [p for p in paths(items) if p and ":" not in p]
@@ -66,16 +80,16 @@ def test_quick_open_finds_a_file_by_name(page):
 
 
 def test_quick_open_opens_it_with_the_right_viewer(page):
-    palette(page, "todos")
+    palette(page, mine("todos"))
     page.keyboard.press("Enter")
     page.wait_for_function("() => window.__kbpath === 'company/todos.html'", timeout=8000)
     assert page.evaluate("() => window.__kbkind") == "artifact"
 
 
 def test_partial_and_out_of_order_names_match(page):
-    assert doc("onboarding.md") in paths(palette(page, "onbo"))
+    assert doc("onboarding.md") in paths(palette(page, mine("onbo")))
     page.keyboard.press("Escape")
-    assert proj("plan.md") in paths(palette(page, "acme plan"))
+    assert proj("plan.md") in paths(palette(page, mine("plan")))
     page.keyboard.press("Escape")
 
 
@@ -100,7 +114,7 @@ def test_enter_still_opens_the_best_file_after_content_lands(page):
     """The document section inserts above the files, but the selection must
     stay anchored on the best file match — Enter cannot change meaning
     depending on whether the server had answered by then."""
-    palette(page, "todos")
+    palette(page, mine("todos"))
     page.wait_for_timeout(900)                    # let the content search land
     sel = page.locator(".palette-item.sel")
     assert sel.get_attribute("data-path") == doc("todos.html")

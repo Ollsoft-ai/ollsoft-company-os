@@ -10,12 +10,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 from conftest import BASE, CREDS, expand_folder, login
-from kbenv import U, doc
+from kbenv import U, doc as kbdoc
 
 TAG = str(int(time.time()))
-SECRET = doc(f"_secrets/uikey_{TAG}.env")
+SECRET = kbdoc(f"_secrets/uikey_{TAG}.env")
 KEY = f"uisecret_{TAG}"
-ART = doc(f"dashboards/egressui_{TAG}.html")
+ART = kbdoc(f"dashboards/egressui_{TAG}.html")
 
 
 def api(user):
@@ -62,7 +62,7 @@ def setup():
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     k = api("alice")
-    k.post("/api/fs/mkdir", json={"path": doc("_secrets")})
+    k.post("/api/fs/mkdir", json={"path": kbdoc("_secrets")})
     assert k.post("/fs/newfile", json={"path": SECRET}).status_code == 200
     k.post("/api/artifact/write", json={"path": SECRET, "content": KEY + "\n"})
     html = ARTIFACT_HTML.replace("__URL__", f"http://127.0.0.1:{port}/v1/x").replace("__SECRET__", SECRET)
@@ -81,8 +81,8 @@ def test_secret_viewer_masked_and_reveal(browser, setup):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     # _secrets auto-collapses, so open it before the secret row becomes visible
-    page.wait_for_selector(f'.tree-item[data-path="{doc("_secrets")}"]', timeout=8000)
-    expand_folder(page, doc("_secrets"))
+    page.wait_for_selector(f'.tree-item[data-path="{kbdoc("_secrets")}"]', timeout=8000)
+    expand_folder(page, kbdoc("_secrets"))
     page.wait_for_selector(f'.tree-item[data-path="{SECRET}"]', timeout=8000)
     page.click(f'.tree-item[data-path="{SECRET}"]')
     body = page.locator('[data-testid="secret-body"]')
@@ -100,7 +100,7 @@ def test_secret_hidden_from_tree_and_denied_via_link(browser, setup):
     """Unreadable secrets don't even show their NAME in the tree; following a
     doc link to one lands on the denied card, never content."""
     k = api("alice")
-    doc = doc(f"seclink_{TAG}.md")
+    doc = kbdoc(f"seclink_{TAG}.md")
     k.post("/api/file", json={"path": doc})
     k.post("/api/artifact/write", json={"path": doc,
                                         "content": f"See [the key](/{SECRET}) for prod.\n"})
