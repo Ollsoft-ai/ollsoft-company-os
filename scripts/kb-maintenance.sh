@@ -108,9 +108,9 @@ trap 'rm -rf "$WORK"' EXIT
   echo "uptime: $(uptime -p 2>/dev/null)"
   echo '```'
   echo
-  echo "## Heartbeat's own view (company/infrastructure/health.md)"
+  echo "## Heartbeat's own view (company/.infrastructure/health.md)"
   echo '```'
-  head -30 "$REPO/company/infrastructure/health.md" 2>/dev/null || echo "(not written yet)"
+  head -30 "$REPO/company/.infrastructure/health.md" 2>/dev/null || echo "(not written yet)"
   echo '```'
   echo
   echo "## Alert log since last run — grouped by title (the repeat count matters)"

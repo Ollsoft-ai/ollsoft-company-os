@@ -14,7 +14,7 @@ import pytest
 BASE = "http://127.0.0.1:8300"
 CREDS = json.load(open("/tmp/kb-test-creds.json"))
 VU = f"vw{int(time.time()) % 100000}"
-PW = "ViewPass01"
+PW = "ViewPassphrase01"
 NOLOGIN = "/usr/sbin/nologin"
 
 

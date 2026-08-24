@@ -736,6 +736,48 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .modal-foot button.primary { background: var(--accent-deep); border: 0; font-weight: 600; color: #fff; }
 .modal-foot button.primary:hover { background: var(--accent); }
 
+/* tree: audience differs from its folder — a 5px dot, nothing more */
+/* Always the LAST child of the row, so the hover action buttons open to its
+   left and the dot never moves out from under the pointer aiming at it. The
+   padding is hit area, not decoration: 5px is too small to hover reliably. */
+.taud { flex: none; width: 15px; align-self: stretch; margin-left: .15rem;
+  position: relative; opacity: .75; }
+.taud::after { content: ""; position: absolute; top: 50%; left: 50%;
+  width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%;
+  background: currentColor; }
+.tree-item:hover .taud, .tree-item.active .taud { opacity: 1; }
+.taud-solo { color: var(--muted); }
+.taud-custom { color: var(--accent); }
+.taud-open { color: var(--warn); }
+
+/* share panel — people first, octal behind a disclosure */
+.sh-hint { font-size: .76rem; line-height: 1.4; }
+.sh-hint b { color: var(--ink); font-weight: 500; }
+.sh-people { font-size: .82rem; }
+.sh-row { display: flex; align-items: center; gap: .55rem; padding: .32rem .25rem;
+  border-bottom: 1px solid var(--border); }
+.sh-row:last-child { border-bottom: 0; }
+.sh-av { width: 24px; height: 24px; border-radius: 50%; flex: none; display: inline-flex;
+  align-items: center; justify-content: center; font-size: .62rem; font-weight: 600;
+  background: var(--accent-deep); color: #fff; letter-spacing: .02em; }
+.sh-av.you { background: var(--panel2); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+.sh-av.all { background: rgba(229, 174, 88, .18); color: var(--warn); }
+.sh-nm { flex: 1; min-width: 0; line-height: 1.25; }
+.sh-nm b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-nm span { font-family: var(--mono); font-size: .64rem; color: var(--faint); }
+.sh-role { background: var(--panel2); border: 1px solid var(--border); color: var(--ink);
+  border-radius: 6px; padding: .2rem .3rem; font-size: .74rem; font-family: var(--sans); }
+.sh-fixed { font-size: .7rem; color: var(--faint); font-family: var(--mono); }
+.sh-adv { margin-top: .35rem; border-top: 1px solid var(--border); padding-top: .35rem; }
+.sh-adv > summary { cursor: pointer; font-family: var(--mono); font-size: .62rem; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .14em; padding: .25rem 0; list-style: none; }
+.sh-adv > summary::before { content: "▸ "; }
+.sh-adv[open] > summary { color: var(--muted); }
+.sh-adv[open] > summary::before { content: "▾ "; }
+.sh-adv > summary::-webkit-details-marker { display: none; }
+.sh-advbody { display: flex; flex-direction: column; gap: .45rem; padding-top: .35rem; }
+.sh-mode { font-family: var(--mono); font-size: .66rem; overflow-wrap: anywhere; }
+
 /* dictation history */
 .dh-list { display: flex; flex-direction: column; gap: .35rem; overflow: auto; min-height: 0;
   padding: .2rem 0; }

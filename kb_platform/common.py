@@ -10,6 +10,8 @@ import hashlib
 import hmac
 import json
 import os
+import grp
+import pwd
 import stat as stat_mod
 import time
 from pathlib import Path
@@ -85,10 +87,13 @@ def read_token(key: bytes, token: str, now: float | None = None) -> dict | None:
     try:
         payload, sig = token.split(".", 1)
         raw = bytes.fromhex(payload)
-    except (ValueError, TypeError):
+        # compare_digest REFUSES non-ASCII str and raises TypeError. The cookie
+        # is attacker-controlled, so compare BYTES — a mangled or hand-crafted
+        # signature has to come back False, never escape as a 500.
+        got = sig.encode("utf-8", "surrogateescape")
+    except (ValueError, TypeError, UnicodeError):
         return None
-    expect = _sign(key, raw)
-    if not hmac.compare_digest(expect, sig):
+    if not hmac.compare_digest(_sign(key, raw).encode(), got):
         return None
     try:
         body = json.loads(raw)
@@ -231,6 +236,12 @@ def acl_entries(target, follow: bool = False) -> list[tuple[int, int, int]] | No
         if e.errno in (errno.ENODATA, errno.ENOTSUP):
             return None
         return []
+    return parse_acl_bytes(raw)
+
+
+def parse_acl_bytes(raw: bytes) -> list[tuple[int, int, int]] | None:
+    """The on-disk POSIX ACL xattr as [(tag, perms, qualifier)]. Split out so
+    the DEFAULT acl (a different xattr) can be read with the same parser."""
     if len(raw) < 4 or int.from_bytes(raw[:4], "little") != 2:
         return None
     return [(int.from_bytes(raw[o:o + 2], "little"),
@@ -411,8 +422,21 @@ def mkdir_with_mode(path) -> None:
 def reset_to_parent_audience(path, is_dir: bool) -> None:
     """Make `path` look exactly as if it had just been created where it sits —
     used after a copy, which otherwise carries the SOURCE's ACL and mode into a
-    folder with a different audience."""
+    folder with a different audience, and after a move, which carries the whole
+    inode over untouched.
+
+    The chgrp is not optional. setgid only fires when the kernel CREATES a
+    child, so a file renamed into a team folder keeps the group it arrived
+    with: the team it now lives with cannot read it, and the team it came from
+    still can. Only a setgid parent is followed — elsewhere the group is
+    nobody's business but the owner's."""
     parent = os.path.dirname(str(path)) or "."
+    try:
+        pst = os.stat(parent)
+        if pst.st_mode & stat_mod.S_ISGID and os.lstat(path).st_gid != pst.st_gid:
+            os.chown(path, -1, pst.st_gid, follow_symlinks=False)
+    except OSError:
+        pass          # not ours to regroup; the mode work below still applies
     try:
         dflt = os.getxattr(parent, ACL_DEFAULT_XATTR)
     except OSError:
@@ -442,6 +466,92 @@ def reset_to_parent_audience(path, is_dir: bool) -> None:
         os.chmod(path, birth_mode(parent, is_dir, str(path)))
     except OSError:
         pass
+
+
+def effective_mode(st, entries) -> int:
+    """st_mode with the REAL group:: permission restored. On an ACL-bearing
+    inode st_mode's group bits are the MASK — the union of every named grant —
+    so reading them literally over-reports what the owning group itself has."""
+    mode = stat_mod.S_IMODE(st.st_mode)
+    for tag, perm, _q in entries or ():
+        if tag == _ACL_GROUP_OBJ:
+            return (mode & ~0o070) | (perm << 3)
+    return mode
+
+
+EVERYONE_GROUP = os.environ.get("KB_EVERYONE_GROUP", "kb-users")
+try:
+    EVERYONE_GID = grp.getgrnam(EVERYONE_GROUP).gr_gid
+except KeyError:
+    EVERYONE_GID = -1
+
+INDEXER_USER = "kbindexer"
+try:
+    INDEXER_UID = pwd.getpwnam(INDEXER_USER).pw_uid
+except KeyError:
+    INDEXER_UID = -1
+
+
+def readership_key(st, entries) -> tuple:
+    """WHO CAN READ this, as a comparable value: (the owning group when the
+    group may read, whether everyone may read, the named readers). Two inodes
+    with the same key are open to exactly the same people.
+
+    One definition on purpose: the share panel uses it to decide whether
+    something merely follows the folder above it, and the file tree uses it to
+    mark the ones that do not. Two separate notions of "same audience" disagree
+    the moment they drift, and the disagreement lands in front of the user as a
+    marked row whose panel insists it is inherited.
+
+    Read only, also on purpose. Comparing write or execute bits makes an
+    ordinary 0644 file differ from the 2775 folder holding it — that is every
+    file in the knowledgebase, and a marker on everything is a marker on
+    nothing. The indexer's own grant is ignored for the same reason: it is on
+    everything the index can see and says nothing about who a document is for.
+    """
+    mode = effective_mode(st, entries)
+    mask, named = 7, set()
+    for tag, perm, _q in entries or ():
+        if tag == _ACL_MASK:
+            mask = perm
+    for tag, perm, qual in entries or ():
+        if tag == _ACL_USER and perm & mask & 4 and qual != INDEXER_UID:
+            named.add(("u", qual))
+        elif tag == _ACL_GROUP and perm & mask & 4:
+            named.add(("g", qual))
+    group_reads = bool((mode >> 3) & 4)
+    # "Everyone" has two spellings and they mean the same people: world-readable
+    # (o+r), or readable by the group that every employee is in. A folder at 2770
+    # kb-users is not one bit narrower than its 2775 kb-users parent, and a 0664
+    # file inside it is not one bit wider — treating the spellings as different
+    # audiences marked all three of them as disagreeing with each other while the
+    # share panel called every one of them "Everyone at Ollsoft".
+    everyone = bool(mode & 4) or (group_reads and st.st_gid == EVERYONE_GID)
+    if everyone:
+        # Once everyone can read it, which group carries them stops narrowing
+        # anything, and a named reader on top of it adds nobody.
+        return (None, True, frozenset())
+    return (st.st_gid if group_reads else None, False, frozenset(named))
+
+
+def reset_audience_tree(root) -> None:
+    """reset_to_parent_audience over a whole tree, top-down so that each level
+    is fixed before its children read it as their parent.
+
+    Used after a copy (the copy carries the SOURCE's mode and ACL into a folder
+    with a different audience) and by the share panel's "inherit from the folder
+    above". Best-effort per item: a tree that lands slightly tight is
+    recoverable, one that stays private inside a team folder is the bug."""
+    root = Path(root)
+    is_dir = root.is_dir()
+    reset_to_parent_audience(root, is_dir)
+    if not is_dir:
+        return
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for n in dirnames:
+            reset_to_parent_audience(Path(dirpath) / n, True)
+        for n in filenames:
+            reset_to_parent_audience(Path(dirpath) / n, False)
 
 
 # --- Derived text sidecars ---------------------------------------------------

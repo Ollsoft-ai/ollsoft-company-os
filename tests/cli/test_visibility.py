@@ -4,6 +4,7 @@ colleague" work end to end — the Peter_Zusammenarbeit scenario."""
 import json
 import os
 import stat
+import subprocess
 import time
 
 import httpx
@@ -23,7 +24,21 @@ def cl(user):
 
 
 def mode_of(path):
-    return stat.S_IMODE(os.stat(f"/srv/kb/{path}").st_mode)
+    """The EFFECTIVE permission bits. On an ACL-bearing inode st_mode's group
+    bits are the mask, not the owning group's own permission — and "private"
+    now leaves one entry behind (u:kbindexer:r, so a private note stays in its
+    owner's search), so raw S_IMODE would report 0640 for a file nobody but the
+    owner can open."""
+    full = f"/srv/kb/{path}"
+    mode = stat.S_IMODE(os.stat(full).st_mode)
+    out = subprocess.run(["getfacl", "-cpE", "--", full],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if line.strip().startswith("group::"):
+            g = line.strip().split(":")[2]
+            bits = (4 if "r" in g else 0) | (2 if "w" in g else 0) | (1 if "x" in g else 0)
+            return (mode & ~0o070) | (bits << 3)
+    return mode
 
 
 @pytest.fixture(scope="module")

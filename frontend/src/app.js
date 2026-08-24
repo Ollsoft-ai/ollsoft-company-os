@@ -1460,6 +1460,13 @@ function kbDialog(opts) {
       c.addEventListener("click", () => done(null));
       foot.appendChild(c);
     }
+    if (opts.alt) {
+      const al = document.createElement("button");
+      al.textContent = opts.alt;
+      al.setAttribute("data-testid", "dlg-alt");
+      al.addEventListener("click", () => done(DLG_ALT));
+      foot.appendChild(al);
+    }
     const ok = document.createElement("button");
     ok.className = "primary" + (opts.danger ? " danger" : "");
     ok.textContent = opts.ok || "OK";
@@ -1482,6 +1489,13 @@ function kbDialog(opts) {
 }
 const kbAlert = (message, title) =>
   kbDialog({ title: title || "Notice", message, cancel: null }).then(() => undefined);
+// Three-way ask. Needed where the middle option is not "no": moving something
+// into a folder with a different audience is a choice between two real moves.
+const DLG_ALT = Object.freeze({ alt: true });
+const kbChoose = (message, o) =>
+  kbDialog({ title: (o && o.title) || "Confirm", message, ok: o && o.ok,
+             alt: o && o.alt, danger: !!(o && o.danger) })
+    .then((v) => (v === DLG_ALT ? "alt" : v !== null ? "ok" : null));
 const kbConfirm = (message, o) =>
   kbDialog({ title: (o && o.title) || "Confirm", message, ok: o && o.ok,
              danger: !!(o && o.danger) }).then((v) => v !== null);
@@ -1823,7 +1837,7 @@ function openTreeMenu(n, parentWritable, x, y) {
     items.push({ icon: I.move, label: "Move to…", fn: () => moveToEntry(n) });
   }
   items.push("-");
-  items.push({ icon: I.share, label: "Permissions & sharing", fn: () => openPerms(n.path) });
+  items.push({ icon: I.share, label: "Share — who can open this", fn: () => openPerms(n.path) });
   if (parentWritable && n.path.includes("/")) {
     items.push("-");
     items.push({ icon: I.trash, label: n.dir ? "Delete folder" : "Delete", danger: true,
@@ -1862,11 +1876,35 @@ async function moveEntry(srcPath, dst) {
   const keepPath = active ? active.path : null;
   const reopen = affected.map((t) => ({ old: t.path, pane: t.paneId }));
   affected.forEach((t) => _movingPaths.add(t.path));
+  // Ask BEFORE the move when the destination has a different audience. A drag
+  // is the one gesture where "publish my private note to the whole team" can
+  // happen by accident, and the answer decides what the backend does with the
+  // permissions, so it cannot be an after-the-fact toast.
+  let audience = "destination";
+  let pv = null;
+  try {
+    const r0 = await fetch("/api/fs/move-preview", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ src: srcPath, dst }),
+    });
+    if (r0.ok) pv = await r0.json();
+  } catch (e) { /* advisory only — the move still works without the preview */ }
+  if (pv && pv.changes) {
+    const ans = await kbChoose(
+      `Now: open to ${shWho(pv.from)}.\n` +
+      `${pv.dst_folder}: open to ${shWho(pv.to)}.` +
+      (pv.mine ? "" : "\n\nYou don't own this, so its permissions can't be changed — it will move as it is."),
+      { title: "This changes who can open it",
+        ok: pv.mine ? "Move & hand over" : "Move",
+        alt: pv.mine ? "Move, keep as it is" : null });
+    if (ans === null) { affected.forEach((t) => _movingPaths.delete(t.path)); return false; }
+    if (ans === "alt") audience = "keep";
+  }
   let j, r;
   try {
     r = await fetch("/api/fs/rename", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ src: srcPath, dst }),
+      body: JSON.stringify({ src: srcPath, dst, audience }),
     });
     j = await r.json().catch(() => ({}));
   } catch (e) {
@@ -2210,6 +2248,15 @@ function renderNodes(nodes, parentWritable) {
     const icon = document.createElement("span");
     icon.className = "ticon";
     if (iconHtml) icon.innerHTML = iconHtml;
+    // A quiet mark when this row's audience differs from the folder it sits in.
+    // Deliberately absent for everything that just follows its folder — a badge
+    // on every row is a badge on none.
+    const aud = n.aud ? Object.assign(document.createElement("span"), {
+      className: "taud taud-" + n.aud,
+      title: { solo: "Only you can open this",
+               custom: "Shared with different people than this folder",
+               open: "Readable more widely than this folder" }[n.aud] || "",
+    }) : null;
     // who has this open right now (filled by the presence poll)
     const pres = document.createElement("span");
     pres.className = "tpresence";
@@ -2221,7 +2268,7 @@ function renderNodes(nodes, parentWritable) {
         mkBtn(I.folderPlus, "New folder here", (e) => { e.stopPropagation(); newFolderIn(n.path); }),
         mkBtn(I.upload, "Upload files here", (e) => { e.stopPropagation(); uploadInto(n.path); }));
     }
-    actions.appendChild(mkBtn(I.share, "Permissions", (e) => { e.stopPropagation(); openPerms(n.path); }));
+    actions.appendChild(mkBtn(I.share, "Who can open this", (e) => { e.stopPropagation(); openPerms(n.path); }));
     // Deleting an entry needs write on its PARENT — which we know right here,
     // so the button only appears where the kernel could say yes.
     if (parentWritable) {
@@ -2261,7 +2308,7 @@ function renderNodes(nodes, parentWritable) {
       const caret = document.createElement("span");
       caret.className = "caret" + (collapsed.has(n.path) ? "" : " open");
       caret.innerHTML = I.chevron;
-      row.append(caret, icon, label, pres, actions, more);
+      row.append(caret, icon, label, pres, actions, more, ...(aud ? [aud] : []));
       const kids = document.createElement("div");
       kids.className = "tree-children" + (collapsed.has(n.path) ? " collapsed" : "");
       kids.appendChild(renderNodes(n.children || [], !!(n.access && n.access.write)));
@@ -2275,7 +2322,7 @@ function renderNodes(nodes, parentWritable) {
       setupDrop(row, n.path);
       frag.append(row, kids);
     } else {
-      row.append(icon, label, pres, actions, more);
+      row.append(icon, label, pres, actions, more, ...(aud ? [aud] : []));
       row.addEventListener("click", () => openEntry(n));
       frag.appendChild(row);
     }
@@ -3507,7 +3554,7 @@ function showAdminModal(data) {
       <input id="nu-first" placeholder="first name" size="9">
       <input id="nu-last" placeholder="last name" size="9">
       <input id="nu-email" placeholder="email" size="14">
-      <input id="nu-pw" type="password" placeholder="password" size="10">
+      <input id="nu-pw" type="password" placeholder="password (12+)" size="12" minlength="12">
       <select id="nu-kind" data-testid="nu-kind" title="Full accounts get a shell and cron; viewers only use the webapp">
         <option value="full">full · shell + cron</option>
         <option value="viewer">viewer · webapp only</option>
@@ -3831,77 +3878,304 @@ async function openHistory(path) {
   });
 }
 
-// ---- permissions modal ----------------------------------------------------
-async function openPerms(path) {
-  const [r, pr] = await Promise.all([
-    fetch("/fs/props?path=" + encodeURIComponent(path)),
-    fetch("/api/principals").catch(() => null),
-  ]);
-  const p = await r.json();
-  if (!r.ok) { kbToast(p.error || "cannot read properties", "err"); return; }
-  let principals = { users: [], groups: [] };
-  try { if (pr && pr.ok) principals = await pr.json(); } catch (e) { /* fall back to text */ }
-  showPermsModal(p, principals);
+// ---- sharing: who can open this -------------------------------------------
+// The panel speaks PEOPLE. /fs/share turns that into an owning group, mode bits
+// and POSIX ACLs — hub.py picks the mechanism per object so that the everyday
+// action, adding or removing one person, stays a gpasswd and never a walk over
+// every file. The octal editor this replaced is still here, one disclosure
+// down: "advanced" should mean tucked away, not taken away.
+
+const SH_SCOPES = [
+  ["inherit", "Same as the folder it's in"],
+  ["everyone", "Everyone at Ollsoft"],
+  ["people", "Specific people"],
+  ["private", "Only me"],
+];
+
+function shInitials(s) {
+  const p = String(s || "?").trim().split(/[\s_.-]+/).filter(Boolean);
+  return ((p[0] || "?")[0] + (p[1] ? p[1][0] : "")).toUpperCase();
 }
 
-function showPermsModal(p, principals) {
-  principals = principals || { users: [], groups: [] };
-  // options for a picker: the current value stays choosable even when it is
-  // not a pickable principal (root-owned files, system groups)
+function shWho(a) {
+  if (!a) return "someone";
+  if (a.scope === "everyone") return "everyone at Ollsoft";
+  if (a.scope === "private") return "its owner only";
+  return (a.group || "its group") + (a.people ? ` (${a.people} ${a.people === 1 ? "person" : "people"})` : "");
+}
+
+async function openPerms(path) {
+  const [r, pr] = await Promise.all([
+    fetch("/fs/share?path=" + encodeURIComponent(path)),
+    fetch("/api/principals").catch(() => null),
+  ]);
+  const s = await r.json();
+  if (!r.ok) { kbToast(s.error || "cannot read who has access", "err"); return; }
+  let principals = { users: [], groups: [] };
+  try { if (pr && pr.ok) principals = await pr.json(); } catch (e) { /* usernames only */ }
+  showShareModal(s, principals);
+}
+
+function showShareModal(s, principals) {
+  const ro = !s.can_edit;
+  const owner = s.people.find((p) => p.role === "owner") || { user: s.owner, name: s.owner_name };
+  let people = s.people.filter((p) => p.role !== "owner")
+    .map((p) => ({ user: p.user, name: p.name, role: p.role, via: p.via, source: p.source }));
+  // A thing that merely follows its folder opens on "same as the folder", so
+  // pressing Save without touching anything cannot quietly cut it loose into a
+  // per-item access list that stops tracking the folder.
+  let scope = (s.inherited && s.parent) ? "inherit" : s.scope;
+
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  const scopeOpts = SH_SCOPES.filter(([v]) => v !== "inherit" || s.parent)
+    .map(([v, label]) => `<option value="${v}"${v === scope ? " selected" : ""}>${escapeHtml(label)}</option>`)
+    .join("");
+
+  card.innerHTML = `
+    <div class="modal-head">
+      <b>${escapeHtml(s.path.split("/").pop())}</b>
+      <span class="muted">${s.is_dir ? "folder" : "file"}</span>
+      <button class="modal-x" title="Close">×</button>
+    </div>
+    ${ro ? `<div class="note">${["root", "daemon", "nobody"].includes(s.owner)
+        ? "This belongs to the folder rather than to a person, so only a platform admin can change who has access."
+        : "Only " + escapeHtml(s.owner_name || s.owner) + " (or a platform admin) can change who has access."}</div>` : ""}
+    ${s.secret ? '<div class="note">Inside <b>_secrets/</b> — owner-only by design, never shared and never indexed.</div>' : ""}
+    <label class="frow"><span>Access</span>
+      <select id="sh-scope" data-testid="sh-scope"${ro || s.secret ? " disabled" : ""}>${scopeOpts}</select>
+    </label>
+    <div id="sh-hint" class="sh-hint muted"></div>
+    <div class="acl-title">People</div>
+    <div id="sh-people" class="sh-people" data-testid="sh-people"></div>
+    <div class="acl-add" id="sh-add">
+      <select id="sh-who" data-testid="sh-who"><option value="">add someone…</option>${
+        (principals.users || []).map((u) => `<option>${escapeHtml(u)}</option>`).join("")}</select>
+      <select id="sh-role" data-testid="sh-role">
+        <option value="view">can view</option><option value="edit">can edit</option></select>
+      <button id="sh-addbtn" data-testid="sh-addbtn">Add</button>
+    </div>
+    <details class="sh-adv"><summary>Advanced — owner, group, mode, raw ACLs</summary>
+      <div id="sh-advbody" class="sh-advbody muted">loading…</div>
+    </details>
+    <div class="modal-foot">
+      ${ro ? "" : '<button id="sh-save" class="primary" data-testid="sh-save">Save</button>'}
+      <button id="sh-close">Close</button>
+    </div>`;
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+
+  const peopleHost = card.querySelector("#sh-people");
+  const hintHost = card.querySelector("#sh-hint");
+  const addHost = card.querySelector("#sh-add");
+
+  function editable() { return !ro && !s.secret && scope === "people"; }
+
+  // "Same as the folder" describes the FOLDER's people, not this item's — so it
+  // needs the folder's list. Fetched once, up front, so switching to it shows
+  // the right names immediately instead of an empty list until you reopen.
+  let inherited = null;
+  async function loadInherited() {
+    if (!s.parent) return;
+    try {
+      const r = await fetch("/fs/share?path=" + encodeURIComponent(s.parent));
+      if (!r.ok) return;
+      const ps = await r.json();
+      inherited = ps.scope === "everyone" ? "everyone"
+        : ps.people.map((q) => ({ user: q.user, name: q.name,
+                                  role: q.role === "owner" ? "edit" : q.role,
+                                  via: "group", source: ps.group }));
+    } catch (e) { /* the rows just stay empty */ }
+    if (scope === "inherit") renderPeople();
+  }
+
+  function renderHint() {
+    const t = {
+      inherit: `Follows <b>${escapeHtml(s.parent || "")}</b>. Change it there and this follows along.`,
+      everyone: "Anyone with an Ollsoft account can open and edit this.",
+      people: s.is_dir
+        ? "Only the people below. Adding or removing someone later is instant — no re-processing of the files inside."
+        : "Only the people below, regardless of who can see the folder it sits in.",
+      private: "Only you. It stays in your own search — the indexer keeps read access, and nobody else's search can reach it.",
+    }[scope] || "";
+    hintHost.innerHTML = t;
+  }
+
+  function renderPeople() {
+    peopleHost.innerHTML = "";
+    const rows = [{ user: owner.user, name: owner.name, role: "owner" }];
+    if (scope === "everyone" || (scope === "inherit" && inherited === "everyone")) {
+      rows.push({ user: "*", name: "Everyone at Ollsoft", role: "everyone" });
+    } else if (scope === "inherit") {
+      rows.push(...(Array.isArray(inherited) ? inherited : []).filter((q) => q.user !== owner.user));
+    } else if (scope !== "private") {
+      rows.push(...people);
+    }
+    for (const p of rows) {
+      const row = document.createElement("div");
+      row.className = "sh-row";
+      const you = p.role === "owner";
+      row.innerHTML = `
+        <span class="sh-av${you ? " you" : ""}${p.role === "everyone" ? " all" : ""}">${
+          p.role === "everyone" ? "@" : escapeHtml(shInitials(p.name || p.user))}</span>
+        <span class="sh-nm"><b>${escapeHtml(p.name || p.user)}</b>${
+          p.user === "*" ? "" : `<span>${escapeHtml(p.user)}${
+            p.via === "group" && p.source ? " · via " + escapeHtml(p.source) : ""}</span>`}</span>`;
+      if (p.role === "owner") {
+        row.insertAdjacentHTML("beforeend", '<span class="sh-fixed">owner</span>');
+      } else if (p.role === "everyone") {
+        row.insertAdjacentHTML("beforeend", '<span class="sh-fixed">can view &amp; edit</span>');
+      } else if (!editable()) {
+        row.insertAdjacentHTML("beforeend",
+          `<span class="sh-fixed">${p.role === "edit" ? "can edit" : "can view"}</span>`);
+      } else {
+        const sel = document.createElement("select");
+        sel.className = "sh-role";
+        sel.innerHTML = `<option value="view"${p.role === "view" ? " selected" : ""}>can view</option>
+                         <option value="edit"${p.role === "edit" ? " selected" : ""}>can edit</option>`;
+        sel.addEventListener("change", () => { p.role = sel.value; });
+        row.appendChild(sel);
+        row.appendChild(mkBtn("×", "Remove " + p.user, () => {
+          people = people.filter((x) => x !== p);
+          renderPeople();
+        }));
+      }
+      peopleHost.appendChild(row);
+    }
+    addHost.hidden = !editable();
+  }
+
+  function redraw() { renderHint(); renderPeople(); }
+  redraw();
+  loadInherited();
+
+  const scopeSel = card.querySelector("#sh-scope");
+  if (scopeSel) scopeSel.addEventListener("change", () => { scope = scopeSel.value; redraw(); });
+
+  card.querySelector("#sh-addbtn").addEventListener("click", () => {
+    const who = card.querySelector("#sh-who").value.trim();
+    if (!who) return;
+    if (who === owner.user) { kbToast("They own it — they always have access", "err"); return; }
+    const role = card.querySelector("#sh-role").value;
+    const cur = people.find((x) => x.user === who);
+    if (cur) cur.role = role;
+    else people.push({ user: who, name: who, role, via: "person" });
+    card.querySelector("#sh-who").value = "";
+    renderPeople();
+  });
+
+  // The octal view, built on first open so the common case costs nothing.
+  const adv = card.querySelector(".sh-adv");
+  let advLoaded = false;
+  adv.addEventListener("toggle", () => {
+    if (!adv.open || advLoaded) return;
+    advLoaded = true;
+    buildAdvanced(card.querySelector("#sh-advbody"), s.path, ro);
+  });
+
+  const close = () => ov.remove();
+  card.querySelector(".modal-x").addEventListener("click", close);
+  card.querySelector("#sh-close").addEventListener("click", close);
+  const saveBtn = card.querySelector("#sh-save");
+  if (saveBtn) saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    let r, j;
+    try {
+      r = await fetch("/fs/share", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: s.path, scope,
+          people: people.map((p) => ({ user: p.user, role: p.role })),
+        }),
+      });
+      j = await r.json().catch(() => ({}));
+    } catch (e) {
+      saveBtn.disabled = false; saveBtn.textContent = "Save";
+      kbToast("could not reach the server", "err");
+      return;
+    }
+    if (!r.ok) {
+      saveBtn.disabled = false; saveBtn.textContent = "Save";
+      kbToast(j.error || "could not save", "err");
+      return;
+    }
+    const notes = [];
+    if (j.forked) notes.push(`This folder now keeps its own list of people, separate from ${s.parent}.`);
+    if (j.regrouped) notes.push(`${j.regrouped} item${j.regrouped === 1 ? "" : "s"} inside now follow the new people.`);
+    if (j.granted_traverse && j.granted_traverse.length) {
+      notes.push("Opened the way in through " + j.granted_traverse.join(", ") +
+                 " — pass-through only, they still can't list those folders.");
+    }
+    if (j.restarted && j.restarted.length) {
+      notes.push("Reloaded the session of " + j.restarted.join(", ") +
+                 " so the change applies to them right away. Any web terminal they had open was closed.");
+    }
+    close();
+    loadTree(true);
+    if (notes.length) kbAlert(notes.join("\n\n"), "Access updated");
+    else kbToast("Access updated", "ok");
+  });
+}
+
+// The raw view: owner, group, mode preset and named ACL entries, straight onto
+// /fs/props. Unchanged semantics — it is the escape hatch for the cases the
+// people list deliberately cannot express (a one-off group grant, an odd mode).
+async function buildAdvanced(host, path, ro) {
+  let p;
+  try {
+    const r = await fetch("/fs/props?path=" + encodeURIComponent(path));
+    p = await r.json();
+    if (!r.ok) throw new Error(p.error || "cannot read properties");
+  } catch (e) {
+    host.textContent = String(e.message || e);
+    return;
+  }
+  let principals = { users: [], groups: [] };
+  try {
+    const pr = await fetch("/api/principals");
+    if (pr.ok) principals = await pr.json();
+  } catch (e) { /* names only */ }
   const opts = (arr, cur, placeholder) => {
     const list = [...new Set([...(cur ? [cur] : []), ...arr])];
     return (placeholder ? '<option value="">' + placeholder + "</option>" : "") +
       list.map((n) => `<option${n === cur ? " selected" : ""}>${escapeHtml(n)}</option>`).join("");
   };
-  const removals = [];   // {type,name}
-  const additions = [];  // {type,name,perms}
-  const ov = document.createElement("div");
-  ov.className = "modal-overlay";
-  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
-
-  const card = document.createElement("div");
-  card.className = "modal-card";
-  const ro = !p.can_edit;
-  card.innerHTML = `
-    <div class="modal-head">
-      <b>${escapeHtml(p.path)}</b> <span class="muted">${p.is_dir ? "folder" : "file"} · mode ${p.mode}</span>
-      <button class="modal-x" title="Close">×</button>
-    </div>
-    ${ro ? '<div class="note">Read-only — only the owner or an admin can change this.</div>' : ""}
+  const removals = [];
+  const additions = [];
+  const m = parseInt(p.mode, 8) || 0;
+  const cur = (m & 0o004) ? "company" : (m & 0o040) ? "team" : "private";
+  const oct = p.is_dir ? { company: "2775", team: "2770", private: "0700" }
+                       : { company: "664", team: "660", private: "600" };
+  host.classList.remove("muted");
+  host.innerHTML = `
+    <div class="muted sh-mode">mode ${escapeHtml(p.mode)} · ${escapeHtml(p.path)}</div>
     <label class="frow"><span>Owner</span>${ro
-      ? `<input id="pm-owner" value="${escapeHtml(p.owner)}" disabled>`
+      ? `<input value="${escapeHtml(p.owner)}" disabled>`
       : `<select id="pm-owner">${opts(principals.users, p.owner)}</select>`}</label>
     <label class="frow"><span>Group</span>${ro
-      ? `<input id="pm-group" value="${escapeHtml(p.group)}" disabled>`
+      ? `<input value="${escapeHtml(p.group)}" disabled>`
       : `<select id="pm-group">${opts(principals.groups, p.group)}</select>`}</label>
-    ${ro ? "" : (() => {
-      const m = parseInt(p.mode, 8) || 0;
-      const cur = (m & 0o004) ? "company" : (m & 0o040) ? "team" : "private";
-      const oct = p.is_dir ? { company: "2775", team: "2770", private: "0700" }
-                           : { company: "664", team: "660", private: "600" };
-      return `<label class="frow"><span>Access</span>
-        <select id="pm-vis" data-testid="pm-vis" title="Plain chmod presets — owner/group/others permission bits">
-          <option value="company"${cur === "company" ? " selected" : ""}>company · everyone can read · chmod ${oct.company}</option>
-          <option value="team"${cur === "team" ? " selected" : ""}>team · only the group above · chmod ${oct.team}</option>
-          <option value="private"${cur === "private" ? " selected" : ""}>private · owner + people below · chmod ${oct.private}</option>
-        </select></label>
-      <input type="hidden" id="pm-vis0" value="${cur}">`;
-    })()}
-    <div class="acl-title">Shared with (ACLs)</div>
+    ${ro ? "" : `<label class="frow"><span>Mode</span>
+      <select id="pm-vis" data-testid="pm-vis" title="Plain chmod presets — owner/group/others permission bits">
+        <option value="company"${cur === "company" ? " selected" : ""}>company · everyone can read · chmod ${oct.company}</option>
+        <option value="team"${cur === "team" ? " selected" : ""}>team · only the group above · chmod ${oct.team}</option>
+        <option value="private"${cur === "private" ? " selected" : ""}>private · owner + entries below · chmod ${oct.private}</option>
+      </select></label>
+      <input type="hidden" id="pm-vis0" value="${cur}">`}
+    <div class="acl-title">Named ACL entries</div>
     <div id="pm-acls" class="acl-list"></div>
     ${ro ? "" : `<div class="acl-add">
       <select id="pm-type"><option value="user">user</option><option value="group">group</option></select>
       <select id="pm-name">${opts(principals.users, null, "who…")}</select>
       <select id="pm-perms"><option value="r">read</option><option value="rw">read+write</option><option value="rwx">rwx</option></select>
-      <button id="pm-addacl">add</button></div>`}
-    <div class="modal-foot">
-      ${ro ? "" : '<button id="pm-save" class="primary">Save</button>'}
-      <button id="pm-close">Close</button>
-    </div>`;
-  ov.appendChild(card);
-  document.body.appendChild(ov);
+      <button id="pm-addacl">add</button></div>
+      <div class="modal-foot"><button id="pm-save">Apply raw permissions</button></div>`}`;
 
-  const aclHost = card.querySelector("#pm-acls");
+  const aclHost = host.querySelector("#pm-acls");
   function renderAcls() {
     const live = p.acls.filter((a) => !removals.some((r) => r.type === a.type && r.name === a.name))
       .concat(additions);
@@ -3912,58 +4186,50 @@ function showPermsModal(p, principals) {
       row.className = "acl-row";
       row.innerHTML = `<span class="acl-kind">${a.type}</span><span class="acl-name">${escapeHtml(a.name)}</span><span class="acl-perms">${a.perms}</span>`;
       if (!ro) {
-        const x = mkBtn("×", "Remove", () => {
+        row.appendChild(mkBtn("×", "Remove", () => {
           const ai = additions.indexOf(a);
           if (ai >= 0) additions.splice(ai, 1);
           else removals.push({ type: a.type, name: a.name });
           renderAcls();
-        });
-        row.appendChild(x);
+        }));
       }
       aclHost.appendChild(row);
     }
   }
   renderAcls();
+  if (ro) return;
 
-  const close = () => ov.remove();
-  card.querySelector(".modal-x").addEventListener("click", close);
-  card.querySelector("#pm-close").addEventListener("click", close);
-  if (!ro) {
-    // the "who" picker follows the user/group toggle
-    card.querySelector("#pm-type").addEventListener("change", () => {
-      const type = card.querySelector("#pm-type").value;
-      card.querySelector("#pm-name").innerHTML =
-        opts(type === "group" ? principals.groups : principals.users, null, "who…");
+  host.querySelector("#pm-type").addEventListener("change", () => {
+    const type = host.querySelector("#pm-type").value;
+    host.querySelector("#pm-name").innerHTML =
+      opts(type === "group" ? principals.groups : principals.users, null, "who…");
+  });
+  host.querySelector("#pm-addacl").addEventListener("click", () => {
+    const name = host.querySelector("#pm-name").value.trim();
+    if (!name) return;
+    additions.push({ type: host.querySelector("#pm-type").value, name,
+                     perms: host.querySelector("#pm-perms").value });
+    renderAcls();
+  });
+  host.querySelector("#pm-save").addEventListener("click", async () => {
+    const body = { path: p.path, acl_add: additions, acl_remove: removals };
+    const owner = host.querySelector("#pm-owner").value.trim();
+    const group = host.querySelector("#pm-group").value.trim();
+    if (owner && owner !== p.owner) body.owner = owner;
+    if (group && group !== p.group) body.group = group;
+    const vis = host.querySelector("#pm-vis");
+    if (vis && vis.value !== host.querySelector("#pm-vis0").value) body.visibility = vis.value;
+    const r = await fetch("/fs/props", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     });
-    card.querySelector("#pm-addacl").addEventListener("click", () => {
-      const name = card.querySelector("#pm-name").value.trim();
-      if (!name) return;
-      additions.push({ type: card.querySelector("#pm-type").value, name,
-                       perms: card.querySelector("#pm-perms").value });
-      card.querySelector("#pm-name").value = "";
-      renderAcls();
-    });
-    card.querySelector("#pm-save").addEventListener("click", async () => {
-      const body = { path: p.path, acl_add: additions, acl_remove: removals };
-      const owner = card.querySelector("#pm-owner").value.trim();
-      const group = card.querySelector("#pm-group").value.trim();
-      if (owner && owner !== p.owner) body.owner = owner;
-      if (group && group !== p.group) body.group = group;
-      const vis = card.querySelector("#pm-vis");
-      if (vis && vis.value !== card.querySelector("#pm-vis0").value) body.visibility = vis.value;
-      const r = await fetch("/fs/props", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-      });
-      const j = await r.json();
-      if (r.ok) {
-        if (j.granted_traverse && j.granted_traverse.length) {
-          kbAlert("Also granted traverse (folder pass-through, no listing) on: " +
-                  j.granted_traverse.join(", ") + " — so they can reach this file.", "Shared");
-        } else kbToast("Permissions saved", "ok");
-        close(); loadTree();
-      } else kbToast(j.error || "could not save", "err");
-    });
-  }
+    const j = await r.json();
+    if (!r.ok) { kbToast(j.error || "could not save", "err"); return; }
+    if (j.granted_traverse && j.granted_traverse.length) {
+      kbAlert("Also granted traverse (folder pass-through, no listing) on: " +
+              j.granted_traverse.join(", ") + " — so they can reach this file.", "Shared");
+    } else kbToast("Permissions saved", "ok");
+    loadTree();
+  });
 }
 
 function setAccessBadge(access) {
@@ -4274,7 +4540,7 @@ const BINDINGS = [
   { id: "history", keys: ["Alt+H"], group: "Documents", when: hasTab,
     label: "Version history", run: () => { if (active) openHistory(active.path); } },
   { id: "perms", keys: ["Alt+S"], group: "Documents", when: hasTab,
-    label: "Sharing and permissions", run: () => { if (active) openPerms(active.path); } },
+    label: "Share — who can open this", run: () => { if (active) openPerms(active.path); } },
   { id: "link", keys: ["Mod+Shift+K"], group: "Documents", when: hasDoc,
     label: "Insert link", run: tbLink },
   { id: "save", keys: ["Mod+S"], group: "Documents",

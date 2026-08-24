@@ -125,7 +125,15 @@ class AiohttpChannel:
             raise ConnectionResetError
 
     async def send(self, message: bytes) -> None:
-        await self._ws.send_bytes(message)
+        try:
+            await self._ws.send_bytes(message)
+        except ConnectionResetError:
+            # The tab closed while we were mid-broadcast. A clean close already
+            # ends the room's `async for` silently; only this race escapes, and
+            # pycrdt re-raises anything out of its task group -- so letting it
+            # out prints a 40-line ExceptionGroup for an ordinary disconnect.
+            # (aiohttp's ClientConnectionResetError subclasses this builtin.)
+            pass
 
 
 def _line_changes(base, other):
