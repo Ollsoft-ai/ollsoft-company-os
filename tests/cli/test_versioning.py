@@ -239,12 +239,13 @@ def test_activity_pages_past_the_batch_and_flags_truncation(k):
 def test_cli_reports_who_did_what(k):
     """kb-history over the peer-cred socket: identity comes from the kernel
     (SO_PEERCRED), so `kb-history --author X` answers 'what did X do' — this is
-    what an agent runs. Runs as the current CI user (alice)."""
+    what an agent runs. Runs as whoever launched the suite."""
     p = f"{DIR}/cli.md"
     assert k.post("/api/file", json={"path": p}).status_code == 200
     write(k, p, f"cli marker {TAG}\n")
     wait_for_rev(k, p, 1)
-    out = subprocess.run(["kb-history", "--since", "10 minutes ago", "--author", "alice", "--json"],
+    out = subprocess.run(["kb-history", "--since", "10 minutes ago",
+                          "--author", U("alice"), "--json"],
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     data = json.loads(out.stdout)
