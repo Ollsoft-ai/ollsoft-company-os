@@ -1,9 +1,7 @@
-import json
 import pytest
 from playwright.sync_api import sync_playwright
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
+from kbenv import BASE, CREDS, U
 
 
 @pytest.fixture(scope="session")
@@ -17,7 +15,7 @@ def browser():
 def login(context, user):
     page = context.new_page()
     page.goto(BASE + "/login")
-    page.fill('input[name="username"]', user)
+    page.fill('input[name="username"]', U(user))
     page.fill('input[name="password"]', CREDS[user])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")

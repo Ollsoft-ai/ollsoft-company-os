@@ -5,15 +5,14 @@ import json
 import time
 
 import httpx
+from kbenv import BASE, CREDS, U, proj
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
-PATH = "projects/acme/plan.md"   # carol can't traverse projects/acme (2770)
+PATH = proj("plan.md")   # carol can't traverse projects/acme (2770)
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -30,10 +29,10 @@ def test_share_grants_ancestor_traverse_surgically():
     assert zebra(i) == 0
 
     r = k.post("/fs/props", json={"path": PATH,
-                                  "acl_add": [{"type": "user", "name": "carol", "perms": "r"}]})
+                                  "acl_add": [{"type": "user", "name": U("carol"), "perms": "r"}]})
     try:
         assert r.status_code == 200, r.text
-        assert "projects/acme" in r.json()["granted_traverse"], "must grant traverse on ancestors"
+        assert proj() in r.json()["granted_traverse"], "must grant traverse on ancestors"
 
         # carol can now READ the shared file (kernel allows immediately)
         assert i.get("/api/file", params={"path": PATH}).status_code == 200
@@ -49,12 +48,12 @@ def test_share_grants_ancestor_traverse_surgically():
 
         # ...but the share is SURGICAL: carol still can't reach anything else in
         # the folder (traverse-only, no listing / no other file)
-        assert i.get("/api/file", params={"path": "projects/acme/_files"}).status_code == 403
-        assert "projects/acme" not in {n["path"] for n in _flat(i.get("/api/tree").json()["tree"])}
+        assert i.get("/api/file", params={"path": proj("_files")}).status_code == 403
+        assert proj() not in {n["path"] for n in _flat(i.get("/api/tree").json()["tree"])}
     finally:
         # undo the file share AND the ancestor traverse it auto-granted
-        for pth in (PATH, "projects/acme"):
-            k.post("/fs/props", json={"path": pth, "acl_remove": [{"type": "user", "name": "carol"}]})
+        for pth in (PATH, proj()):
+            k.post("/fs/props", json={"path": pth, "acl_remove": [{"type": "user", "name": U("carol")}]})
 
     # un-share removes access again
     assert i.get("/api/file", params={"path": PATH}).status_code == 403

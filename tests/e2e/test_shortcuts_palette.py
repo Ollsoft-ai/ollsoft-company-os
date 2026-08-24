@@ -12,8 +12,9 @@ import httpx
 import pytest
 
 from conftest import BASE, CREDS, login
+from kbenv import U, doc, proj
 
-SCRATCH = f"company/kbtest_keys_{os.getpid()}.md"
+SCRATCH = doc(f"kbtest_keys_{os.getpid()}.md")
 SCRATCH_BODY = "# scratch\n\nkbtest scratch document\n"
 
 
@@ -22,7 +23,7 @@ def page(browser):
     """One browser context for the whole module, plus a throwaway document —
     the typing test must never touch a shared fixture file."""
     api = httpx.Client(base_url=BASE, timeout=30)
-    api.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    api.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     api.post("/api/file", json={"path": SCRATCH})
     api.post("/api/artifact/write", json={"path": SCRATCH, "content": SCRATCH_BODY})
     ctx = browser.new_context()
@@ -60,7 +61,7 @@ def test_quick_open_finds_a_file_by_name(page):
     # content hits (path:line) may already sit above the file section — the
     # best FILE match is what quick-open is about
     files = [p for p in paths(items) if p and ":" not in p]
-    assert files[0] == "company/todos.html"
+    assert files[0] == doc("todos.html")
     page.keyboard.press("Escape")
 
 
@@ -72,9 +73,9 @@ def test_quick_open_opens_it_with_the_right_viewer(page):
 
 
 def test_partial_and_out_of_order_names_match(page):
-    assert "company/onboarding.md" in paths(palette(page, "onbo"))
+    assert doc("onboarding.md") in paths(palette(page, "onbo"))
     page.keyboard.press("Escape")
-    assert "projects/acme/plan.md" in paths(palette(page, "acme plan"))
+    assert proj("plan.md") in paths(palette(page, "acme plan"))
     page.keyboard.press("Escape")
 
 
@@ -91,7 +92,7 @@ def test_content_search_streams_in_on_top(page):
     # the documents section renders ABOVE the files section
     assert "document" in groups[0], groups
     assert [p for p in paths(page.locator('[data-testid="palette-item"]'))
-            if p and p.startswith("projects/acme/plan.md:")]
+            if p and p.startswith(proj("plan.md:"))]
     page.keyboard.press("Escape")
 
 
@@ -102,7 +103,7 @@ def test_enter_still_opens_the_best_file_after_content_lands(page):
     palette(page, "todos")
     page.wait_for_timeout(900)                    # let the content search land
     sel = page.locator(".palette-item.sel")
-    assert sel.get_attribute("data-path") == "company/todos.html"
+    assert sel.get_attribute("data-path") == doc("todos.html")
     page.keyboard.press("Escape")
 
 

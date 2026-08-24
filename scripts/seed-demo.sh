@@ -160,6 +160,17 @@ EOF
         echo "  user  $val" ;;
       group) groupdel "$val" 2>/dev/null && { echo "  group $val"; : > "$MANIFEST.groups-went"; }
         : ;;
+      # A namespaced area belongs entirely to its run, so it comes out whole.
+      # `path` uses rmdir, which fails the moment a test leaves a scratch file
+      # behind — that is how ten abandoned kbtest-* directories accumulated in
+      # the real company/ folder. Guarded twice: inside the repo, and the name
+      # must actually carry the kbtest- marker.
+      tree)
+        case "$val" in
+          "$REPO"/*kbtest-*) rm -rf "$val" && echo "  rm -r ${val#"$REPO"/}" ;;
+          *) echo "  SKIP (not a namespaced tree): $val" >&2 ;;
+        esac
+        : ;;
       # Credential files, outside the repo. Recorded rather than hardcoded for
       # the same reason as everything else: only what we wrote gets removed.
       extfile) [ -e "$val" ] && { rm -f "$val"; echo "  rm    $val"; }
@@ -293,7 +304,8 @@ say "restricted project: $PROJ_REL"
 # a raw SQL query as carol returns none of its rows either.
 if [ ! -d "$REPO/$PROJ_REL" ]; then
   mkdir -p "$REPO/$PROJ_REL"
-  record path "$REPO/$PROJ_REL"
+  # namespaced runs own their whole project dir; the demo shares projects/acme
+  [ -n "$NS" ] && record tree "$REPO/$PROJ_REL" || record path "$REPO/$PROJ_REL"
 fi
 chgrp "$PROJ_GRP" "$REPO/$PROJ_REL"
 chmod 2770 "$REPO/$PROJ_REL"
@@ -310,7 +322,7 @@ if [ "$AREA" != "company" ] && [ ! -d "$REPO/$AREA" ]; then
   # install.sh sets the same default ACL on company/ itself; setting it here too
   # means the area does not depend on that having survived on this box.
   setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/$AREA"
-  record path "$REPO/$AREA"
+  record tree "$REPO/$AREA"
 fi
 
 # ---------------------------------------------------------------------------
@@ -429,6 +441,24 @@ if [ ! -d "$REPO/$AREA/dashboards" ]; then
   install -d -m 2775 -o "$A_ALICE" -g kb-users "$REPO/$AREA/dashboards"
   record path "$REPO/$AREA/dashboards"
 fi
+# A non-markdown document (the index only ingests .md) and a _secrets folder:
+# both exist in company/ on a real install — todos.html from install.sh, _secrets
+# by convention — and the suite asserts behaviour that depends on them (filename
+# search reaching a file Postgres never sees; secrets never being searchable).
+# A namespaced area has to provide its own, or those tests silently fall back to
+# the real company/ and stop testing this run at all.
+if [ ! -e "$REPO/$AREA/todos.html" ]; then
+  install -m 0664 -o "$A_ALICE" -g kb-users "$SRC/defaults/artifacts/todos.html" \
+          "$REPO/$AREA/todos.html"
+  record path "$REPO/$AREA/todos.html"
+  echo "  $AREA/todos.html"
+fi
+if [ ! -d "$REPO/$AREA/_secrets" ]; then
+  install -d -m 2770 -o "$A_ALICE" -g kb-users "$REPO/$AREA/_secrets"
+  record path "$REPO/$AREA/_secrets"
+  echo "  $AREA/_secrets/"
+fi
+
 for a in randoms iotest scopetest xsstest; do
   if [ ! -e "$REPO/$AREA/dashboards/$a.html" ]; then
     install -m 664 -o "$A_ALICE" -g kb-users "$SRC/defaults/artifacts/$a.html" \

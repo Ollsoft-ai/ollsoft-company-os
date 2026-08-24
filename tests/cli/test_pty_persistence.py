@@ -11,14 +11,13 @@ import time
 
 import aiohttp
 import httpx
+from kbenv import BASE, CREDS, U
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 

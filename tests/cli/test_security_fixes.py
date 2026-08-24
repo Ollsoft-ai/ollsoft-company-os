@@ -8,20 +8,19 @@ import json
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U, doc, proj
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 
 def q(user, sql, params=None):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c.post("/api/artifact/query", json={"sql": sql, "params": params or []}).json()
 
 
 def toggle(user, path, line):
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c.post("/api/tasks/toggle", json={"path": path, "line": line})
 
 
@@ -38,22 +37,22 @@ def test_world_readable_file_in_restricted_dir_is_hidden():
 
 
 def test_carol_sees_no_acme_rows_at_all():
-    rows = q("carol", "SELECT file_path FROM kb.blocks WHERE file_path LIKE %s", ["projects/acme/%"])
+    rows = q("carol", "SELECT file_path FROM kb.blocks WHERE file_path LIKE %s", [proj("%")])
     assert rows["rows"] == []
 
 
 # --- Finding 3: the arbitrary-user oracle is gone --------------------------
 def test_can_read_two_arg_oracle_removed():
-    r = q("carol", "SELECT kb.can_read(%s, %s)", ["projects/acme/plan.md", "alice"])
+    r = q("carol", "SELECT kb.can_read(%s, %s)", [proj("plan.md"), "alice"])
     assert "error" in r, "the 2-arg can_read oracle must not exist"
     # the single-arg form only reports the caller's own access
-    own = q("carol", "SELECT kb.can_read(%s)", ["company/overview.md"])
+    own = q("carol", "SELECT kb.can_read(%s)", [doc("overview.md")])
     assert own["rows"][0][0] is True
 
 
 # --- Finding 1: kb-toggle is scoped to real indexed tasks ------------------
 def test_toggle_rejects_non_md():
-    assert toggle("alice", "company/dashboards/randoms.html", 1).status_code == 400
+    assert toggle("alice", doc("dashboards/randoms.html"), 1).status_code == 400
 
 
 def test_toggle_rejects_index_excluded_config():
@@ -63,10 +62,10 @@ def test_toggle_rejects_index_excluded_config():
 
 def test_toggle_rejects_non_task_line():
     # line 1 of overview.md is a heading, not a task
-    assert toggle("alice", "company/overview.md", 1).status_code == 400
+    assert toggle("alice", doc("overview.md"), 1).status_code == 400
 
 
 def test_toggle_accepts_real_task_and_restores():
-    r = toggle("alice", "company/onboarding.md", 5)
+    r = toggle("alice", doc("onboarding.md"), 5)
     assert r.status_code == 200
-    toggle("alice", "company/onboarding.md", 5)  # restore
+    toggle("alice", doc("onboarding.md"), 5)  # restore

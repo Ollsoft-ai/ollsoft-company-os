@@ -9,9 +9,10 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, dlg_fill, login
+from kbenv import U, doc
 
 TAG = str(int(time.time()))
-DOC = f"company/extmerge_{TAG}.md"
+DOC = doc(f"extmerge_{TAG}.md")
 DISK = f"/srv/kb/{DOC}"
 
 BASE_TEXT = (
@@ -25,7 +26,7 @@ BASE_TEXT = (
 
 def api(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -44,7 +45,7 @@ def doc():
     state entirely.
     """
     global DOC, DISK
-    DOC = f"company/extmerge_{int(time.time() * 1000)}.md"
+    DOC = doc(f"extmerge_{int(time.time() * 1000)}.md")
     DISK = f"/srv/kb/{DOC}"
     k = api("alice")
     assert k.post("/api/file", json={"path": DOC}).status_code in (200, 409)

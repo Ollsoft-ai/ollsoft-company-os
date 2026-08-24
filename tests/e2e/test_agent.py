@@ -9,21 +9,22 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login, open_doc, doc_text
+from kbenv import U, doc, proj
 
-AGENT_DOC = "company/agent_doc.md"
+AGENT_DOC = doc("agent_doc.md")
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _remove_fixture_doc_afterwards():
     yield
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     c.post("/api/fs/delete", json={"path": AGENT_DOC})
 
 
 def _ensure_agent_doc():
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "alice", "password": CREDS["alice"]})
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
     c.post("/api/file", json={"path": AGENT_DOC})
     with open(f"/srv/kb/{AGENT_DOC}", "w") as f:
         f.write("# Agent scratch doc\n\nThe agent will append below.\n")
@@ -64,7 +65,7 @@ def test_agent_bounded_by_kernel_identity():
     """An agent running as carol cannot reach acme — the same kernel boundary
     that bounds the human bounds their agent (tested via carol's own backend)."""
     c = httpx.Client(base_url=BASE, timeout=15)
-    c.post("/login", data={"username": "carol", "password": CREDS["carol"]})
-    r = c.get("/api/file", params={"path": "projects/acme/plan.md"})
+    c.post("/login", data={"username": U("carol"), "password": CREDS["carol"]})
+    r = c.get("/api/file", params={"path": proj("plan.md")})
     assert r.status_code == 403
     assert "zebrafish" not in r.text

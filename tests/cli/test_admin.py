@@ -4,16 +4,15 @@ import time
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, U
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TU = f"tu{int(time.time()) % 100000}"      # unique temp username
 TG = f"tg{int(time.time()) % 100000}"      # unique temp group
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 
@@ -70,10 +69,10 @@ def test_user_and_group_lifecycle():
 # --- guards -----------------------------------------------------------------
 def test_guards_reject_dangerous_actions():
     a = admin()
-    assert a.post("/admin/users/delete", json={"username": "alice"}).status_code == 400  # self/protected
+    assert a.post("/admin/users/delete", json={"username": U("alice")}).status_code == 400  # self/protected
     assert a.post("/admin/users/delete", json={"username": "root"}).status_code == 400
     assert a.post("/admin/groups/member",
-                  json={"group": "sudo", "username": "carol", "action": "add"}).status_code == 400
+                  json={"group": "sudo", "username": U("carol"), "action": "add"}).status_code == 400
     assert a.post("/admin/groups/delete", json={"name": "kb-users"}).status_code == 400   # platform group
     assert a.post("/admin/groups/delete", json={"name": "sudo"}).status_code == 400       # system group
     assert cl("bob").post("/admin/groups/delete", json={"name": "proj-acme"}).status_code == 403

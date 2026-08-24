@@ -1,6 +1,7 @@
 """HIGH: an artifact's kb-read/kb-write is scoped to its own folder, so a hostile
 artifact can't read the viewer's private files elsewhere (confused-deputy fix)."""
 from conftest import login
+from kbenv import doc
 
 
 def test_artifact_cannot_read_outside_its_folder(browser):
@@ -8,7 +9,7 @@ def test_artifact_cannot_read_outside_its_folder(browser):
     page = login(ctx, "alice")
     # scopetest.html lives in company/dashboards/ and tries to read
     # users/alice/private.md (a different folder, and alice's own secret).
-    page.click('.tree-item[data-path="company/dashboards/scopetest.html"]')
+    page.click('.tree-item[data-path=doc("dashboards/scopetest.html")]')
     frame = page.frame_locator("iframe.artifact-frame")
     out = frame.locator("#o")
     out.wait_for(timeout=10000)

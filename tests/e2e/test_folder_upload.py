@@ -14,14 +14,14 @@ import time
 
 import httpx
 from conftest import BASE, dlg_ok, login
+from kbenv import CREDS, U, doc
 
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
 
 
 def http(user):
     c = httpx.Client(base_url=BASE, timeout=30)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 
@@ -49,21 +49,21 @@ def test_upload_folder_picker_recreates_the_tree(browser, tmp_path):
 
         # the ghost rows name the path INSIDE the folder, not just the basename
         page.wait_for_selector(".tree-item.uploading", timeout=8000)
-        page.wait_for_selector(f'.tree-item[data-path="company/{top}/a.md"]', timeout=30000)
+        page.wait_for_selector(f'.tree-item[data-path=doc("{top}/a.md")]', timeout=30000)
         page.wait_for_selector(".tree-item.uploading", state="hidden", timeout=15000)
 
         # every file landed where it came from, with its bytes
         for rel, want in [("a.md", "# A\n"), ("sub/b.md", "# B\n"),
                           ("sub/deep/c.txt", "see")]:
-            r = c.get("/api/attachment", params={"path": f"company/{top}/{rel}"})
+            r = c.get("/api/attachment", params={"path": doc(f"{top}/{rel}")})
             assert r.status_code == 200, f"{rel}: {r.status_code} {r.text}"
             assert r.text == want, f"{rel}: {r.text!r}"
         # OS junk is not content and must not be uploaded
         assert c.get("/api/attachment",
-                     params={"path": f"company/{top}/.DS_Store"}).status_code == 404
+                     params={"path": doc(f"{top}/.DS_Store")}).status_code == 404
     finally:
         ctx.close()
-        c.post("/api/fs/delete", json={"path": f"company/{top}"})
+        c.post("/api/fs/delete", json={"path": doc(f"{top}")})
 
 
 # The entry tree Chromium hands a drop handler for a folder, stubbed: files
@@ -118,19 +118,19 @@ def test_drop_folder_uploads_subfolders_and_empty_dirs(browser):
         assert "2 files" in page.inner_text('[data-testid="dlg"]')
         dlg_ok(page)
 
-        page.wait_for_selector(f'.tree-item[data-path="company/{top}/a.md"]', timeout=30000)
+        page.wait_for_selector(f'.tree-item[data-path=doc("{top}/a.md")]', timeout=30000)
         page.wait_for_selector(".tree-item.uploading", state="hidden", timeout=15000)
 
         for rel, want in [("a.md", "# A\n"), ("sub/b.md", "# B\n")]:
-            r = c.get("/api/attachment", params={"path": f"company/{top}/{rel}"})
+            r = c.get("/api/attachment", params={"path": doc(f"{top}/{rel}")})
             assert r.status_code == 200, f"{rel}: {r.status_code} {r.text}"
             assert r.text == want, f"{rel}: {r.text!r}"
         # a folder with no files in it still arrives (the picker cannot do this)
-        r = c.get("/fs/props", params={"path": f"company/{top}/empty"})
+        r = c.get("/fs/props", params={"path": doc(f"{top}/empty")})
         assert r.status_code == 200, r.text
         # ...but a nested .git would become a gitlink in the KB's own audit repo
         assert c.get("/fs/props",
-                     params={"path": f"company/{top}/.git"}).status_code == 404
+                     params={"path": doc(f"{top}/.git")}).status_code == 404
     finally:
         ctx.close()
-        c.post("/api/fs/delete", json={"path": f"company/{top}"})
+        c.post("/api/fs/delete", json={"path": doc(f"{top}")})

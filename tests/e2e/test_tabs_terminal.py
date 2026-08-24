@@ -4,26 +4,27 @@ and the cron panel."""
 import time
 
 from conftest import dlg_ok, login, open_doc
+from kbenv import CREDS, doc
 
 
 def test_editor_tabs_open_switch_close(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
 
-    open_doc(page, "company/overview.md")
-    page.wait_for_selector('.tab.active[data-path="company/overview.md"]')
-    open_doc(page, "company/onboarding.md")
-    page.wait_for_selector('.tab.active[data-path="company/onboarding.md"]')
+    open_doc(page, doc("overview.md"))
+    page.wait_for_selector('.tab.active[data-path=doc("overview.md")]')
+    open_doc(page, doc("onboarding.md"))
+    page.wait_for_selector('.tab.active[data-path=doc("onboarding.md")]')
     assert page.locator("#tabbar .tab").count() == 2
 
     # switching back re-activates the existing live tab (no re-open)
-    page.click('.tab[data-path="company/overview.md"]')
+    page.click('.tab[data-path=doc("overview.md")]')
     page.wait_for_function("() => window.__kbpath === 'company/overview.md'")
-    assert page.locator(".tab.active").get_attribute("data-path") == "company/overview.md"
+    assert page.locator(".tab.active").get_attribute("data-path") == doc("overview.md")
 
     # close the active tab -> neighbour becomes active
-    page.hover('.tab[data-path="company/overview.md"]')
-    page.click('.tab[data-path="company/overview.md"] .tab-x')
+    page.hover('.tab[data-path=doc("overview.md")]')
+    page.click('.tab[data-path=doc("overview.md")] .tab-x')
     page.wait_for_function("() => window.__kbpath === 'company/onboarding.md'")
     assert page.locator("#tabbar .tab").count() == 1
 
@@ -38,9 +39,9 @@ def test_editor_tabs_open_switch_close(browser):
 def test_artifact_opens_as_tab_alongside_doc(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    open_doc(page, "company/overview.md")
-    page.click('.tree-item[data-path="company/todos.html"]')
-    page.wait_for_selector('.tab.active[data-path="company/todos.html"]')
+    open_doc(page, doc("overview.md"))
+    page.click('.tree-item[data-path=doc("todos.html")]')
+    page.wait_for_selector('.tab.active[data-path=doc("todos.html")]')
     assert page.locator("#tabbar .tab").count() == 2
     # the doc tab's editor stays mounted (live) while the artifact is active
     assert page.evaluate("() => !!document.querySelector('.cm-editor')")
@@ -148,7 +149,7 @@ def test_terminal_select_copies_to_clipboard(browser):
     page = ctx.new_page()
     page.goto("http://127.0.0.1:8300/login")
     import json
-    creds = json.load(open("/tmp/kb-test-creds.json"))
+    creds = CREDS
     page.fill('input[name="username"]', "alice")
     page.fill('input[name="password"]', creds["alice"])
     page.click('button[type="submit"]')
@@ -188,7 +189,7 @@ def test_terminal_shift_drag_selects_inside_mouse_app(browser):
     page = ctx.new_page()
     page.goto("http://127.0.0.1:8300/login")
     import json
-    creds = json.load(open("/tmp/kb-test-creds.json"))
+    creds = CREDS
     page.fill('input[name="username"]', "alice")
     page.fill('input[name="password"]', creds["alice"])
     page.click('button[type="submit"]')

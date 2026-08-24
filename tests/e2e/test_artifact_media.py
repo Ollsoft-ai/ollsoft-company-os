@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from conftest import BASE, CREDS, login
+from kbenv import U, doc
 
 # A tiny REAL MP4 generated at test time with ffmpeg — one second of test
 # pattern. It must be genuinely playable: test_artifact_plays_a_video waits for
@@ -67,7 +68,7 @@ ARTIFACT = """<!doctype html><meta charset="utf-8">
   })();
   // reaching OUTSIDE this artifact's folder must be refused by the host
   (async () => {
-    const r = await kbReadBytes("company/overview.md");
+    const r = await kbReadBytes(doc("overview.md"));
     document.getElementById("scope").textContent =
       r.error ? "REFUSED:" + r.error : "LEAKED:" + (r.size || 0);
   })();
@@ -85,11 +86,11 @@ ARTIFACT = """<!doctype html><meta charset="utf-8">
 def folder():
     """Build the artifact + its video AS BOB, through the product's own API."""
     c = httpx.Client(base_url=BASE, timeout=60)
-    r = c.post("/login", data={"username": "bob", "password": CREDS["bob"]})
+    r = c.post("/login", data={"username": U("bob"), "password": CREDS["bob"]})
     assert r.status_code == 200, r.text
     if c.get("/api/cron").json().get("v", 0) < 12:
         pytest.skip("backend predates artifact binary reads (v12)")
-    rel = f"company/vidtest_{int(time.time())}"
+    rel = doc(f"vidtest_{int(time.time())}")
     assert c.post("/api/fs/mkdir", json={"path": rel}).status_code == 200
     with open(SRC_MP4, "rb") as fh:
         up = c.post(f"/api/upload?dir={rel}", files={"file": ("clip.mp4", fh, "video/mp4")})

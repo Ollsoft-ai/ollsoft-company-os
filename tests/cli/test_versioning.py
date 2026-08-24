@@ -10,16 +10,15 @@ import time
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, L, U, doc
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
-DIR = f"company/vc_{TAG}"
+DIR = doc(f"vc_{TAG}")
 
 
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code == 200, r.text
     return c
 
@@ -62,7 +61,7 @@ def test_edits_are_attributed_to_the_author(k):
     write(k, p, "# v1\n\nfirst\nsecond\n")
     entries = wait_for_rev(k, p, 1)
     assert entries, "an edit must produce a version"
-    assert all(e["author"] == "alice" for e in entries), entries
+    assert all(L(e["author"]) == "alice" for e in entries), entries
     # the diff of the newest rev reflects the real change
     rev = entries[0]["rev"]
     d = k.get("/api/vc/diff", params={"path": p, "rev": rev}).json()
@@ -114,7 +113,7 @@ def test_cross_user_attribution(k):
     assert j.post("/api/file", json={"path": p}).status_code == 200
     write(j, p, f"bob wrote this {TAG}\n")
     entries = wait_for_rev(j, p, 1)
-    assert entries and entries[0]["author"] == "bob", entries
+    assert entries and L(entries[0]["author"]) == "bob", entries
 
 
 def test_secrets_never_in_history(k):
@@ -159,7 +158,7 @@ def test_scope_and_injection_guards(k):
     # only documents/artifacts have history
     assert k.get("/api/vc/log", params={"path": f"{DIR}/note.txt"}).status_code == 400
     # secrets are refused outright (never versioned)
-    assert k.get("/api/vc/log", params={"path": "company/_secrets/x.env"}).status_code == 400
+    assert k.get("/api/vc/log", params={"path": doc("_secrets/x.env")}).status_code == 400
     # rev must be a hex sha — no option/flag injection into git
     p = f"{DIR}/doc.md"
     assert k.get("/api/vc/show", params={"path": p, "rev": "--output=/tmp/x"}).status_code == 400
@@ -178,10 +177,10 @@ def test_pathspec_magic_cannot_dump_other_files(k):
     write(k, secret, "CONFIDENTIAL_MARKER_ZZ\n")
     assert k.post("/fs/props", json={"path": secret, "visibility": "private"}).status_code == 200
     # bob creates the decoy he owns (allowed to exist; just never a valid query path)
-    decoy = "company/:(exclude)decoy.md"
+    decoy = doc(":(exclude)decoy.md")
     assert j.post("/fs/newfile", json={"path": decoy}).status_code in (200, 409)
     try:
-        for magic in ["company/:(exclude)decoy.md", ":(glob)**/*.md", ":/", ":!x.md"]:
+        for magic in [doc(":(exclude)decoy.md"), ":(glob)**/*.md", ":/", ":!x.md"]:
             r = j.get("/api/vc/diff", params={"path": magic, "rev": "HEAD"})
             assert r.status_code == 400, (magic, r.status_code)
             assert "CONFIDENTIAL_MARKER_ZZ" not in r.text
@@ -225,7 +224,7 @@ def test_activity_pages_past_the_batch_and_flags_truncation(k):
     older, newer = revs[1]["rev"], revs[0]["rev"]
 
     # a narrow window keeps this hermetic on a box with real history
-    q = {"since": "10 minutes ago", "author": "alice"}
+    q = {"since": "10 minutes ago", "author": U("alice")}
     full = k.get("/api/vc/activity", params={**q, "limit": 1000}).json()
     seen = {c["rev"] for c in full["commits"]}
     assert {older, newer} <= seen, f"both revs must be in the window: {sorted(seen)[:5]}"
@@ -251,4 +250,4 @@ def test_cli_reports_who_did_what(k):
     data = json.loads(out.stdout)
     paths = [pp for c in data["commits"] for f in c["files"] for pp in f["paths"]]
     assert p in paths, f"kb-history did not report alice's edit to {p}: {paths[:10]}"
-    assert all(c["author"] == "alice" for c in data["commits"]), "author filter must hold"
+    assert all(L(c["author"]) == "alice" for c in data["commits"]), "author filter must hold"

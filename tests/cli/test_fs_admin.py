@@ -7,9 +7,8 @@ import time
 
 import httpx
 import pytest
+from kbenv import AREA, BASE, CREDS, L, U, doc, home, proj
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 TAG = str(int(time.time()))
 
 
@@ -19,15 +18,15 @@ def _sweep_test_files_afterwards():
     (as the users who can: kernel-checked deletes, exactly like the UI)."""
     yield
     k = client("alice")
-    for p in (f"company/jnote_{TAG}.md", f"company/aclfile_{TAG}.md",
-              f"company/drop_{TAG}.txt", f"users/alice/inj_{TAG}.md"):
+    for p in (doc(f"jnote_{TAG}.md"), doc(f"aclfile_{TAG}.md"),
+              doc(f"drop_{TAG}.txt"), home("alice", f"inj_{TAG}.md")):
         k.post("/api/fs/delete", json={"path": p})
-    client("bob").post("/api/fs/delete", json={"path": f"users/bob/mine_{TAG}.md"})
+    client("bob").post("/api/fs/delete", json={"path": home("bob", f"mine_{TAG}.md")})
 
 
 def client(user):
     c = httpx.Client(base_url=BASE, timeout=15)
-    assert c.post("/login", data={"username": user, "password": CREDS[user]}).status_code == 200
+    assert c.post("/login", data={"username": U(user), "password": CREDS[user]}).status_code == 200
     return c
 
 
@@ -38,7 +37,7 @@ def props(c, path):
 # --- created files inherit the folder's owner/group (needs root) ------------
 def test_created_file_inherits_folder_owner():
     bob = client("bob")
-    path = f"company/jnote_{TAG}.md"
+    path = doc(f"jnote_{TAG}.md")
     r = bob.post("/fs/newfile", json={"path": path})
     assert r.status_code == 200, r.text
     # company/ is owned root:kb-users, so bob's new file is owned by ROOT, not bob.
@@ -49,16 +48,16 @@ def test_created_file_inherits_folder_owner():
 
 def test_newfile_denied_without_folder_write():
     carol = client("carol")
-    r = carol.post("/fs/newfile", json={"path": f"projects/acme/x_{TAG}.md"})
+    r = carol.post("/fs/newfile", json={"path": proj(f"x_{TAG}.md")})
     assert r.status_code == 403, "carol has no write to acme -> create must be denied"
 
 
 # --- property changes: owner-or-admin only ---------------------------------
 def test_owner_can_change_own_file_props():
     bob = client("bob")
-    path = f"users/bob/mine_{TAG}.md"   # in bob's private dir -> bob owns it
+    path = home("bob", f"mine_{TAG}.md")   # in bob's private dir -> bob owns it
     assert bob.post("/fs/newfile", json={"path": path}).status_code == 200
-    assert props(bob, path)["owner"] == "bob"
+    assert props(bob, path)["owner"] == U("bob")
     assert props(bob, path)["can_edit"] is True
     r = bob.post("/fs/props", json={"path": path, "group": "kb-users"})
     assert r.status_code == 200, r.text
@@ -68,57 +67,57 @@ def test_owner_can_change_own_file_props():
 def test_non_owner_cannot_change_props():
     bob = client("bob")
     # overview.md is owned by alice; bob is neither owner nor admin.
-    assert props(bob, "company/overview.md")["can_edit"] is False
-    r = bob.post("/fs/props", json={"path": "company/overview.md", "group": "bob"})
+    assert props(bob, doc("overview.md"))["can_edit"] is False
+    r = bob.post("/fs/props", json={"path": doc("overview.md"), "group": "bob"})
     assert r.status_code == 403
 
 
 def test_admin_can_change_any_props():
     # alice is in the sudo group -> platform admin -> can edit anything.
     kry = client("alice")
-    assert props(kry, "company/onboarding.md")["can_edit"] is True
-    r = kry.post("/fs/props", json={"path": "company/onboarding.md", "group": "kb-users"})
+    assert props(kry, doc("onboarding.md"))["can_edit"] is True
+    r = kry.post("/fs/props", json={"path": doc("onboarding.md"), "group": "kb-users"})
     assert r.status_code == 200, r.text
 
 
 def test_acl_add_and_remove():
     kry = client("alice")
-    path = f"company/aclfile_{TAG}.md"
+    path = doc(f"aclfile_{TAG}.md")
     assert kry.post("/fs/newfile", json={"path": path}).status_code == 200
     # grant carol an explicit read ACL
     r = kry.post("/fs/props", json={"path": path,
-                                    "acl_add": [{"type": "user", "name": "carol", "perms": "r"}]})
+                                    "acl_add": [{"type": "user", "name": U("carol"), "perms": "r"}]})
     assert r.status_code == 200, r.text
     acls = props(kry, path)["acls"]
-    assert any(a["type"] == "user" and a["name"] == "carol" and "r" in a["perms"] for a in acls), acls
+    assert any(a["type"] == "user" and L(a["name"]) == "carol" and "r" in a["perms"] for a in acls), acls
     # remove it
     assert kry.post("/fs/props", json={"path": path,
-                                       "acl_remove": [{"type": "user", "name": "carol"}]}).status_code == 200
+                                       "acl_remove": [{"type": "user", "name": U("carol")}]}).status_code == 200
     acls = props(kry, path)["acls"]
-    assert not any(a["name"] == "carol" for a in acls)
+    assert not any(L(a["name"]) == "carol" for a in acls)
 
 
 def test_uploaded_file_inherits_folder_owner():
     bob = client("bob")
     files = {"file": (f"drop_{TAG}.txt", b"dropped content", "text/plain")}
-    r = bob.post("/fs/upload", params={"dir": "company"}, files=files)
+    r = bob.post("/fs/upload", params={"dir": AREA}, files=files)
     assert r.status_code == 200, r.text
     # dropped into company/ (owned root) -> inherits root ownership
-    assert props(bob, f"company/drop_{TAG}.txt")["owner"] == "root"
+    assert props(bob, doc(f"drop_{TAG}.txt"))["owner"] == "root"
 
 
 def test_upload_denied_without_folder_write():
     carol = client("carol")
     files = {"file": (f"x_{TAG}.txt", b"x", "text/plain")}
-    r = carol.post("/fs/upload", params={"dir": "projects/acme"}, files=files)
+    r = carol.post("/fs/upload", params={"dir": proj()}, files=files)
     assert r.status_code == 403
 
 
 def test_props_rejects_injection_and_bad_names():
     kry = client("alice")
-    path = f"users/alice/inj_{TAG}.md"
+    path = home("alice", f"inj_{TAG}.md")
     assert kry.post("/fs/newfile", json={"path": path}).status_code == 200
     for bad in [{"group": "kb-users; rm -rf /"}, {"owner": "root && evil"},
-                {"acl_add": [{"type": "user", "name": "carol", "perms": "rwxs"}]}]:
+                {"acl_add": [{"type": "user", "name": U("carol"), "perms": "rwxs"}]}]:
         r = kry.post("/fs/props", json={"path": path, **bad})
         assert r.status_code == 400, f"bad input accepted: {bad}"

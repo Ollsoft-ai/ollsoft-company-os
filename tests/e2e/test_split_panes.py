@@ -11,15 +11,16 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login
+from kbenv import U, doc
 
 TAG = str(int(time.time()))
-FOLDER = f"company/panes_{TAG}"
+FOLDER = doc(f"panes_{TAG}")
 LONG_NAME = "a-document-whose-name-is-far-too-long-for-any-file-tree-column.md"
 
 
 def api(user):
     c = httpx.Client(base_url=BASE, timeout=25)
-    c.post("/login", data={"username": user, "password": CREDS[user]})
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
 
 

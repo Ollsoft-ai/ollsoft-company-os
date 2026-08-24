@@ -12,8 +12,8 @@ import socket
 import pytest
 
 from kb_platform import common
+from kbenv import BASE, U
 
-BASE = "http://127.0.0.1:8300"
 
 # payload half must be valid hex or the token dies at bytes.fromhex() first.
 BAD_SIGS = [

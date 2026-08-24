@@ -20,9 +20,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
+from kbenv import BASE, CREDS, L, U
 
-BASE = "http://127.0.0.1:8300"
-CREDS = json.load(open("/tmp/kb-test-creds.json"))
 
 # A one-second 16 kHz mono WAV of silence: big enough to clear the server's
 # "that was a stray tap" floor, small enough to be free if it ever escapes.
@@ -46,7 +45,7 @@ def cl(user):
     instance more than once" on re-entry. Use closing() if you want it closed.
     """
     c = httpx.Client(base_url=BASE, timeout=60)
-    r = c.post("/login", data={"username": user, "password": CREDS[user]})
+    r = c.post("/login", data={"username": U(user), "password": CREDS[user]})
     assert r.status_code in (200, 302), r.text
     return c
 
@@ -189,7 +188,7 @@ def test_live_roundtrip_and_audit(k):
     assert isinstance(j["text"], str)          # silence transcribes to ""
     assert _audit_len() == before + 1
     line = _audit_tail(1)[0]
-    assert line["user"] == "alice"
+    assert L(line["user"]) == "alice"
     assert line["status"] == 200
     assert "text" not in line and "transcript" not in line   # never the words
 
