@@ -102,7 +102,7 @@ def test_acl_info_demasks_group_bits():
     f = Path(d) / "x.md"
     f.write_text("x")
     os.chmod(f, 0o600)                                   # owner-only
-    subprocess.run(["setfacl", "-m", "u:bob:r", "--", str(f)], check=True)  # share with one user
+    subprocess.run(["setfacl", "-m", f"u:{U('bob')}:r", "--", str(f)], check=True)  # share with one user
     mode, users, groups, x_users, x_groups = acl_info(f)
     subprocess.run(["rm", "-rf", d], check=False)
     assert (mode >> 3) & 7 == 0, "group bits must reflect real group:: (---), not the ACL mask"
