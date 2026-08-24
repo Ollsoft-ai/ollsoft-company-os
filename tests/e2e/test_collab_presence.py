@@ -13,7 +13,7 @@ from kbenv import U, doc
 def login(ctx, user):
     page = ctx.new_page()
     page.goto(BASE + "/login")
-    page.fill('input[name="username"]', user)
+    page.fill('input[name="username"]', U(user))
     page.fill('input[name="password"]', CREDS[user])
     page.click('button[type="submit"]')
     page.wait_for_url(BASE + "/")

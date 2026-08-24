@@ -1,7 +1,22 @@
 import pytest
 from playwright.sync_api import sync_playwright
 
-from kbenv import BASE, CREDS, U
+# kbenv is resolved LAZILY, never at import of this file. This is an "initial"
+# conftest whenever pytest is given `tests/e2e` as its argument, and pytest loads
+# those during pre-parse — before pytest_configure, which is where the root
+# conftest seeds the fixtures. Importing kbenv here would read the credentials
+# file a moment before it is written, and every e2e run would die in collection.
+# tests/cli has no conftest of its own, which is why this only showed up here.
+#
+# Test modules still do `from conftest import BASE, CREDS`, and that keeps
+# working: PEP 562 module __getattr__ fires when THEY are imported, which is
+# during collection — after the fixtures exist.
+def __getattr__(name):
+    if name in ("BASE", "CREDS", "U", "L", "NS", "AREA", "REPO",
+                "doc", "proj", "home", "full", "people"):
+        import kbenv
+        return getattr(kbenv, name)
+    raise AttributeError(f"module 'conftest' has no attribute {name!r}")
 
 
 @pytest.fixture(scope="session")
@@ -13,6 +28,7 @@ def browser():
 
 
 def login(context, user):
+    from kbenv import BASE, CREDS, U
     page = context.new_page()
     page.goto(BASE + "/login")
     page.fill('input[name="username"]', U(user))

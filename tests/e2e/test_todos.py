@@ -62,7 +62,7 @@ def test_assigned_to_me_query():
 def test_todos_artifact_mine_and_all(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path=doc("todos.html")]')
+    page.click(f'.tree-item[data-path="{doc("todos.html")}"]')
     frame = page.frame_locator("iframe.artifact-frame")
     frame.locator("#who").wait_for(timeout=10000)
     frame.locator(".task, .empty").first.wait_for(timeout=10000)
@@ -79,7 +79,7 @@ def test_todos_artifact_mine_and_all(browser):
 def test_todos_artifact_hides_acme_for_carol(browser):
     ctx = browser.new_context()
     page = login(ctx, "carol")
-    page.click('.tree-item[data-path=doc("todos.html")]')
+    page.click(f'.tree-item[data-path="{doc("todos.html")}"]')
     frame = page.frame_locator("iframe.artifact-frame")
     frame.locator("#who").wait_for(timeout=10000)
     frame.locator("#tab-all").click()
@@ -91,7 +91,7 @@ def test_todos_artifact_hides_acme_for_carol(browser):
 def test_toggle_from_todos_writes_file(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path=doc("todos.html")]')
+    page.click(f'.tree-item[data-path="{doc("todos.html")}"]')
     frame = page.frame_locator("iframe.artifact-frame")
     frame.locator("#who").wait_for(timeout=10000)
     frame.locator("#tab-all").click()

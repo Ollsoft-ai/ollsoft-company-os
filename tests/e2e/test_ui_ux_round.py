@@ -178,7 +178,7 @@ def test_shared_url_lands_on_the_file_after_login(browser, box):
     page = ctx.new_page()
     page.goto(f"{BASE}/{DIR}/typing.md")
     page.wait_for_url("**/login**")      # bounced to sign-in, with ?next=
-    page.fill('input[name="username"]', "alice")
+    page.fill('input[name="username"]', U("alice"))
     page.fill('input[name="password"]', CREDS["alice"])
     page.click('button[type="submit"]')
     page.wait_for_function(

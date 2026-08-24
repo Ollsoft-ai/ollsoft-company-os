@@ -35,7 +35,7 @@ def test_claude_visible_and_folders_collapse(browser):
 def test_collapse_and_expand_all(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    inner = '.tree-item[data-path=doc("overview.md")]'
+    inner = f'.tree-item[data-path="{doc("overview.md")}"]'
     assert page.locator(inner).is_visible()               # expanded by default
     page.click('[data-testid="tree-fold"]')               # collapse all
     assert not page.locator(inner).is_visible()
@@ -48,7 +48,7 @@ def test_collapse_and_expand_all(browser):
 def test_access_badge_reflects_permissions(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('.tree-item[data-path=doc("overview.md")]')
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_selector('#access-badge:not([hidden])')
     assert "write" in page.inner_text('#access-badge')
     ctx.close()
@@ -61,7 +61,7 @@ def test_create_file_via_folder_button(browser):
     page.hover('.tree-item[data-path="company"]')
     page.click('.tree-item[data-path="company"] .tbtn[title="New file here"]')
     dlg_fill(page, name)
-    page.wait_for_selector(f'.tree-item[data-path=doc("{name}")]', timeout=6000)
+    page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', timeout=6000)
     # created in company/ -> inherits root ownership
     assert props("alice", doc(f"{name}"))["owner"] == "root"
     # remove it again (company/ is group-writable, so the parent-write check passes)
