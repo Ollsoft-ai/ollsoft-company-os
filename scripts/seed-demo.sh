@@ -120,11 +120,18 @@ chmod 600 "$CREDS"
 printf '{"alice":"%s","bob":"%s","carol":"%s"}\n' \
   "${PW[alice]}" "${PW[bob]}" "${PW[carol]}" > "$TEST_CREDS"
 # 0600, NOT 0644: this file holds three working passwords, and one of them
-# (alice) is in the admin group. World-readable put them in reach of every
-# local account. The suite runs as the developer who seeded, so 0600 is enough;
-# if you need another account to read it, chown it to that account.
+# (alice) is in the admin group — world-readable put them in reach of every
+# local account on the box.
+#
+# It must still be READABLE BY WHOEVER RUNS THE SUITE, and that is not always
+# the person who seeded: CI seeds with sudo (SUDO_USER=runner) but runs pytest
+# as alice, so guessing wrong here breaks collection in every module that loads
+# this file at import time. Set KB_TEST_USER to name that account explicitly.
+TEST_CREDS_OWNER="${KB_TEST_USER:-${SUDO_USER:-root}}"
 chmod 600 "$TEST_CREDS"
-chown "${SUDO_USER:-root}" "$TEST_CREDS" 2>/dev/null || true
+if ! chown "$TEST_CREDS_OWNER" "$TEST_CREDS" 2>/dev/null; then
+  echo "  WARNING: could not chown $TEST_CREDS to $TEST_CREDS_OWNER" >&2
+fi
 echo "  test credentials -> $TEST_CREDS"
 
 # ---------------------------------------------------------------------------
