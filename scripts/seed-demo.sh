@@ -6,13 +6,23 @@
 # so you can log in as different people and watch the permission model work
 # without inventing a company first. Run AFTER scripts/install.sh.
 #
-# This is also what the test suite expects: tests/cli and tests/e2e assume the
-# users `alice`, `bob` and `carol` exist.
+# It is also the test suite's fixture. For a test run, pass --namespace so that
+# nothing shares a name with real content:
+#
+#   sudo bash scripts/seed-demo.sh --namespace ab12cd
+#
+# which seeds company/kbtest-ab12cd/, projects/kbtest-ab12cd-acme/ and the
+# accounts kbt_ab12cd_{alice,bob,carol}, and writes the logical-name mapping to
+# /tmp/kb-test-creds-ab12cd.json. tests/kbenv.py is the only reader of that file,
+# so the suite needs no edit to follow a namespace. tests/conftest.py does this
+# automatically in pytest_configure and tears it down again afterwards.
+#
+# Without --namespace it seeds the human-facing demo, as before:
 #
 #   sudo bash scripts/seed-demo.sh [--repo /srv/kb]
 #
-# To remove it again:
-#   sudo bash scripts/seed-demo.sh --undo
+# To remove either again (removes ONLY what that run recorded creating):
+#   sudo bash scripts/seed-demo.sh [--namespace <id>] --undo
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -53,8 +63,48 @@ say() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 # NS is known only after argument parsing.
 MANIFEST="$MANIFEST_DIR/${NS:-demo}.manifest"
 
-# record <kind> <value>   kind: path | user | group | pgrole
+# record <kind> <value>   kind: path | user | group | extfile
 record() { mkdir -p "$MANIFEST_DIR"; chmod 700 "$MANIFEST_DIR"; printf '%s\t%s\n' "$1" "$2" >> "$MANIFEST"; }
+
+# --- namespacing -----------------------------------------------------------
+# With --namespace <id> NOTHING lands on a name a human would ever pick: the
+# documents go under company/kbtest-<id>/, the project is its own directory and
+# group, and the accounts are prefixed and thrown away afterwards. A test run
+# then cannot collide with — or delete — real content, because it never shares a
+# path or a username with any.
+#
+# The namespace is NOT a dot-directory on purpose: indexer.py prunes those
+# (`dirnames[:] = [d for d in dirnames if not d.startswith(".")]`), so a hidden
+# area would be invisible to search, to the To-dos panel and to RLS — silently
+# turning most of the suite into a no-op instead of a failure.
+if [ -n "$NS" ]; then
+  case "$NS" in
+    *[!a-z0-9]*|"") echo "--namespace must be lowercase alphanumeric" >&2; exit 2 ;;
+  esac
+  AREA="company/kbtest-$NS"           # the run's own "company"
+  PROJ_REL="projects/kbtest-$NS-$PROJECT"
+  # STABLE across runs, deliberately not namespaced. kbindexer's supplementary
+  # groups are fixed at exec, so it must be a member to index the 2770 project —
+  # and creating/deleting a per-run group would mean restarting kb-indexer twice
+  # per test run, each costing ~10 minutes of index staleness while it resweeps
+  # every block before its inotify watches arm. A single long-lived group that
+  # kbindexer joins once removes that entirely. Between runs it holds only
+  # kbindexer; the ephemeral accounts join and leave with their run.
+  PROJ_GRP="kbt-$PROJECT"
+  USER_PREFIX="kbt_${NS}_"
+  CREDS=/root/kb-seed-$NS.txt
+  TEST_CREDS=/tmp/kb-test-creds-$NS.json
+else
+  AREA="company"
+  PROJ_REL="projects/$PROJECT"
+  PROJ_GRP="proj-$PROJECT"
+  USER_PREFIX=""
+  CREDS=/root/ollsoft-company-os-demo.txt
+  TEST_CREDS=/tmp/kb-test-creds.json
+fi
+# logical name (what the tests call someone) -> real account on this box
+nsuser() { printf '%s%s' "$USER_PREFIX" "$1"; }
+A_ALICE=$(nsuser alice); A_BOB=$(nsuser bob); A_CAROL=$(nsuser carol)
 
 # Read what the installer chose. Needed before the --undo branch, which also
 # talks to Postgres. Platform admins are members of the configured admin group:
@@ -92,7 +142,12 @@ EOF
         esac
         if [ -d "$val" ] && [ ! -L "$val" ]; then rmdir "$val" 2>/dev/null && echo "  rmdir ${val#"$REPO"/}"
         elif [ -e "$val" ] || [ -L "$val" ]; then rm -f "$val" && echo "  rm    ${val#"$REPO"/}"
-        fi ;;
+        fi
+        # Teardown must be idempotent: a manifest can name the same item twice
+        # (a re-seed appends), and an already-gone item makes the && chain above
+        # return 1. Under `set -e` that killed the whole loop mid-way, leaving
+        # the rest of the manifest unprocessed and the manifest file behind.
+        : ;;
       user)
         id "$val" &>/dev/null || continue
         pkill -KILL -u "$val" 2>/dev/null || true
@@ -103,10 +158,12 @@ EOF
         fi
         userdel -r "$val" 2>/dev/null || true
         echo "  user  $val" ;;
-      group) groupdel "$val" 2>/dev/null && { echo "  group $val"; : > "$MANIFEST.groups-went"; } ;;
+      group) groupdel "$val" 2>/dev/null && { echo "  group $val"; : > "$MANIFEST.groups-went"; }
+        : ;;
       # Credential files, outside the repo. Recorded rather than hardcoded for
       # the same reason as everything else: only what we wrote gets removed.
-      extfile) [ -e "$val" ] && rm -f "$val" && echo "  rm    $val" ;;
+      extfile) [ -e "$val" ] && { rm -f "$val"; echo "  rm    $val"; }
+        : ;;
     esac
   done
   rm -f "$MANIFEST"
@@ -130,17 +187,25 @@ fi
 # ---------------------------------------------------------------------------
 say "demo users"
 # ---------------------------------------------------------------------------
-CREDS=/root/ollsoft-company-os-demo.txt
-# The test suite reads its logins from here; every tests/cli module and the e2e
-# conftest load it at import time, so without it pytest fails during collection.
-TEST_CREDS=/tmp/kb-test-creds.json
+# CREDS / TEST_CREDS are namespace-derived (see the namespacing block above).
+# The test suite reads its logins from TEST_CREDS; every tests/cli module and the
+# e2e conftest load it at import time, so without it pytest fails during
+# collection — which is why the root conftest seeds in pytest_configure.
 umask 077
 : > "$CREDS"
-if ! getent group "proj-$PROJECT" >/dev/null; then
-  groupadd "proj-$PROJECT"
-  record group "proj-$PROJECT"
+record extfile "$CREDS"
+GROUP_IS_NEW=0
+if ! getent group "$PROJ_GRP" >/dev/null; then
+  groupadd "$PROJ_GRP"
+  GROUP_IS_NEW=1
+  # Only the demo's group is torn down. A namespaced run's group is shared
+  # infrastructure (see above), so it is deliberately NOT recorded.
+  [ -n "$NS" ] || record group "$PROJ_GRP"
 fi
-usermod -aG "proj-$PROJECT" kbindexer
+if ! id -nG kbindexer | tr ' ' '\n' | grep -qx "$PROJ_GRP"; then
+  usermod -aG "$PROJ_GRP" kbindexer
+  GROUP_IS_NEW=1
+fi
 
 
 declare -A PW
@@ -171,13 +236,39 @@ ALTER ROLE "$u" SET search_path = "u_$u", kb, public;
 SQL
   echo "  $u"
 }
-add_user alice kb-users "proj-$PROJECT" "$ADMIN_GROUP"   # alice is the demo admin
-add_user bob   kb-users "proj-$PROJECT"
-add_user carol kb-users                    # deliberately NOT on the project
+# kb-users is the REAL group on purpose: these accounts must have exactly the
+# authority a real employee has, or the tests stop testing the production model.
+# The manifest teardown removes the accounts, and with them the membership.
+add_user "$A_ALICE" kb-users "$PROJ_GRP" "$ADMIN_GROUP"   # the demo/test admin
+add_user "$A_BOB"   kb-users "$PROJ_GRP"
+add_user "$A_CAROL" kb-users                # deliberately NOT on the project
 
 chmod 600 "$CREDS"
-printf '{"alice":"%s","bob":"%s","carol":"%s"}\n' \
-  "${PW[alice]}" "${PW[bob]}" "${PW[carol]}" > "$TEST_CREDS"
+# Tests address people by LOGICAL name ("alice"); on a namespaced run the real
+# account is kbt_<ns>_alice. This file carries the mapping and the run's paths,
+# and tests/kbenv.py is its only reader — so namespacing needs no edit anywhere
+# else in the suite.
+# Remove first, do not truncate in place. /tmp is sticky and world-writable, and
+# with fs.protected_regular=2 the kernel refuses an O_CREAT open of a file whose
+# owner differs from both the caller and the directory owner — and that check has
+# no CAP_FOWNER exemption, so on a re-seed even root is denied writing the copy a
+# previous run chowned to the developer.
+rm -f "$TEST_CREDS"
+cat > "$TEST_CREDS" <<JSON
+{
+  "ns": "${NS}",
+  "repo": "${REPO}",
+  "area": "${AREA}",
+  "project": "${PROJ_REL}",
+  "project_group": "${PROJ_GRP}",
+  "admin_group": "${ADMIN_GROUP}",
+  "users": {
+    "alice": {"name": "${A_ALICE}", "password": "${PW[$A_ALICE]}"},
+    "bob":   {"name": "${A_BOB}",   "password": "${PW[$A_BOB]}"},
+    "carol": {"name": "${A_CAROL}", "password": "${PW[$A_CAROL]}"}
+  }
+}
+JSON
 # 0600, NOT 0644: this file holds three working passwords, and one of them
 # (alice) is in the admin group — world-readable put them in reach of every
 # local account on the box.
@@ -192,22 +283,35 @@ if ! chown "$TEST_CREDS_OWNER" "$TEST_CREDS" 2>/dev/null; then
   echo "  WARNING: could not chown $TEST_CREDS to $TEST_CREDS_OWNER" >&2
 fi
 record extfile "$TEST_CREDS"
-record extfile "$CREDS"
 echo "  test credentials -> $TEST_CREDS"
 
 # ---------------------------------------------------------------------------
-say "restricted project: projects/$PROJECT"
+say "restricted project: $PROJ_REL"
 # ---------------------------------------------------------------------------
 # 2770 + setgid: only proj-<name> members can even list it. This is the folder
 # that demonstrates the whole model — carol cannot see it in the file tree, and
 # a raw SQL query as carol returns none of its rows either.
-if [ ! -d "$REPO/projects/$PROJECT" ]; then
-  mkdir -p "$REPO/projects/$PROJECT"
-  record path "$REPO/projects/$PROJECT"
+if [ ! -d "$REPO/$PROJ_REL" ]; then
+  mkdir -p "$REPO/$PROJ_REL"
+  record path "$REPO/$PROJ_REL"
 fi
-chgrp "proj-$PROJECT" "$REPO/projects/$PROJECT"
-chmod 2770 "$REPO/projects/$PROJECT"
-setfacl -d -m u::rwx,g::rwx,o::- "$REPO/projects/$PROJECT"
+chgrp "$PROJ_GRP" "$REPO/$PROJ_REL"
+chmod 2770 "$REPO/$PROJ_REL"
+setfacl -d -m u::rwx,g::rwx,o::- "$REPO/$PROJ_REL"
+
+# The run's own company area. Same mode and group as company/ itself, so the
+# documents inside behave exactly like real shared documents do.
+if [ "$AREA" != "company" ] && [ ! -d "$REPO/$AREA" ]; then
+  install -d -m 2775 -g kb-users "$REPO/$AREA"
+  # The default ACL is not optional. This script runs under `umask 077`, so
+  # without it every seeded document lands 0600 — unreadable by the kbindexer
+  # service account, which means it never enters the index and every search,
+  # To-dos and RLS test silently sees an empty corpus instead of failing.
+  # install.sh sets the same default ACL on company/ itself; setting it here too
+  # means the area does not depend on that having survived on this box.
+  setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/$AREA"
+  record path "$REPO/$AREA"
+fi
 
 # ---------------------------------------------------------------------------
 say "seed documents"
@@ -229,7 +333,7 @@ seed() {  # seed <owner> <relpath>  <<<content   (only if missing)
 # whimsy — the test suite greps for them to prove that a document is visible to
 # one user and genuinely invisible to another. Changing them breaks tests/cli.
 
-seed alice company/overview.md <<'MD'
+seed "$A_ALICE" "$AREA/overview.md" <<'MD'
 # Company Overview
 
 Welcome to the knowledgebase. Everything in `company/` is readable and writable
@@ -245,7 +349,7 @@ Try it: check a box above, then open the To-dos panel. Tasks are parsed out of
 every file you can read and aggregated there.
 MD
 
-seed bob company/onboarding.md <<'MD'
+seed "$A_BOB" "$AREA/onboarding.md" <<'MD'
 # Onboarding
 
 Things to do in your first week:
@@ -261,7 +365,7 @@ you load is served by a process running as *you* — so what you can see here is
 exactly what you could `cat` in the terminal, no more.
 MD
 
-seed alice "projects/$PROJECT/plan.md" <<'MD'
+seed "$A_ALICE" "$PROJ_REL/plan.md" <<'MD'
 # Project Acme (confidential)
 
 This file lives in a `2770` directory owned by the `proj-acme` group. Alice and
@@ -280,16 +384,16 @@ MD
 # Deliberately world-readable (0644) but inside the 2770 project directory.
 # Proves the index enforces ancestor *traversal*, not just the file's own mode:
 # carol can't reach it even though its own bits say anyone may read it.
-seed alice "projects/$PROJECT/leak.md" <<'MD'
+seed "$A_ALICE" "$PROJ_REL/leak.md" <<'MD'
 # Traversal fixture
 
 This file is mode 0644 — world-readable on its own terms. It is still invisible
 to anyone outside `proj-acme`, because they cannot traverse the directory that
 contains it. Codename walrus.
 MD
-chmod 644 "$REPO/projects/$PROJECT/leak.md" 2>/dev/null || true
+chmod 644 "$REPO/$PROJ_REL/leak.md" 2>/dev/null || true
 
-seed alice users/alice/private.md <<'MD'
+seed "$A_ALICE" "users/$A_ALICE/private.md" <<'MD'
 # Alice's private notes
 
 `users/<name>/` is mode 0700. Nobody else can read this, including other
@@ -298,7 +402,7 @@ admins, without changing the permissions on disk first.
 Secret keyword: aardvark.
 MD
 
-seed bob users/bob/private.md <<'MD'
+seed "$A_BOB" "users/$A_BOB/private.md" <<'MD'
 # Bob's private notes
 
 Same as Alice's — 0700, owner-only.
@@ -306,59 +410,65 @@ Same as Alice's — 0700, owner-only.
 Secret keyword: pangolin.
 MD
 
-seed carol users/carol/private.md <<'MD'
+seed "$A_CAROL" "users/$A_CAROL/private.md" <<'MD'
 # Carol's private notes
 
 Same again — 0700, owner-only.
 MD
 
-chmod 600 "$REPO"/users/*/private.md 2>/dev/null || true
+for u in "$A_ALICE" "$A_BOB" "$A_CAROL"; do
+  chmod 600 "$REPO/users/$u/private.md" 2>/dev/null || true
+done
 
 # ---------------------------------------------------------------------------
 say "demo artifacts"
 # ---------------------------------------------------------------------------
 # Sandboxed HTML dashboards that query the database as the viewer. These are
 # also fixtures for tests/e2e — see defaults/artifacts/README.md.
-if [ ! -d "$REPO/company/dashboards" ]; then
-  install -d -m 2775 -o alice -g kb-users "$REPO/company/dashboards"
-  record path "$REPO/company/dashboards"
+if [ ! -d "$REPO/$AREA/dashboards" ]; then
+  install -d -m 2775 -o "$A_ALICE" -g kb-users "$REPO/$AREA/dashboards"
+  record path "$REPO/$AREA/dashboards"
 fi
 for a in randoms iotest scopetest xsstest; do
-  if [ ! -e "$REPO/company/dashboards/$a.html" ]; then
-    install -m 664 -o alice -g kb-users "$SRC/defaults/artifacts/$a.html" \
-            "$REPO/company/dashboards/$a.html"
-    record path "$REPO/company/dashboards/$a.html"
-    echo "  company/dashboards/$a.html"
+  if [ ! -e "$REPO/$AREA/dashboards/$a.html" ]; then
+    install -m 664 -o "$A_ALICE" -g kb-users "$SRC/defaults/artifacts/$a.html" \
+            "$REPO/$AREA/dashboards/$a.html"
+    record path "$REPO/$AREA/dashboards/$a.html"
+    echo "  $AREA/dashboards/$a.html"
   fi
 done
 
 # The readings table the randoms dashboard renders, shared with carol so the
 # "artifact + grant reaches a specific colleague" path has something to show.
-runuser -u postgres -- psql -d "$PGDB" -v ON_ERROR_STOP=1 -q <<'SQL'
-CREATE TABLE IF NOT EXISTS u_alice.readings (
+# Unquoted heredoc: the schema and role names are namespace-derived. (There are
+# no $$ blocks in this statement, so nothing else needs escaping.)
+runuser -u postgres -- psql -d "$PGDB" -v ON_ERROR_STOP=1 -q <<SQL
+CREATE TABLE IF NOT EXISTS "u_$A_ALICE".readings (
     id bigserial PRIMARY KEY,
     value int NOT NULL,
     at timestamptz DEFAULT now()
 );
-INSERT INTO u_alice.readings (value)
+INSERT INTO "u_$A_ALICE".readings (value)
 SELECT (random() * 100)::int FROM generate_series(1, 20)
-WHERE NOT EXISTS (SELECT 1 FROM u_alice.readings);
-ALTER TABLE u_alice.readings OWNER TO alice;
-ALTER SEQUENCE u_alice.readings_id_seq OWNER TO alice;
-GRANT USAGE ON SCHEMA u_alice TO carol;
-GRANT SELECT, UPDATE, DELETE ON u_alice.readings TO carol;
+WHERE NOT EXISTS (SELECT 1 FROM "u_$A_ALICE".readings);
+ALTER TABLE "u_$A_ALICE".readings OWNER TO "$A_ALICE";
+ALTER SEQUENCE "u_$A_ALICE".readings_id_seq OWNER TO "$A_ALICE";
+GRANT USAGE ON SCHEMA "u_$A_ALICE" TO "$A_CAROL";
+GRANT SELECT, UPDATE, DELETE ON "u_$A_ALICE".readings TO "$A_CAROL";
 SQL
-echo "  u_alice.readings (shared with carol)"
+echo "  u_$A_ALICE.readings (shared with $A_CAROL)"
 
 # ---------------------------------------------------------------------------
 say "refresh the indexer"
 # ---------------------------------------------------------------------------
-# kbindexer just joined proj-$PROJECT, but supplementary groups are fixed at
+# kbindexer just joined $PROJ_GRP, but supplementary groups are fixed at
 # exec — a already-running indexer still cannot traverse the restricted folder,
 # so its content would never appear in search or the To-dos panel. Restart it.
-if systemctl is-active --quiet kb-indexer; then
+if [ "$GROUP_IS_NEW" = 1 ] && systemctl is-active --quiet kb-indexer; then
   systemctl restart kb-indexer
-  echo "  kb-indexer restarted (picked up proj-$PROJECT membership)"
+  echo "  kb-indexer restarted (kbindexer joined $PROJ_GRP)"
+else
+  echo "  kb-indexer left alone (already a member of $PROJ_GRP)"
 fi
 
 cat <<DONE
@@ -367,10 +477,13 @@ cat <<DONE
 Demo users created. Passwords: $CREDS
 Test credentials: $TEST_CREDS
 
-  alice   kb-users, proj-$PROJECT, $ADMIN_GROUP   (platform admin; has the project)
-  bob     kb-users, proj-$PROJECT
-  carol   kb-users                                (does NOT — log in as carol to see the model work)
+  $A_ALICE   kb-users, $PROJ_GRP, $ADMIN_GROUP   (platform admin; has the project)
+  $A_BOB     kb-users, $PROJ_GRP
+  $A_CAROL   kb-users   (does NOT — log in as them to see the model work)
+
+Documents:  $AREA/
+Project:    $PROJ_REL/
 
 The indexer picks the new files up within a few seconds.
-Remove it all again with: sudo bash scripts/seed-demo.sh --undo
+Remove it all again with: sudo bash scripts/seed-demo.sh ${NS:+--namespace $NS }--undo
 DONE
