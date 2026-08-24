@@ -106,7 +106,7 @@ def test_acl_info_demasks_group_bits():
     mode, users, groups, x_users, x_groups = acl_info(f)
     subprocess.run(["rm", "-rf", d], check=False)
     assert (mode >> 3) & 7 == 0, "group bits must reflect real group:: (---), not the ACL mask"
-    assert "bob" in users, "the named-user share must still be recorded"
+    assert U("bob") in users, "the named-user share must still be recorded"
 
 
 # --- HIGH: the two-arg can_read oracle stays gone --------------------------
