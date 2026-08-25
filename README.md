@@ -303,6 +303,58 @@ entirely.
 
 ---
 
+## Two trails: what changed, and who changed access
+
+They answer different questions, and reaching for the wrong one is the usual
+mistake.
+
+**Content history — what a document said, and who wrote it.** Every edit is a
+git commit attributed to the OS user who made it. The socket identifies the
+caller with `SO_PEERCRED`, so this needs no privileges of its own and everyone
+can read their own history.
+
+```bash
+kb-history --since '7 days ago'                  # everything you can see
+kb-history --since yesterday --author alice      # what one person worked on
+kb-history path/to/doc.md --show --rev <sha>     # what it used to say
+kb-history path/to/doc.md --restore --rev <sha>  # put it back
+```
+
+Readability is enforced per request against the kernel, so it can only ever show
+you documents you could open anyway.
+
+**Privileged-action audit — who changed who can see what.** The hub records
+every privileged mutation it performs, one greppable line each, to journald.
+This is the question `kb-history` cannot answer: it tracks content, never
+permissions.
+
+```bash
+journalctl -u kb-hub -g AUDIT --since yesterday
+```
+
+```
+hub AUDIT share.set actor=alice result=ok path='company/HR/x.md' scope='people'
+hub AUDIT login     actor=mallory result=DENIED source='203.0.113.4'
+```
+
+Events: `login`, `share.set`, `props.set`, `group.member`, `user.create`.
+Denials are recorded too — a refused attempt is the more interesting half when
+someone is probing.
+
+Only root and members of `sudo`/`adm`/`systemd-journal` can read it; journald
+shows everyone else nothing but their own messages, so the people being audited
+cannot read the audit.
+
+**Know the limits before relying on it.** Reads are NOT logged — you can see
+that someone was granted access, never that they opened the file. Anything done
+as root or directly on disk bypasses it. Anyone with `sudo` can edit the
+journal, so it is evidence about users, not about administrators. And journald
+rotates, so old entries age out silently.
+
+Agents investigating an incident should load the **`kb-audit`** skill, which
+covers the patterns worth chasing and — as importantly — the normal platform
+noise that is not worth reporting.
+
 ## Security posture
 
 Read **[docs/SECURITY.md](docs/SECURITY.md)** before putting this anywhere.

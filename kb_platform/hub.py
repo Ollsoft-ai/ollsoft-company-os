@@ -17,6 +17,7 @@ import asyncio
 import base64
 import grp
 import json
+import logging
 import os
 import pwd
 import re
@@ -68,6 +69,49 @@ NOLOGIN_SHELLS = {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false", ""}
 VIEWER_SHELL = "/usr/sbin/nologin"
 FULL_SHELL = "/bin/bash"
 CRON_DENY = Path("/etc/cron.deny")
+
+
+# --- audit -------------------------------------------------------------------
+# Every privileged mutation this daemon performs, on one greppable line.
+#
+# The hub is where the security boundary lives — it creates and deletes OS
+# accounts, rewrites group rosters, and changes who can open a document — and it
+# recorded none of it. `kb-history` answers "what did this document say", never
+# "who changed who can read it", so questions like "who un-shared HR last
+# Tuesday" had no answer anywhere on the box.
+#
+# journald rather than a file: it is already rotated, already survives restarts,
+# already the place people look, and it needs no new moving part. Read it with
+#
+#     journalctl -u kb-hub -g AUDIT --since yesterday
+#
+# Failures are logged too — a denied attempt is the more interesting half when
+# you are looking for someone probing.
+# Without a handler, log.info() goes nowhere: the root logger defaults to
+# WARNING and web.run_app(print=None) silences aiohttp's own output. The audit
+# trail would have been written and then dropped on the floor. `hub` prefix so
+# it is greppable next to syncd's lines in the same journal.
+logging.basicConfig(level=logging.INFO, format="hub %(message)s")
+log = logging.getLogger("kb.hub")
+
+
+def _audit(event: str, actor: str | None, ok: bool = True, **fields) -> None:
+    """One line per privileged mutation. Never raises: an audit failure must
+    not be able to fail the operation it is describing.
+
+    The first parameter is `event`, not `action`, and that is not cosmetic: with
+    **fields, ANY name used here is stolen from callers. Naming it `action`
+    made `_audit("group.member", admin, action=action)` raise
+    "got multiple values for argument 'action'" — a TypeError inside the audit
+    call, which turned an ordinary group change into a 500. The audit trail must
+    never be able to break the thing it is recording.
+    """
+    try:
+        detail = " ".join(f"{k}={v!r}" for k, v in fields.items() if v is not None)
+        log.info("AUDIT %s actor=%s result=%s %s",
+                 event, actor or "-", "ok" if ok else "DENIED", detail)
+    except Exception:
+        pass
 
 
 def _cron_deny_set(user: str, denied: bool) -> None:
@@ -1140,7 +1184,36 @@ class Hub:
     # heuristic freshness (a fraction of the time since Last-Modified) and can
     # keep serving yesterday's app.html, which points at yesterday's bundle:
     # the user deploys, reloads, and sees no change.
-    NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+    # The shell shipped with no security headers at all, so the browser had no
+    # instructions to enforce: the whole app was frameable by any site
+    # (clickjacking), and nothing bounded an injected script.
+    #
+    # Deliberately tight where it is free and loose only where the app needs
+    # it. 'unsafe-inline' for STYLE only — CodeMirror and xterm inject
+    # stylesheets at runtime; script-src stays 'self', which is what actually
+    # matters. app.html carries exactly one script tag and it is external, so
+    # nothing here needs a nonce. ws: for the CRDT and PTY sockets, blob:/data:
+    # for pasted media, frame-src 'self' for the artifact iframes.
+    SHELL_CSP = (
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+        "media-src 'self' blob:; font-src 'self' data:; "
+        "connect-src 'self' ws: wss:; frame-src 'self'; object-src 'none'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
+    )
+    NO_STORE = {
+        "Cache-Control": "no-store, must-revalidate",
+        # SHELL_CSP is NOT applied yet — enabling it broke 6 of 8 browser tests
+        # including every artifact one. The headers below are the ones that are
+        # safe unconditionally; the CSP needs the artifact iframe's opaque
+        # origin worked out first. Deliberately left defined and unused rather
+        # than deleted, so the next attempt starts from the real policy.
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "same-origin",
+        # frame-ancestors above is the modern control; this covers older
+        # browsers that never implemented it.
+        "X-Frame-Options": "SAMEORIGIN",
+    }
 
     async def login_page(self, request: web.Request) -> web.Response:
         return web.FileResponse(STATIC_DIR / "login.html", headers=self.NO_STORE)
@@ -1167,8 +1240,10 @@ class Hub:
             # Every wrong answer costs this, lock or no lock — otherwise the
             # first LOGIN_MAX_FAILS guesses are free and as fast as the network.
             await asyncio.sleep(LOGIN_FAIL_DELAY)
+            _audit("login", user, ok=False, source=_login_source(request))
             return web.json_response({"error": "invalid credentials"}, status=401)
         self._throttle.clear(keys)
+        _audit("login", user, source=_login_source(request))
         tok = common.make_token(self.key, {"user": user})
         resp = web.json_response({"ok": True, "user": user})
         resp.set_cookie(common.COOKIE_NAME, tok, httponly=True, samesite="Lax",
@@ -1597,6 +1672,7 @@ class Hub:
         # ancestor directory. Give them traverse-only (x, no listing) on the
         # ancestors so the share actually works — the surgical "just this file".
         traversed = self._grant_ancestor_traverse(rel, shared_with) if shared_with else []
+        _audit("props.set", user, path=rel, granted_traverse=traversed)
         return web.json_response({"ok": True, "granted_traverse": traversed})
 
     def _grant_ancestor_traverse(self, rel: str, entries: list) -> list:
@@ -1696,6 +1772,9 @@ class Hub:
         # Their backends were started by runuser with the old group list, so
         # neither the grant nor its removal reaches them until they restart.
         await asyncio.to_thread(_restart_backends, changed)
+        _audit("share.set", user, path=rel, scope=res["scope"],
+               group=res.get("group", ""), forked=bool(res.get("forked")),
+               regrouped=res.get("regrouped", 0))
         return web.json_response({
             "ok": True, "scope": res["scope"], "group": res.get("group", ""),
             "forked": bool(res.get("forked")), "restarted": changed,
@@ -2160,6 +2239,8 @@ class Hub:
         # what carries over access to company-shared app tables (games, todos,
         # timesheets...) that live in someone's personal u_<user> schema. Without
         # it a new account can open every page but every query behind them fails.
+        _audit("user.create", self.current_user(request), target=u,
+               kind="viewer" if viewer else "full", email=email)
         sql = (f'CREATE ROLE "{u}" LOGIN; CREATE SCHEMA "u_{u}" AUTHORIZATION "{u}"; '
                f'ALTER ROLE "{u}" SET search_path = "u_{u}", kb, public; '
                f'GRANT kb_users TO "{u}";')
@@ -2275,7 +2356,8 @@ class Hub:
         return web.json_response({"ok": True})
 
     async def admin_group_member(self, request: web.Request) -> web.Response:
-        if not self._require_admin(request):
+        admin = self._require_admin(request)
+        if not admin:
             return web.json_response({"error": "admin only"}, status=403)
         d = await request.json()
         group = str(d.get("group", "")).strip()
@@ -2289,6 +2371,8 @@ class Hub:
         except KeyError:
             return web.json_response({"error": "no such user or group"}, status=404)
         if group in ("sudo", "root", "docker") and action == "add":
+            _audit("group.member", admin, ok=False, group=group, target=user,
+                   action=action, reason="privileged group refused")
             return web.json_response({"error": "refusing to grant privileged group via UI"}, status=400)
         flag = "-a" if action == "add" else "-d"
         if _run(["gpasswd", flag, user, group]).returncode != 0:
@@ -2297,6 +2381,7 @@ class Hub:
         # spawned, so without this the change reaches the filesystem but not the
         # app — the classic "I added them and they still can't see it".
         await asyncio.to_thread(_restart_backends, [user])
+        _audit("group.member", admin, group=group, target=user, action=action)
         return web.json_response({"ok": True, "restarted": [user]})
 
     async def _bridge_ws(self, request, target_session, target_url, extra_headers):

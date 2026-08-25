@@ -63,7 +63,12 @@ def test_no_row_in_visible_files_over_grants():
         rows = _psql(f"SELECT usr, path FROM kb.visible_files LIMIT {SAMPLE}")
     if not rows:
         pytest.skip("kb.visible_files is empty")
-    bad = [(u, p) for u, p in rows if not _kernel_reads(u, p)]
+    # A path can vanish mid-sample: the suite tears down its own namespaces
+    # while this runs, and a row pointing at a just-deleted fixture is a race
+    # with teardown, not an over-grant. Only rows whose file still EXISTS can
+    # tell us anything about the index being wrong.
+    bad = [(u, p) for u, p in rows
+           if os.path.exists(f"/srv/kb/{p}") and not _kernel_reads(u, p)]
     assert not bad, (
         f"the index grants {len(bad)} of {len(rows)} sampled rows the kernel refuses "
         f"— these are searchable by someone who cannot open them: {bad[:5]}"
