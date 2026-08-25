@@ -27,6 +27,7 @@ import socket
 import stat
 import struct
 import subprocess
+import threading
 import time
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -65,17 +66,46 @@ def fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
     return common.can(path, uid, gids, 2 if need_write else 4)
 
 
+def auth_denied(reason: str) -> bytes:
+    """A y-protocol AUTH / permission-denied frame: message type 2, subtype 0,
+    then a varstring. Revocation rides the document socket's own protocol —
+    the browser's y-websocket already decodes type 2 — so no side channel is
+    needed and no non-Yjs frame ever reaches a Y.Doc decoder."""
+    body = reason.encode()
+    return (write_var_uint(2) + write_var_uint(0)
+            + write_var_uint(len(body)) + body)
+
+
+class Session:
+    """One open editing socket. The GROUP list is deliberately NOT kept: it is
+    re-read from NSS on every access re-check, because the commonest un-share
+    is "removed from the group" and the token's gids froze at connect."""
+    __slots__ = ("user", "uid", "channel")
+
+    def __init__(self, user: str, uid: int, channel: "AiohttpChannel"):
+        self.user, self.uid, self.channel = user, uid, channel
+
+
 class AiohttpChannel:
     """Adapts an aiohttp WebSocketResponse to pycrdt.websocket's Channel protocol.
 
     `on_edit` (optional) fires whenever this channel delivers a document
     MUTATION message (SYNC_STEP2/SYNC_UPDATE) — that is how the daemon knows
-    which verified user actually typed, for version-history attribution."""
+    which verified user actually typed, for version-history attribution.
 
-    def __init__(self, ws: web.WebSocketResponse, path: str, on_edit=None):
+    `can_write` and `readable` are LIVE, not connect-time facts: an un-share
+    has to reach a socket that is already open. Both cuts live here rather than
+    in the room loop because this is the one object every byte passes through
+    in both directions, whichever of pycrdt's fan-out paths is carrying it."""
+
+    def __init__(self, ws: web.WebSocketResponse, path: str, on_edit=None,
+                 can_write: bool = True):
         self._ws = ws
         self._path = path
         self._on_edit = on_edit
+        self.can_write = can_write
+        self.readable = True
+        self._notice = None
 
     @property
     def path(self) -> str:
@@ -85,18 +115,66 @@ class AiohttpChannel:
         return self
 
     async def __anext__(self) -> bytes:
-        msg = await self._ws.receive()
-        if msg.type == WSMsgType.BINARY:
-            data = msg.data
-            # YMessageType.SYNC = 0; SYNC_STEP2 = 1 / SYNC_UPDATE = 2 carry edits
-            if self._on_edit and len(data) > 1 and data[0] == 0 and data[1] in (1, 2):
-                self._on_edit()
-            return data
-        if msg.type == WSMsgType.TEXT:
-            return msg.data.encode()
-        if msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR):
-            raise StopAsyncIteration
-        return await self.__anext__()
+        # A loop, not recursion: a writer who has just lost write can have
+        # hundreds of dropped updates in flight before their tab reacts.
+        while True:
+            msg = await self._ws.receive()
+            if msg.type == WSMsgType.BINARY:
+                data = msg.data
+                # YMessageType.SYNC = 0; SYNC_STEP2 = 1 / SYNC_UPDATE = 2 carry edits
+                if len(data) > 1 and data[0] == 0 and data[1] in (1, 2):
+                    # Re-read PER MESSAGE, never trusted from connect time:
+                    # this daemon is root, so an edit it forwards is an edit it
+                    # persists — under the file's owner — long after the sharer
+                    # took write away.
+                    if not self.can_write:
+                        continue
+                    if self._on_edit:
+                        self._on_edit()
+                return data
+            if msg.type == WSMsgType.TEXT:
+                return msg.data.encode()
+            if msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR):
+                raise StopAsyncIteration
+
+    def revoke_write(self) -> None:
+        """Keep the socket, drop write: the tab goes read-only with its unsaved
+        buffer intact. The flag IS the enforcement; the notice only lets the UI
+        say why."""
+        self.can_write = False
+        self._tell("kb:write-revoked", close=False)
+
+    def revoke_read(self) -> None:
+        """Stop sending, NOW. `readable` is cleared synchronously, before any
+        await, so every send that has NOT already begun is refused. pycrdt fans
+        out with task_group.start_soon, so a fan-out already in flight may still
+        land — this cuts the stream, it does not chase a packet already gone.
+        Any grace period for copying work out is the browser's business, not
+        this daemon's."""
+        self.can_write = False
+        self.readable = False
+        self._tell("kb:read-revoked", close=True)
+
+    def _tell(self, reason: str, close: bool) -> None:
+        """Fire-and-forget: this is called from the flush loop, and ws.close()
+        waits up to the socket's close timeout for the peer's CLOSE frame. The
+        task is parked on the channel so the loop keeps a strong reference; the
+        send bypasses self.send() so the mute cannot swallow its own notice."""
+        async def run() -> None:
+            try:
+                await self._ws.send_bytes(auth_denied(reason))
+            except (ConnectionResetError, RuntimeError, OSError):
+                pass
+            # OUTSIDE the send's failure path. With the close inside it, a send
+            # that raised — peer half-gone, transport full — skipped the close
+            # and left a muted socket open until the peer's own read failed.
+            # That is exactly the case revoke_read exists for.
+            if close:
+                try:
+                    await self._ws.close()
+                except (ConnectionResetError, RuntimeError, OSError):
+                    pass
+        self._notice = asyncio.create_task(run())
 
     async def recv(self) -> bytes:
         try:
@@ -105,6 +183,9 @@ class AiohttpChannel:
             raise ConnectionResetError
 
     async def send(self, message: bytes) -> None:
+        if not self.readable:
+            return          # read revoked: the room may hold this channel for
+                            # another beat — nothing more goes out of it
         try:
             await self._ws.send_bytes(message)
         except ConnectionResetError:
@@ -259,22 +340,28 @@ class SyncDaemon:
         self.epochs: dict[str, str] = {}   # room -> CRDT lineage id
         # Who has which doc open, by HUB-VERIFIED identity (the token the hub
         # signed at connect time — not the client-claimed awareness name).
-        # room -> {id(channel): username}
-        self.presence: dict[str, dict[int, str]] = {}
+        # room -> {id(channel): Session}. Holding the channel, not just the
+        # name, is what lets an un-share reach a socket that is already open.
+        self.presence: dict[str, dict[int, Session]] = {}
         # Version-history attribution: who actually SENT edits to each room
         # since its last flush (room -> {user: last-edit ts}), and what each
         # flush window should be committed as (path -> author).
         self.recent_editors: dict[str, dict[str, float]] = {}
         self.dirty_docs: dict[str, str] = {}
+        # dirty_docs is written by flush_loop on the event loop and consumed by
+        # _git_commit in an executor THREAD. The lock is what lets the commit ask
+        # "is a flush's author still in flight?" and get a truthful answer.
+        self._attrib_lock = threading.Lock()
         self.git_dirty = False
+        self._deferred: set[str] = set()      # flushes backed off (log once, not per tick)
         self.tasks: list[asyncio.Task] = []
         self._loop_deaths: dict[str, float] = {}
 
     def note_edit(self, name: str, user: str) -> None:
         self.recent_editors.setdefault(name, {})[user] = time.time()
 
-    def _presence_add(self, name: str, key: int, user: str) -> None:
-        self.presence.setdefault(name, {})[key] = user
+    def _presence_add(self, name: str, key: int, sess: Session) -> None:
+        self.presence.setdefault(name, {})[key] = sess
 
     def _presence_drop(self, name: str, key: int) -> None:
         room = self.presence.get(name)
@@ -282,6 +369,97 @@ class SyncDaemon:
             room.pop(key, None)
             if not room:
                 self.presence.pop(name, None)
+
+    # --- live access enforcement -------------------------------------------
+    ACL_RECHECK = 4.0    # seconds between access re-checks of open sockets
+
+    def _live_gids(self, user: str, cache: dict) -> list[int] | None:
+        """This user's groups AS OF NOW, from NSS — never the gids in the token
+        their tab connected with. Those froze at connect, so "I took them out of
+        the project group" would re-check green for as long as the tab stayed
+        open. None means the account is gone; that is a revocation too."""
+        if user not in cache:
+            try:
+                cache[user] = os.getgrouplist(user, pwd.getpwnam(user).pw_gid)
+            except (KeyError, OSError):
+                cache[user] = None
+        return cache[user]
+
+    def enforce_access(self, rooms=None, users=None) -> None:
+        """Re-evaluate open sockets against the kernel and act on what changed.
+
+        Losing WRITE keeps the socket — the tab keeps its unsaved buffer and
+        goes read-only. Losing READ cuts the send path immediately.
+        Revocation only: a re-grant needs a reopen, because a tab that was told
+        it is read-only has already reconfigured itself.
+
+        `rooms` and `users` are a UNION filter (a roster rewrite reaches
+        documents nowhere near the path that triggered it); neither given means
+        every session. Synchronous on purpose — it must not await inside the
+        flush loop, and the per-pass caches keep it to a few dozen stats."""
+        acc: dict[tuple[int, str], tuple[bool, bool]] = {}
+        gids: dict[str, list[int] | None] = {}
+        # `not rooms and not users`, NOT `is None`: invalidate_handler turns a
+        # JSON `"users": []` into an empty set, and an emergent "no filter
+        # matched anything" would silently sweep nothing at all.
+        everything = not rooms and not users
+        rooms, users = rooms or set(), users or set()
+        for name, members in list(self.presence.items()):
+            in_room = name in rooms
+            if not (everything or in_room or users):
+                continue
+            p = common.REPO_ROOT / name
+            if not p.exists():
+                continue     # deleted or renamed: flush_loop retires the room,
+                             # and "gone" must not be reported as "revoked"
+            for sess in list(members.values()):
+                if not (everything or in_room or sess.user in users):
+                    continue
+                key = (sess.uid, name)
+                if key not in acc:
+                    g = self._live_gids(sess.user, gids)
+                    acc[key] = ((False, False) if g is None else
+                                (fs_can(p, sess.uid, g, False),
+                                 fs_can(p, sess.uid, g, True)))
+                read, write = acc[key]
+                ch = sess.channel
+                if not read and ch.readable:
+                    log.info("read revoked for %s on %s — cutting the session",
+                             sess.user, name)
+                    ch.revoke_read()
+                elif read and ch.can_write and not write:
+                    log.info("write revoked for %s on %s", sess.user, name)
+                    ch.revoke_write()
+
+    async def invalidate_handler(self, request: web.Request) -> web.Response:
+        """The hub says an ACL just moved — re-check the sockets it names, now.
+
+        A valid hub token is the whole authorization, because this endpoint
+        cannot grant anything: it only re-asks the kernel and acts on a NO. It
+        is registered on the root-only 0600 socket, never on the
+        world-connectable vc one."""
+        token = request.headers.get("X-KB-Auth")
+        if not (token and common.read_token(self.key, token)):
+            return web.Response(status=403, text="no identity")
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            body = {}
+        rooms = users = None
+        rel = str(body.get("path") or "").strip("/")
+        if rel:
+            p = common.resolve_repo_path(rel)
+            if p is None:
+                return web.json_response({"error": "bad path"}, status=400)
+            rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+            # A share is a SUBTREE change — the rehome walk touches every
+            # descendant — so match the folder and everything under it.
+            rooms = {n for n in self.presence if n == rel or n.startswith(rel + "/")}
+        who = body.get("users")
+        if isinstance(who, list):
+            users = {u for u in who if isinstance(u, str)}
+        self.enforce_access(rooms=rooms, users=users)
+        return web.json_response({"ok": True})
 
     # --- seeding / flushing -------------------------------------------------
     def _state_path(self, name: str) -> Path:
@@ -326,7 +504,8 @@ class SyncDaemon:
 
     def _retire_room_attr(self, name: str) -> None:
         self.recent_editors.pop(name, None)
-        self.dirty_docs.pop(name, None)
+        with self._attrib_lock:            # the commit thread reads this dict
+            self.dirty_docs.pop(name, None)
 
     async def _drop_room(self, name: str) -> None:
         """Forget the pycrdt YRoom behind `name`.
@@ -384,6 +563,19 @@ class SyncDaemon:
         self.meta.pop(name, None)
         self.seeded.discard(name)
         self.epochs.pop(name, None)
+        self._deferred.discard(name)
+        # enforce_access deliberately SKIPS a path that does not exist — an
+        # external editor saving by rename makes it briefly absent, and cutting
+        # everyone on that would be worse. So the un-share-by-move case is cut
+        # here instead, where flush_loop has already decided the room is dead
+        # and is about to destroy its epoch and state. Without this, moving a
+        # document into a private folder leaves every revoked reader still
+        # receiving each co-editor's keystroke.
+        for sess in list(self.presence.get(name, {}).values()):
+            if sess.channel.readable:
+                log.info("read revoked for %s on %s — backing file gone",
+                         sess.user, name)
+                sess.channel.revoke_read()
         self._retire_room_attr(name)   # don't leak attribution state for a gone room
         sp = self._state_path(name)
         for f in (sp, sp.with_suffix(".e")):
@@ -500,8 +692,23 @@ class SyncDaemon:
         # Poll every active room and persist any whose CRDT text has diverged from
         # disk. Polling (rather than trusting observer callbacks) is robust to
         # pycrdt observer-lifecycle quirks and is cheap at this scale.
+        next_acl = 0.0
         while True:
             await asyncio.sleep(FLUSH_DEBOUNCE)
+            # The access re-check rides this loop on its OWN, much slower tick:
+            # it is a real kernel read (a stat + getxattr per ancestor) per open
+            # socket, which at 250 ms would be the daemon's whole workload. The
+            # hub's push is what makes an un-share feel instant; this is the
+            # backstop for every ACL change that never tells us — setfacl in a
+            # terminal, an agent, a restored backup. It must never be able to
+            # stop the flushing: a doc that stops reaching disk loses work.
+            now = time.monotonic()
+            if now >= next_acl:
+                next_acl = now + self.ACL_RECHECK
+                try:
+                    self.enforce_access()
+                except Exception as e:
+                    log.warning("access re-check failed: %s", e)
             for name, txt in list(self.text_handles.items()):
                 try:
                     content = str(txt)
@@ -520,21 +727,29 @@ class SyncDaemon:
                 if content.encode() == self.last_written.get(name):
                     continue
                 try:
-                    if self._atomic_write(name, content):
+                    # Bytes and author under ONE lock. _git_commit reads
+                    # dirty_docs from a thread AFTER it has staged the worktree;
+                    # if these two halves could interleave there, it would see a
+                    # staged file with no pending author and sweep somebody's
+                    # edit into the unattributed commit.
+                    with self._attrib_lock:
+                        written = self._atomic_write(name, content)
+                        if written:
+                            # Attribute this flush window to whoever actually sent
+                            # edits (verified ws identity), most-recent typist wins.
+                            # LIMITATION (documented, by design): a commit is a whole-
+                            # file snapshot with ONE author, so when several people
+                            # co-edit a shared-writable doc in the same window, the
+                            # window is credited to the last typist — not per line.
+                            # Attribution is authoritative for singly-writable files
+                            # (a user's own/private docs); on shared docs it is the
+                            # best single guess. Per-line multi-author blame would
+                            # need Yjs clientID->user mapping (a separate feature).
+                            eds = self.recent_editors.pop(name, None)
+                            if eds:
+                                self.dirty_docs[name] = max(eds, key=eds.get)
+                    if written:
                         self.git_dirty = True
-                        # Attribute this flush window to whoever actually sent
-                        # edits (verified ws identity), most-recent typist wins.
-                        # LIMITATION (documented, by design): a commit is a whole-
-                        # file snapshot with ONE author, so when several people
-                        # co-edit a shared-writable doc in the same window, the
-                        # window is credited to the last typist — not per line.
-                        # Attribution is authoritative for singly-writable files
-                        # (a user's own/private docs); on shared docs it is the
-                        # best single guess. Per-line multi-author blame would
-                        # need Yjs clientID->user mapping (a separate feature).
-                        eds = self.recent_editors.pop(name, None)
-                        if eds:
-                            self.dirty_docs[name] = max(eds, key=eds.get)
                         self._save_doc_state(name, txt.doc)
                         log.info("flushed %s (%d chars) to disk", name, len(content))
                 except OSError as e:
@@ -659,9 +874,12 @@ class SyncDaemon:
             if not self.git_dirty:
                 continue
             self.git_dirty = False
-            docs = self.dirty_docs
-            self.dirty_docs = {}
-            await asyncio.get_event_loop().run_in_executor(None, self._git_commit, docs)
+            # The authors are taken INSIDE _git_commit, next to the git calls
+            # they belong to. Taking them here — before an executor hop that
+            # lasts seconds — orphaned every flush that landed in between: the
+            # sweep committed those bytes unattributed, and the author was then
+            # dropped on the next pass as "nothing staged".
+            await asyncio.get_event_loop().run_in_executor(None, self._git_commit)
 
     _HINTS_PER_PASS = 2000    # DoS backstop: a flood of hint FILES past this is dropped
     _CHECKS_PER_PASS = 1000   # …and a global cap on write-checks (runuser spawns) per pass,
@@ -729,7 +947,20 @@ class SyncDaemon:
                 pass
         return out
 
-    def _git_commit(self, docs: dict[str, str] | None = None) -> None:
+    def _take_authors(self) -> dict[str, str]:
+        """Consume the pending live-session authors (path -> user)."""
+        with self._attrib_lock:
+            docs, self.dirty_docs = self.dirty_docs, {}
+        return docs
+
+    def _pending_authors(self) -> list[str]:
+        """Paths whose author has NOT been consumed yet. Read AFTER staging:
+        flush_loop holds the same lock across write-then-record, so any path
+        `git add` could have seen is guaranteed to be in here."""
+        with self._attrib_lock:
+            return sorted(self.dirty_docs)
+
+    def _git_commit(self) -> None:
         """Commit the pending changes — ATTRIBUTED, ONE COMMIT PER FILE. Each
         commit touches exactly one path, so its subject names only that file and
         `--name-status` lists only that file: a commit can never disclose the
@@ -750,7 +981,7 @@ class SyncDaemon:
                 self._write_git_state()
                 return
             attrib = self._consume_attrib_hints()
-            for path, author in (docs or {}).items():       # live-session identity outranks hints
+            for path, author in self._take_authors().items():   # live-session identity outranks hints
                 if author and common.is_versioned_path(path):
                     attrib[path] = author
 
@@ -781,6 +1012,17 @@ class SyncDaemon:
             subprocess.run(["git", "-C", root, "add", "-A", "--",
                             ".", ":(exclude)**/_secrets/**",
                             ":(exclude)_secrets/**"], check=True)
+            # Hold back anything flushed while the commits above ran: its author
+            # arrived after we took the list, so sweeping it now would credit a
+            # person's edit to kb-syncd — and there is no second chance, the next
+            # pass would find nothing staged and drop the name. Unstaged, the
+            # change just waits one debounce and gets committed with its author.
+            # (LITERAL pathspecs: a document name may contain glob characters.)
+            late = self._pending_authors()
+            if late:
+                subprocess.run(["git", "-C", root, "reset", "-q", "--", *late],
+                               capture_output=True,
+                               env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"})
             if subprocess.run(["git", "-C", root, "diff", "--cached", "--quiet"],
                               capture_output=True).returncode != 0:
                 subprocess.run(["git", "-C", root, "-c", "user.name=kb-syncd",
@@ -846,10 +1088,12 @@ class SyncDaemon:
         room = await self.server.get_room(rel)
         await self.seed_room(room, rel)
         user = str(ident.get("user", "?"))
-        channel = AiohttpChannel(
-            ws, rel,
-            on_edit=(lambda: self.note_edit(rel, user)) if can_write else None)
-        self._presence_add(rel, id(channel), user)
+        # on_edit is installed unconditionally now: the channel calls it only on
+        # a mutation it actually forwards, and whether it forwards one is
+        # channel.can_write — which enforce_access flips mid-session.
+        channel = AiohttpChannel(ws, rel, can_write=can_write,
+                                 on_edit=lambda: self.note_edit(rel, user))
+        self._presence_add(rel, id(channel), Session(user, uid, channel))
         try:
             if can_write:
                 await self.server.serve(channel)
@@ -875,7 +1119,7 @@ class SyncDaemon:
                 continue
             if not fs_can(common.REPO_ROOT / rel, uid, gids, need_write=False):
                 continue
-            out[rel] = sorted(set(members.values()))
+            out[rel] = sorted({s.user for s in members.values()})
         return web.json_response({"presence": out})
 
     async def serve_readonly(self, room, channel: AiohttpChannel) -> None:
@@ -1256,6 +1500,9 @@ def make_app() -> web.Application:
     app["daemon"] = daemon
     app.router.add_get("/health", daemon.health)
     app.router.add_get("/presence", daemon.presence_handler)
+    # Hub-only control plane, main (0600 root) socket ONLY — deliberately absent
+    # from vc_app below, which is world-connectable.
+    app.router.add_post("/invalidate", daemon.invalidate_handler)
     app.router.add_get("/epoch/{path:.*}", daemon.epoch_handler)
     app.router.add_get("/ws/doc/{path:.*}", daemon.ws_doc)
     app.router.add_get("/vc/log", daemon.vc_log)
