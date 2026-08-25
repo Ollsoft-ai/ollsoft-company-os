@@ -521,6 +521,14 @@ class SyncDaemon:
             return
         try:
             await self.server.delete_room(name=name)   # pops the map, then stops
+            # YRoom.stop() unobserves but leaves room._subscription bound, so the
+            # Rust Subscription lives until the room is garbage-collected — which
+            # can happen on the executor thread running _git_commit, and pycrdt
+            # then raises "Subscription is unsendable, but is being dropped on
+            # another thread". Drop the last reference HERE, on the event loop
+            # thread that created it. (Observed once in production after this
+            # function was introduced; pinned to pycrdt-websocket 0.16.4.)
+            room._subscription = None
         except KeyError:
             return                                     # already gone; nothing to do
         except RuntimeError:
