@@ -107,6 +107,35 @@ while `access(2)` kept reporting it writable. `company/` is a deliberate
 free-for-all; the subdirectory that is not — `company/.infrastructure/`, the
 maintenance agent's input — is protected directly by dropping group write.
 
+## Audit trail — who changed access
+
+The hub records every privileged mutation it performs — the actions that change
+who can reach what — as one line per event in journald:
+
+```bash
+journalctl -u kb-hub -g AUDIT --since yesterday
+```
+
+`login` (both outcomes), `share.set`, `props.set`, `group.member`,
+`user.create`. Readable only by root and `sudo`/`adm`/`systemd-journal`;
+journald shows every other account nothing but its own messages.
+
+What it does NOT cover, and should not be relied on for:
+
+- **Reads are not logged.** The trail shows that access was granted, never that
+  a file was opened. Content exfiltration by someone who legitimately had access
+  leaves no trace here.
+- **Root bypasses it.** An administrator running `setfacl` over SSH writes no
+  audit line, and anyone with `sudo` can edit the journal. This is evidence
+  about users, not about administrators.
+- **It begins 2026-08-25.** There is nothing before that date.
+- **journald rotates.** Queries beyond the retention window return less, not an
+  error.
+
+Content history is a separate mechanism: `kb-history` reads the git trail of
+what documents said and who wrote them, gated per request against the kernel so
+it can only show what the caller could already open.
+
 ## Residual risks / known limitations
 
 - **Deferred from the 2026-08-24 audit**, each for a stated reason:

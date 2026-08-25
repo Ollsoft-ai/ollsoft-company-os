@@ -317,7 +317,33 @@ sessions; they query Postgres as themselves; they schedule work with their own
 `crontab`. Company **skills** in `/srv/kb/.claude/skills/` (root-owned,
 world-readable, admin-write-only) teach them the platform:
 `kb-orientation`, `kb-database`, `kb-automation`, `kb-artifacts`, `kb-todos`,
-`kb-history`.
+`kb-history`, `kb-audit`.
+
+## 11. The two trails
+
+Two separate mechanisms, answering two questions people routinely confuse.
+
+**Content history** — what a document said and who wrote it. `kb-syncd` commits
+every flush to `/srv/kb/.git`, attributed via the attrib-hint drop-box
+(`/run/kb/attrib`, mode 1733): the per-user backend writes a hint AS the user,
+so the hint's `st_uid` is the kernel's word on who acted. Served by
+`/api/vc/*` and the `kb-history` CLI over a `SO_PEERCRED` socket, gated per
+request with a fresh `runuser -u <user> test -r` so revocation takes effect
+immediately.
+
+`.git` is `0700 root`, so history cannot be used to read around file
+permissions.
+
+**Privileged-action audit** — who changed who can see what. `kb-history` tracks
+content and is silent on permissions, which is the question that matters after
+an incident. The hub logs every privileged mutation to journald as
+`hub AUDIT <event> actor=… result=…`: `login` (both outcomes), `share.set`,
+`props.set`, `group.member`, `user.create`.
+
+Readable only by root and `sudo`/`adm`/`systemd-journal` — journald shows every
+other account nothing but its own messages, so the audited cannot read the
+audit. Reads are not logged, and root-side changes bypass it entirely; see
+[SECURITY.md](SECURITY.md) for the full limits.
 
 ## Data-flow example: toggling a checkbox in the To-dos view
 
