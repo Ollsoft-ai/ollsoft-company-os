@@ -414,7 +414,32 @@ def read_audience(st, entries) -> tuple[bool, bool, list]:
             other = perm
     return (bool(other & 4),
             bool(group_obj & mask & 4),
-            [q for (_tag, q), pm in named.items() if pm & mask & 4])
+            [(tag, q) for (tag, q), pm in named.items() if pm & mask & 4])
+
+
+def human_readers(named) -> list:
+    """Drop service accounts from a read_audience() named list.
+
+    Every file the share panel touches carries a named grant for the indexer
+    (hub._grant_indexer) — a PRIVATE file included, because search has to read
+    it. Counting that as a reader makes everything look shared, which is
+    exactly what it did: "private" started reporting as "people" and the move
+    warning fired on every drag.
+    """
+    out = []
+    for tag, qual in named:
+        try:
+            if tag == _ACL_USER:
+                name = pwd.getpwuid(qual).pw_name
+                if name in PROTECTED_USERS or qual < 1000:
+                    continue
+            elif tag == _ACL_GROUP:
+                if grp.getgrgid(qual).gr_name == INDEXER_USER or qual < 1000:
+                    continue
+        except KeyError:
+            pass
+        out.append((tag, qual))
+    return out
 
 
 def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:

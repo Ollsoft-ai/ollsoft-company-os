@@ -893,7 +893,11 @@ class SyncDaemon:
         # could make `git log/show -- <that>` apply the magic to OTHER files and
         # dump their content. Belt-and-suspenders with the leading-":" reject.
         env = {**os.environ, "GIT_LITERAL_PATHSPECS": "1"}
-        return subprocess.run(["git", "-C", str(common.REPO_ROOT), *args],
+        # core.quotePath=false: keep the emoji folder names this KB is full of
+        # readable in diff headers instead of octal escapes. Cosmetic only —
+        # the machine-parsed path list relies on -z, never on this.
+        return subprocess.run(["git", "-C", str(common.REPO_ROOT),
+                               "-c", "core.quotePath=false", *args],
                               capture_output=True, text=True, timeout=30, env=env)
 
     def _git_capped(self, args: list[str], cap: int) -> tuple[int, str, bool]:
@@ -902,7 +906,8 @@ class SyncDaemon:
         memory (the post-hoc size checks allocated the full output first).
         Returns (returncode, text<=cap, truncated)."""
         env = {**os.environ, "GIT_LITERAL_PATHSPECS": "1"}
-        proc = subprocess.Popen(["git", "-C", str(common.REPO_ROOT), *args],
+        proc = subprocess.Popen(["git", "-C", str(common.REPO_ROOT),
+                                 "-c", "core.quotePath=false", *args],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
         try:
             data = proc.stdout.read(cap + 1)
@@ -1010,6 +1015,49 @@ class SyncDaemon:
             patch += "\n… (diff truncated — too large to display in full)\n"
         return web.json_response({"path": rel, "rev": rev, "patch": patch})
 
+    _HDR_RE = re.compile(r"^\x01[0-9a-f]{40}\x1f")
+
+    @classmethod
+    def _parse_activity(cls, stdout: str) -> list:
+        """Parse `git log -z --name-status --format=%x01%H%x1f%an%x1f%at%x1f%s`.
+
+        -z turns the stream into one flat run of NUL-separated tokens, and paths
+        arrive VERBATIM — the whole point, see the -z note in vc_activity:
+
+            \x01<sha>\x1f<author>\x1f<ts>\x1f<subject> NUL \nM NUL <path> NUL A NUL <path> NUL \x01…
+
+        Two shapes to respect: the format's trailing newline lands at the FRONT
+        of the first status token of each commit (never on the paths), and R/C
+        carry a similarity score plus TWO paths (old, new) where every other
+        status carries one.
+        """
+        commits: list = []
+        toks = stdout.split("\0")
+        i, n = 0, len(toks)
+        cur = None
+        while i < n:
+            t = toks[i]
+            # Match the whole header shape (\x01 + 40 hex + \x1f), not just the
+            # marker byte, so a stray \x01 inside a commit subject can't fake one.
+            if cls._HDR_RE.match(t):
+                # maxsplit=3 keeps a subject containing \x1f from shifting fields.
+                parts = t[1:].split("\x1f", 3)
+                cur = {"rev": parts[0][:12], "author": parts[1], "ts": int(parts[2]),
+                       "subject": parts[3] if len(parts) > 3 else "", "files": []}
+                commits.append(cur)
+                i += 1
+                continue
+            status = t.lstrip("\n")          # the format's newline, see above
+            if not status or cur is None:
+                i += 1
+                continue
+            want = 2 if status[:1] in ("R", "C") else 1
+            paths = [q for q in toks[i + 1:i + 1 + want] if q]
+            if paths:
+                cur["files"].append({"status": status[:1], "paths": paths})
+            i += 1 + want
+        return commits
+
     async def vc_activity(self, request: web.Request) -> web.Response:
         """Who changed what, when — across every file the CALLER can read.
         Commits touching only files they can't read simply don't exist to them."""
@@ -1028,7 +1076,17 @@ class SyncDaemon:
             limit = max(1, min(1000, int(request.query.get("limit", 200))))
         except ValueError:
             return web.json_response({"error": "bad limit"}, status=400)
-        base = [f"--since={since}", "--format=%x01%H%x1f%an%x1f%at%x1f%s", "--name-status"]
+        # -z is LOAD-BEARING, not a tidy-up. Without it git renders any path
+        # holding a non-ASCII byte (or a tab/quote/backslash) as a C-quoted,
+        # octal-escaped string — `"projects/\360\237\246\203 Lumii dev/x.md"`,
+        # quotes and all. That string is not a path any more, so the readability
+        # check below `test -r`s a file that cannot exist, drops the row as
+        # "you may not see this", and the feed reports a week of someone's work
+        # on an emoji-named folder as "no visible changes". -z emits raw bytes
+        # NUL-separated: never quoted, never escaped, and tabs in a filename
+        # stop being ambiguous with the status separator.
+        base = [f"--since={since}", "--format=%x01%H%x1f%an%x1f%at%x1f%s",
+                "--name-status", "-z"]
         if until:
             base.append(f"--until={until}")
         if author:
@@ -1052,18 +1110,7 @@ class SyncDaemon:
         while len(out) < limit and scanned < self._VC_MAX_SCAN and loop.time() < deadline:
             args = ["log", "-n", str(self._VC_BATCH), "--skip", str(scanned), *base]
             r = await loop.run_in_executor(None, self._git_ro, args)
-            commits, cur = [], None
-            for line in r.stdout.splitlines():
-                if line.startswith("\x01"):
-                    parts = line[1:].split("\x1f")
-                    cur = {"rev": parts[0][:12], "author": parts[1], "ts": int(parts[2]),
-                           "subject": parts[3], "files": []}
-                    commits.append(cur)
-                elif line.strip() and cur is not None:
-                    bits = line.split("\t")
-                    status_c = bits[0][:1]
-                    paths = [b for b in bits[1:] if b]
-                    cur["files"].append({"status": status_c, "paths": paths})
+            commits = self._parse_activity(r.stdout)
             if not commits:
                 break
             scanned += len(commits)

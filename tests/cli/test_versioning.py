@@ -5,6 +5,7 @@ when you can READ it now — evaluated by the kernel as you. .git stays root-onl
 the /api/vc/* endpoints (and the kb-history CLI over the peer-cred socket) are
 the only door, and every query re-checks per file."""
 import json
+import shutil
 import subprocess
 import time
 
@@ -252,3 +253,39 @@ def test_cli_reports_who_did_what(k):
     paths = [pp for c in data["commits"] for f in c["files"] for pp in f["paths"]]
     assert p in paths, f"kb-history did not report alice's edit to {p}: {paths[:10]}"
     assert all(L(c["author"]) == "alice" for c in data["commits"]), "author filter must hold"
+
+
+def test_activity_sees_non_ascii_folders(k):
+    """A folder whose name holds an emoji must appear in the feed like any other.
+
+    Regression, and the expensive kind: `git log --name-status` C-quotes any path
+    with a non-ASCII byte — "projects/\\360\\237\\246\\203 Lumii dev/x.md", quotes
+    and all. The readability gate then test -r'd that literal string, found no
+    such file, and dropped the row as unreadable. Every project folder in this KB
+    is emoji-named, so the feed answered "no visible changes" for people who had
+    been working all week, in their OWN files. A leak fails loud; this failed
+    silent and looked like the truth."""
+    sub = f"{DIR}/🦃 emoji dir"
+    assert k.post("/api/fs/mkdir", json={"path": sub}).status_code == 200
+    p = f"{sub}/todo_ěščř.md"
+    assert k.post("/api/file", json={"path": p}).status_code == 200
+    write(k, p, f"emoji path marker {TAG}\n")
+    wait_for_rev(k, p, 1)
+
+    q = {"since": "10 minutes ago", "author": U("alice"), "limit": 1000}
+    act = k.get("/api/vc/activity", params=q).json()
+    paths = [pp for c in act["commits"] for f in c["files"] for pp in f["paths"]]
+    assert p in paths, f"emoji-named folder missing from the feed: {paths[:10]}"
+    assert not any("\\" in pp or pp.startswith('"') for pp in paths), \
+        f"paths must arrive verbatim, not C-quoted: {paths[:10]}"
+
+    # and the same through the CLI an agent actually runs. Resolve the binary:
+    # /usr/local/bin is not on PATH in every shell that runs this suite.
+    cli = shutil.which("kb-history") or "/usr/local/bin/kb-history"
+    out = subprocess.run([cli, "--since", "10 minutes ago",
+                          "--author", U("alice"), "--limit", "1000", "--json"],
+                         capture_output=True, text=True, timeout=40)
+    assert out.returncode == 0, out.stderr
+    cli_paths = [pp for c in json.loads(out.stdout)["commits"]
+                 for f in c["files"] for pp in f["paths"]]
+    assert p in cli_paths, f"kb-history hid the emoji path: {cli_paths[:10]}"

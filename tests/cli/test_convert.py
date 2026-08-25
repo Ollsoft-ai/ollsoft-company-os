@@ -245,3 +245,40 @@ def test_refresh_is_a_no_op_when_the_audience_has_not_moved(tmp_path):
     assert before, "the first call should record the audience"
     c._refresh_sidecar_acl(src, side)
     assert c._aud == before, "a second call with no change should do nothing"
+
+
+# ---- a service account is not an audience ---------------------------------
+# hub._grant_indexer puts a named ACL entry for kbindexer on every file the
+# share panel touches, PRIVATE ones included, because search has to read them.
+# Counting that as a reader made "private" report as "people" and fired the
+# move warning on every drag. Caught by test_sharing, pinned here.
+
+def test_the_indexer_grant_is_not_an_audience(tmp_path):
+    import os, subprocess
+    f = tmp_path / "note.md"
+    f.write_text("x")
+    os.chmod(f, 0o600)
+    if subprocess.run(["setfacl", "-m", "u:kbindexer:r--", str(f)],
+                      capture_output=True).returncode != 0:
+        import pytest as _p
+        _p.skip("no kbindexer account on this box")
+    st, entries = common.stat_and_acl(f)
+    _world, _team, named = common.read_audience(st, entries)
+    assert named, "precondition: the indexer grant should be visible in the raw audience"
+    assert common.human_readers(named) == [], \
+        "the indexer counted as a person — every private file reads as shared"
+
+
+def test_a_real_person_still_counts(tmp_path):
+    import os, subprocess, getpass
+    f = tmp_path / "note.md"
+    f.write_text("x")
+    os.chmod(f, 0o600)
+    me = getpass.getuser()
+    if subprocess.run(["setfacl", "-m", f"u:{me}:r--", str(f)],
+                      capture_output=True).returncode != 0:
+        import pytest as _p
+        _p.skip("cannot set an ACL here")
+    st, entries = common.stat_and_acl(f)
+    _world, _team, named = common.read_audience(st, entries)
+    assert common.human_readers(named), "a real person was filtered out as a service account"

@@ -78,7 +78,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 24
+BACKEND_V = 25
 
 
 def _name_key(name: str):
@@ -342,6 +342,10 @@ def _audience_of(p: Path) -> dict:
     # and put a "this changes who can open it" modal in front of drags that
     # changed nothing.
     world, team, named = common.read_audience(st, entries)
+    # Service accounts do not count as an audience. Every file the share panel
+    # touches carries a named grant for the indexer, private ones included,
+    # because search has to read them.
+    named = common.human_readers(named)
     scope = "everyone" if world else ("people" if (team or named) else "private")
     try:
         g = grp.getgrnam(group)
