@@ -130,6 +130,16 @@ you do must be idempotent and safe to repeat on the next run.
 Not even if you are confident. Not even if it looks trivial. These go in the
 report as a recommendation for a human instead:
 
+> **To whoever edits this list next:** this section is a request to the model,
+> not a control. The thing that actually refuses is the `TOOLS` / `BANNED`
+> allowlist in `kb-maintenance.sh`, and this agent reads text that other people
+> can write — journal lines, filenames, `company/.infrastructure/health.md` —
+> so anything here can be argued with. Before adding a tool, check it cannot run
+> another command: `Bash(find:*)` was on this allowlist until 2026-08-24, and
+> `find -exec` runs anything, which made every rule below unenforceable. Same
+> for `xargs`, `awk`, `git -c core.pager=…`, `tar --to-command`, `env`,
+> `timeout`. Prefer a fixed wrapper script that takes no arguments.
+
 - **Never restart `kb-hub`.** Its cgroup contains every open web-terminal
   shell and every per-user backend; restarting it destroys running work,
   possibly someone's live `claude` session. Same for `kb-syncd`: it can lose
