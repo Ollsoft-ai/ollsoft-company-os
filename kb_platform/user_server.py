@@ -74,6 +74,13 @@ _NUM_RE = re.compile(r"(\d+)")
 _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 
 
+# Backend build marker. scripts/bounce_backends.py imports this rather than
+# restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
+# Bump whenever backend behaviour changes, so a stale backend cannot report
+# itself current and be silently skipped by a bounce.
+BACKEND_V = 25
+
+
 def _name_key(name: str):
     """Explorer-style ordering: symbols, then digits, then letters, then emoji.
 
@@ -326,17 +333,20 @@ def _audience_of(p: Path) -> dict:
         st, entries = common.stat_and_acl(p)
     except OSError:
         return {"scope": "unknown", "group": "", "people": 0}
-    mode = common.effective_mode(st, entries)
     try:
         group = grp.getgrgid(st.st_gid).gr_name
     except KeyError:
         group = str(st.st_gid)
-    if mode & 0o004:
-        scope = "everyone"
-    elif mode & 0o040:
-        scope = "people"
-    else:
-        scope = "private"
+    # Named ACL entries count. The share panel grants by named user and named
+    # group, so reading mode bits alone called every shared document "private"
+    # and put a "this changes who can open it" modal in front of drags that
+    # changed nothing.
+    world, team, named = common.read_audience(st, entries)
+    # Service accounts do not count as an audience. Every file the share panel
+    # touches carries a named grant for the indexer, private ones included,
+    # because search has to read them.
+    named = common.human_readers(named)
+    scope = "everyone" if world else ("people" if (team or named) else "private")
     try:
         g = grp.getgrnam(group)
         people = len(set(g.gr_mem) | {e.pw_name for e in pwd.getpwall()
@@ -1099,7 +1109,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 23}
+            "jobs": jobs, "raw": raw, "v": BACKEND_V}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the

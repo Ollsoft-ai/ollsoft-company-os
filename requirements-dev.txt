@@ -8,3 +8,8 @@ pytest>=8.3
 pytest-asyncio>=0.24
 playwright>=1.48
 httpx>=0.27
+# openpyxl only: tests/cli/test_convert.py proves the extraction child still
+# picks the right parser when it is handed a /proc/self/fd pin instead of a
+# path (a pin has no extension, and that silently broke xlsx once). markitdown
+# stays out — it is heavy and the docx half of that test skips without it.
+openpyxl>=3.1

@@ -244,6 +244,34 @@ PY
   fi
   echo '```'
   echo
+  echo "## Sidecar audience drift"
+  # A sidecar carries the FULL extracted text of its source and is what the
+  # index serves and what agents are told to read instead of the binary. Its
+  # ACL is cloned from the source at conversion time, and the staleness gate is
+  # a content hash — permissions are not content. convert.py now re-mirrors the
+  # audience on every sweep; this is the check that says so, and the one that
+  # notices if that ever regresses. Daily is the right cadence: permissions
+  # move on human timescales, not five-minute ones.
+  echo '```'
+  drift=0
+  while IFS= read -r side; do
+    d=$(dirname "$side"); b=$(basename "$side"); src="$d/${b#.}"; src="${src%.md}"
+    [ -f "$src" ] || continue
+    so=$(getfacl -cE -- "$src"  2>/dev/null | awk -F: '/^other::/{print $3}')
+    sd=$(getfacl -cE -- "$side" 2>/dev/null | awk -F: '/^other::/{print $3}')
+    if [ "${so:---}" = "---" ] && [ -n "$sd" ] && [ "$sd" != "---" ]; then
+      drift=$((drift+1))
+      echo "WIDER than its source: ${side#"$REPO"/}"
+    fi
+  done < <(find "$REPO" -type f -name '.*.md' -not -path '*/.git/*' 2>/dev/null)
+  if [ "$drift" -eq 0 ]; then
+    echo "no sidecar is readable by anyone its source is not"
+  else
+    echo "$drift sidecar(s) expose text their source does not — kb-convert should"
+    echo "have re-mirrored these; if they persist, _refresh_sidecar_acl regressed."
+  fi
+  echo '```'
+  echo
   echo "## Re-check of every file a staleness alert named — is it STILL stale?"
   # A bulk resweep (101 sidecars rewritten in one go) puts the indexer minutes
   # behind and trips the heartbeat's 180s threshold. That alert is true when

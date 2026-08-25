@@ -56,3 +56,42 @@ def test_hub_redirects_instead_of_500(sig):
     status = head.split(b"\r\n", 1)[0]
     assert b"500" not in status, f"malformed cookie crashed the hub: {status!r}"
     assert b"302" in status and b"/login" in head
+
+
+# ---- expiry ---------------------------------------------------------------
+# make_token and read_token both take an injectable clock. Nothing in the suite
+# ever passed it, so the ONE comparison that stops a session cookie living
+# forever — `body.get("exp", 0) < now` — had no test at all. Invert it and every
+# session on an internet-facing root daemon becomes immortal, with the whole
+# suite still green.
+
+_K = b"k" * 32
+
+
+def test_a_token_is_valid_before_it_expires():
+    tok = common.make_token(_K, {"user": "alice"}, ttl=100, now=1000.0)
+    body = common.read_token(_K, tok, now=1050.0)
+    assert body is not None and body["user"] == "alice"
+
+
+def test_a_token_is_refused_after_it_expires():
+    tok = common.make_token(_K, {"user": "alice"}, ttl=100, now=1000.0)
+    assert common.read_token(_K, tok, now=1101.0) is None, \
+        "an expired session token was accepted"
+
+
+def test_expiry_is_checked_at_the_boundary():
+    """exp is compared with <, so the token dies the instant it is reached."""
+    tok = common.make_token(_K, {"user": "alice"}, ttl=100, now=1000.0)
+    assert common.read_token(_K, tok, now=1100.0) is not None, "died one tick early"
+    assert common.read_token(_K, tok, now=1100.001) is None, "outlived its ttl"
+
+
+def test_a_zero_ttl_token_is_born_dead():
+    tok = common.make_token(_K, {"user": "alice"}, ttl=0, now=1000.0)
+    assert common.read_token(_K, tok, now=1000.001) is None
+
+
+def test_a_token_from_another_key_is_refused_regardless_of_clock():
+    tok = common.make_token(b"x" * 32, {"user": "alice"}, ttl=100, now=1000.0)
+    assert common.read_token(_K, tok, now=1000.0) is None

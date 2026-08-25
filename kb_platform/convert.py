@@ -210,9 +210,10 @@ class Converter:
         self._queue: asyncio.Queue[Path] = asyncio.Queue()
         self._queued: set[Path] = set()
         self._sig: dict[Path, tuple] = {}    # source -> (size, mtime_ns, sha) hash cache
+        self._aud: dict[Path, tuple] = {}    # source -> read audience last mirrored
 
     # -- markitdown, at arm's length ------------------------------------------
-    def _extract(self, src: Path) -> str:
+    def _extract(self, src: Path, name: str | None = None) -> str:
         """Parse `src` in a child process and return its markdown.
 
         The parse never runs in this process. Document parsers allocate in
@@ -233,10 +234,18 @@ class Converter:
         env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
         try:
             try:
+                argv = [sys.executable, "-m", "kb_platform.convert_extract",
+                        str(src), tmp_out]
+                pass_fds = ()
+                if name is not None:
+                    # `src` is /proc/self/fd/N — the child needs that fd in its
+                    # own table for the path to resolve, and the real name to
+                    # pick a parser.
+                    argv.append(name)
+                    pass_fds = (int(str(src).rsplit("/", 1)[1]),)
                 r = subprocess.run(
-                    [sys.executable, "-m", "kb_platform.convert_extract",
-                     str(src), tmp_out],
-                    capture_output=True, text=True, env=env, timeout=EXTRACT_TIMEOUT)
+                    argv, capture_output=True, text=True, env=env,
+                    timeout=EXTRACT_TIMEOUT, pass_fds=pass_fds)
             except subprocess.TimeoutExpired:
                 raise ExtractFailed(
                     f"Extraction exceeded the {EXTRACT_TIMEOUT / 60:.0f}-minute time "
@@ -295,13 +304,74 @@ class Converter:
         with self._lock:
             return self._convert_locked(src)
 
-    def _convert_locked(self, src: Path) -> str | None:
+    def _refresh_sidecar_acl(self, src: Path, side: Path) -> None:
+        """Keep an up-to-date sidecar's audience in step with its source.
+
+        The staleness gate above is a CONTENT hash, and permissions are not
+        content — so before this existed, tightening a document's audience
+        never reached its extracted text. That matters more here than almost
+        anywhere: the sidecar is what the index serves and what every agent is
+        told to read instead of the binary. Un-sharing a document left its full
+        text readable and searchable by the old audience, permanently, with
+        nothing anywhere reporting it.
+
+        Cheap by construction. The audience is read from the inode (a stat and
+        one getxattr, no fork) and setfacl runs only when it has moved since we
+        last mirrored it. The cache is in memory, so the first sweep after a
+        restart re-applies once and repairs whatever drifted while this was not
+        running.
+        """
         try:
-            st = src.lstat()
+            st, entries = common.stat_and_acl(src)
         except OSError:
-            return None
+            return
+        aud = common.read_audience(st, entries)
+        if self._aud.get(src) == aud:
+            return
+        try:
+            spec = source_acl_spec(src)
+        except OSError:
+            return
+        fd = common.open_pinned(side, False)
+        if fd is None:
+            return
+        try:
+            # By fd: setfacl re-resolves a path argument, which would be a
+            # second chance to swap the target out from under us.
+            # pass_fds is load-bearing: /proc/self/fd/N resolves in SETFACL's
+            # own descriptor table, and subprocess closes inherited fds by
+            # default, so without it every call fails ENOENT.
+            r = subprocess.run(["setfacl", "--set", spec, "--", f"/proc/self/fd/{fd}"],
+                               capture_output=True, text=True, timeout=5,
+                               pass_fds=(fd,))
+        except (OSError, subprocess.SubprocessError):
+            return
+        finally:
+            os.close(fd)
+        if r.returncode == 0:
+            self._aud[src] = aud
+
+    def _convert_locked(self, src: Path) -> str | None:
+        # ONE traversal for the whole conversion. The hash, the ACL read and
+        # the extraction child all reach the document through this fd, so a
+        # user who owns the directory cannot present a regular .docx for the
+        # is-it-a-regular-file check and swap in a symlink before the parser
+        # opens it — which would have extracted any file kbindexer can read
+        # into a sidecar the attacker can read. The write side already works
+        # this way; this is the read side catching up.
+        fd = common.open_pinned(src, False)
+        if fd is None:
+            return None            # symlink, gone, or not a regular file
+        try:
+            return self._convert_pinned(src, fd)
+        finally:
+            os.close(fd)
+
+    def _convert_pinned(self, src: Path, fd: int) -> str | None:
+        st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):     # symlinks/dirs never convert
             return None
+        pin = Path(f"/proc/self/fd/{fd}")
         side = sidecar_path(src)
 
         # cheap staleness gate: stat signature -> cached hash -> sidecar header
@@ -311,14 +381,15 @@ class Converter:
             sha = cached[2]
         else:
             try:
-                sha = sha256_file(src)
+                sha = sha256_file(pin)
             except OSError:
                 return None                   # unreadable for us: kernel's call
             self._sig[src] = (*sig_key, sha)
         try:
             with open(side, errors="replace") as f:
                 if parse_sidecar_hash(f.read(600)) == sha:
-                    return None               # sidecar already matches this source
+                    self._refresh_sidecar_acl(src, side)
+                    return None               # content matches; audience now does too
         except OSError:
             pass
 
@@ -341,7 +412,7 @@ class Converter:
             rel_pre = src.relative_to(self.root) if src.is_relative_to(self.root) else src
             log.info("extracting  %s (%.1f MB)", rel_pre, st.st_size / 1e6)
             try:
-                text = self._extract(src)   # child process; shapes/caps the text
+                text = self._extract(pin, src.name)   # child; shapes/caps the text
                 note = self._md_note
                 if not text.strip():
                     status = "empty"
@@ -358,6 +429,13 @@ class Converter:
 
         rel = src.relative_to(self.root) if src.is_relative_to(self.root) else src
         try:
+            # By PATH, not the pin: getfacl returns nothing for
+            # /proc/self/fd/N (verified). The residual is benign — a swap here
+            # can only change the ACL of a sidecar in a directory the attacker
+            # already owns, and pointing at a tighter file only tightens it.
+            # The proper fix is to read the ACL off `fd` with
+            # common.acl_entries(), which would also delete this module's
+            # duplicate getfacl text parser.
             spec = source_acl_spec(src)
             # SECURITY: every step below acts on a pinned directory fd and an
             # O_NOFOLLOW fd, never on a re-resolvable path string. The old shape
@@ -384,9 +462,14 @@ class Converter:
                                                  note).encode("utf-8"))
                     # Address the file by its fd, not its name: setfacl re-resolves
                     # a path argument and would be a second chance to swap targets.
+                    # pass_fds or this ALWAYS fails: /proc/self/fd/N is read in
+                    # setfacl's own fd table and subprocess closes inherited
+                    # descriptors by default. Without it every sidecar written
+                    # since the fd-pinning change was left owner-only, so the
+                    # team and the indexer silently lost the extracted text.
                     r = subprocess.run(
                         ["setfacl", "--set", spec, "--", f"/proc/self/fd/{fd}"],
-                        capture_output=True, text=True, timeout=5)
+                        capture_output=True, text=True, timeout=5, pass_fds=(fd,))
                     if r.returncode != 0:
                         # fail CLOSED: better an owner-only sidecar than an over-shared one
                         os.fchmod(fd, 0o600)

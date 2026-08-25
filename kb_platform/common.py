@@ -145,6 +145,33 @@ def opendir_beneath(rel: str, root: Path | None = None) -> int:
         raise
 
 
+def open_pinned(path, is_dir: bool) -> int | None:
+    """An fd for `path`, refusing symlinks. Returns None if the final component
+    is a symlink, if the path is gone, or if it is not the kind asked for.
+
+    This exists because of an asymmetry in the stdlib that has already cost us
+    a root escalation: `os.chown` takes `follow_symlinks=False` and this module
+    uses it, but `os.chmod` has no such parameter and Linux has no `lchmod`. A
+    path-based chmod on anything a user can influence is therefore a write to
+    whatever that path resolves to — and the hub runs as root.
+
+    Every root-side mutation of a repo path must open once through here and
+    then act on the FD (`os.fchmod`, `os.fchown`, `os.setxattr(fd, ...)`),
+    never on the path. That also closes the TOCTOU between checking a path and
+    acting on it, because there is only one traversal.
+
+    O_NONBLOCK matters as much as O_NOFOLLOW: without it a FIFO planted in a
+    user's own folder would hang the root daemon on open().
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if is_dir:
+        flags |= os.O_DIRECTORY
+    try:
+        return os.open(path, flags)
+    except OSError:
+        return None          # ELOOP (symlink), ENOENT, ENOTDIR — all "skip it"
+
+
 def validate_launchers(data) -> tuple[list | None, str | None]:
     """Validate a {"buttons": [...]} launcher list (company or personal).
     Returns (clean_buttons, None) or (None, error). A button opens a repo file
@@ -323,6 +350,98 @@ def unix_access(st, entries, uid: int, gids, want: int) -> bool:
     return (other & want) == want
 
 
+def can(path, uid: int, gids, want: int) -> bool:
+    """May this user perform `want` (R=4 / W=2 / X=1) on `path`?
+
+    THE access evaluator for privileged code. `unix_access` answers for a
+    single inode; this adds the part a single-inode check silently omits and
+    the kernel does not — execute on every ancestor directory up to
+    REPO_ROOT.
+
+    That omission was a live over-grant: files inside a `drwxrws---` project
+    folder are often world-readable, so an inode-only check told the hub that
+    any employee could read them while the kernel refused. Verified against
+    `runuser -u <user> -- test -r` in both directions before this landed.
+
+    Symlinks are refused (stat_and_acl pins the inode). The caller must still
+    do the operation itself as the user, or through a pinned fd.
+    """
+    if not _inode_can(path, uid, gids, want):
+        return False
+    root = REPO_ROOT.resolve()
+    parent = Path(path).resolve().parent
+    while parent != root:
+        if root not in parent.parents:
+            return False              # escaped the repo tree
+        if not _inode_can(parent, uid, gids, 1):
+            return False
+        parent = parent.parent
+    return True
+
+
+def _inode_can(path, uid: int, gids, want: int) -> bool:
+    """`want` on ONE inode, ignoring how it is reached. Kernel-exact including
+    POSIX ACLs: the share feature grants by named entry, so bare mode bits both
+    under-grant (named users) and over-grant (st_mode's group bits are the
+    mask)."""
+    try:
+        st, entries = stat_and_acl(path)   # one pinned inode; symlink -> ELOOP
+    except OSError:
+        return False
+    return unix_access(st, entries, uid, gids, want)
+
+
+def read_audience(st, entries) -> tuple[bool, bool, list]:
+    """Who can read this inode: (world, owning_group, [named qualifiers]).
+
+    Named ACL entries count, and the mask is applied. Anything that reports an
+    inode's breadth must use this: the share panel grants by NAMED entry, so a
+    mode-bits-only reading calls every shared document "private".
+    """
+    mode = stat_mod.S_IMODE(st.st_mode)
+    if entries is None:
+        return bool(mode & 0o004), bool(mode & 0o040), []
+    group_obj, mask, other = 0, 7, mode & 7
+    named: dict = {}
+    for tag, perm, qual in entries:
+        if tag == _ACL_GROUP_OBJ:
+            group_obj = perm
+        elif tag in (_ACL_GROUP, _ACL_USER):
+            named[(tag, qual)] = perm
+        elif tag == _ACL_MASK:
+            mask = perm
+        elif tag == _ACL_OTHER:
+            other = perm
+    return (bool(other & 4),
+            bool(group_obj & mask & 4),
+            [(tag, q) for (tag, q), pm in named.items() if pm & mask & 4])
+
+
+def human_readers(named) -> list:
+    """Drop service accounts from a read_audience() named list.
+
+    Every file the share panel touches carries a named grant for the indexer
+    (hub._grant_indexer) — a PRIVATE file included, because search has to read
+    it. Counting that as a reader makes everything look shared, which is
+    exactly what it did: "private" started reporting as "people" and the move
+    warning fired on every drag.
+    """
+    out = []
+    for tag, qual in named:
+        try:
+            if tag == _ACL_USER:
+                name = pwd.getpwuid(qual).pw_name
+                if name in PROTECTED_USERS or qual < 1000:
+                    continue
+            elif tag == _ACL_GROUP:
+                if grp.getgrgid(qual).gr_name == INDEXER_USER or qual < 1000:
+                    continue
+        except KeyError:
+            pass
+        out.append((tag, qual))
+    return out
+
+
 def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:
     """The mode a newly created child of `parent` should end up with: the same
     audience as the folder it lands in.
@@ -431,41 +550,50 @@ def reset_to_parent_audience(path, is_dir: bool) -> None:
     still can. Only a setgid parent is followed — elsewhere the group is
     nobody's business but the owner's."""
     parent = os.path.dirname(str(path)) or "."
+    # One traversal, then every mutation goes through the fd. A symlink here
+    # used to redirect a ROOT chmod onto any inode on the box: the share
+    # panel's "inherit" walks a folder its owner controls, and os.chmod
+    # follows symlinks with no way to say otherwise. See open_pinned().
+    fd = open_pinned(path, is_dir)
+    if fd is None:
+        return            # symlink, gone, or not the kind we were told: skip it
     try:
-        pst = os.stat(parent)
-        if pst.st_mode & stat_mod.S_ISGID and os.lstat(path).st_gid != pst.st_gid:
-            os.chown(path, -1, pst.st_gid, follow_symlinks=False)
-    except OSError:
-        pass          # not ours to regroup; the mode work below still applies
-    try:
-        dflt = os.getxattr(parent, ACL_DEFAULT_XATTR)
-    except OSError:
-        dflt = None
-    for attr in (ACL_XATTR, ACL_DEFAULT_XATTR) if is_dir else (ACL_XATTR,):
         try:
-            os.removexattr(path, attr, follow_symlinks=False)
+            pst = os.stat(parent)
+            if pst.st_mode & stat_mod.S_ISGID and os.fstat(fd).st_gid != pst.st_gid:
+                os.fchown(fd, -1, pst.st_gid)
+        except OSError:
+            pass      # not ours to regroup; the mode work below still applies
+        try:
+            dflt = os.getxattr(parent, ACL_DEFAULT_XATTR)
+        except OSError:
+            dflt = None
+        for attr in (ACL_XATTR, ACL_DEFAULT_XATTR) if is_dir else (ACL_XATTR,):
+            try:
+                os.removexattr(fd, attr)
+            except OSError:
+                pass
+        if dflt and not is_secret_path(str(path)):
+            try:                   # reproduce the kernel's inheritance
+                os.setxattr(fd, ACL_XATTR, dflt)
+                if is_dir:
+                    os.setxattr(fd, ACL_DEFAULT_XATTR, dflt)
+                else:
+                    # On create the kernel intersects the inherited ACL with the
+                    # create mode, which for a regular file carries no execute
+                    # bit. chmod with an ACL present rewrites owner/mask/other,
+                    # which is exactly that intersection — without it a copied
+                    # document comes out executable and mask-widened.
+                    os.fchmod(fd, stat_mod.S_IMODE(os.fstat(fd).st_mode) & 0o666)
+                return
+            except OSError:
+                pass
+        try:
+            os.fchmod(fd, birth_mode(parent, is_dir, str(path)))
         except OSError:
             pass
-    if dflt and not is_secret_path(str(path)):
-        try:                       # reproduce the kernel's inheritance
-            os.setxattr(path, ACL_XATTR, dflt, follow_symlinks=False)
-            if is_dir:
-                os.setxattr(path, ACL_DEFAULT_XATTR, dflt, follow_symlinks=False)
-            else:
-                # On create the kernel intersects the inherited ACL with the
-                # create mode, which for a regular file carries no execute bit.
-                # chmod with an ACL present rewrites owner/mask/other, which is
-                # exactly that intersection — without it a copied document comes
-                # out executable and mask-widened.
-                st = os.stat(path)
-                os.chmod(path, stat_mod.S_IMODE(st.st_mode) & 0o666)
-            return
-        except OSError:
-            pass
-    try:
-        os.chmod(path, birth_mode(parent, is_dir, str(path)))
-    except OSError:
-        pass
+    finally:
+        os.close(fd)
 
 
 def effective_mode(st, entries) -> int:
