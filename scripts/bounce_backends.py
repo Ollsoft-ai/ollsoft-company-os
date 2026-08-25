@@ -37,7 +37,13 @@ BASE = "http://127.0.0.1:8300"
 # product as real people, so it needs a password for each account it bounces.
 CREDS_FILE = os.environ.get("KB_TEST_CREDS") or next(
     (str(f) for f in sorted(Path("/tmp").glob("kb-test-creds*.json"))), "")
-MIN_V = 20          # bump together with _cron_listing's "v" in user_server.py
+# Imported, never restated: this was MIN_V = 20 against a backend serving v: 23,
+# so every backend reported itself current and the bounce silently skipped them.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from kb_platform.user_server import BACKEND_V as MIN_V
+except Exception:                     # deployed copy without the source tree
+    MIN_V = 24
 
 
 def load_creds():

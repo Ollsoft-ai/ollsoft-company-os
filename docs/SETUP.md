@@ -221,6 +221,7 @@ Restart the services after editing.
 
 ## Exposing it
 
-Do **not** point a network at `:8300`. There is no TLS and no login rate limiting.
-Read [remote-access.md](remote-access.md) and [SECURITY.md](SECURITY.md) first,
-and rotate any passwords generated during install.
+Do **not** point a network at `:8300`. There is no TLS, and the login throttle is
+a backstop rather than a front door. Read [remote-access.md](remote-access.md)
+and [SECURITY.md](SECURITY.md) first, and rotate any passwords generated during
+install.

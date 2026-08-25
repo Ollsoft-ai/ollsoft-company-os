@@ -52,8 +52,16 @@ if [ -n "$newest" ]; then
   rel=${newest#* }; rel=${rel#"$REPO"/}
   age=$(( $(date +%s) - disk_t ))
   if [ "$age" -gt 120 ]; then          # grace: give the indexer 2 min to catch up
-    idx_t=$(runuser -u postgres -- psql -d "$PGDB" -tAc \
-      "SELECT COALESCE(floor(mtime),0)::bigint FROM kb.files WHERE path='$rel'" 2>/dev/null || echo 0)
+    # :'rel' is psql's own literal quoting. $rel is a FILENAME off the disk and
+    # company/ is group-writable, so anyone could name a file
+    #   notes'; SELECT ...;--.md
+    # and have psql -c run it as the postgres superuser, unattended, every five
+    # minutes from a root timer. Never interpolate a path into SQL text here.
+    # The query comes in on STDIN, not -c: psql performs :'rel' variable
+    # quoting only on input it lexes itself, and -c strings bypass that.
+    idx_t=$(runuser -u postgres -- psql -d "$PGDB" -tA -v rel="$rel" \
+      <<<"SELECT COALESCE(floor(mtime),0)::bigint FROM kb.files WHERE path=:'rel'" \
+      2>/dev/null || echo 0)
     idx_t=${idx_t:-0}
     if [ $(( disk_t - idx_t )) -gt 180 ]; then
       note "search index is STALE: $rel changed $(( age / 60 ))m ago, index still has the old version"

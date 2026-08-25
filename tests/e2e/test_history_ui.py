@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 from conftest import BASE, CREDS, login, open_doc, doc_text
-from kbenv import U, doc
+from kbenv import U, doc, backend_v
 
 TAG = str(int(time.time()))
 DOC = doc(f"hist_{TAG}.md")
@@ -16,11 +16,6 @@ def api(user):
     c = httpx.Client(base_url=BASE, timeout=25)
     c.post("/login", data={"username": U(user), "password": CREDS[user]})
     return c
-
-
-def backend_v(c):
-    r = c.get("/api/cron")
-    return r.json().get("v", 0) if r.status_code == 200 else 0
 
 
 @pytest.fixture(scope="module")

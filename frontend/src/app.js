@@ -5411,7 +5411,7 @@ function wireTerminal() {
     hint.title = "In a full-screen terminal app (e.g. claude code) the app owns "
       + "the mouse, so hold " + SELECT_MODIFIER + " while dragging to select text. "
       + "Selecting copies it; "
-      + (IS_MAC ? "⌘V" : "Ctrl+V or Ctrl+Shift+V") + " pastes.";
+      + (IS_APPLE ? "⌘V" : "Ctrl+V or Ctrl+Shift+V") + " pastes.";
   }
   // Ctrl+` lives in BINDINGS with every other shortcut — see wireShortcuts().
   // Refit whenever the terminal area actually changes size (panel resize,
@@ -5978,12 +5978,11 @@ function renderTermTabs() {
   }
 }
 
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 // The modifier that forces a LOCAL text selection when a mouse-tracking app
 // (claude code, htop, vim) owns the mouse: xterm hard-codes Shift on Linux/
 // Windows and Option (Alt) on Mac — and only if macOptionClickForcesSelection
 // is on, which we enable below.
-const SELECT_MODIFIER = IS_MAC ? "⌥ Option" : "Shift";
+const SELECT_MODIFIER = IS_APPLE ? "⌥ Option" : "Shift";
 
 function copyTermSelection(t, quiet) {
   const s = t.term.getSelection();
@@ -6067,7 +6066,7 @@ function wireTermClipboard(t) {
     // permission is needed — the text landed TWICE, because Chrome ran its own
     // paste-as-plain-text regardless of the preventDefault we had here. One
     // paste path is the only way to be sure there is exactly one paste.
-    if (ev.code === "KeyV" && (ev.shiftKey || !IS_MAC)) return false;
+    if (ev.code === "KeyV" && (ev.shiftKey || !IS_APPLE)) return false;
     return true;
   });
 }

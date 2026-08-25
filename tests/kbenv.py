@@ -112,3 +112,31 @@ def home(logical: str, name: str = "") -> str:
 def full(rel: str) -> Path:
     """Repo-relative -> absolute on disk."""
     return REPO / rel
+
+
+def backend_v(c, timeout: float = 20.0) -> int:
+    """The per-user backend's build marker, waiting for it to come up first.
+
+    A backend is spawned on demand, so the first request against a fresh
+    account can land before it is answering. The three copies of this helper
+    that used to live in test modules returned 0 on any non-200 — turning
+    "not up yet" into "too old", which the callers render as
+    `pytest.skip("backend predates the ... hooks")`. A test that silently skips
+    reads as green, so the suite quietly stopped covering versioning on any run
+    that raced a cold backend.
+
+    Returns 0 only after genuinely waiting. Callers still decide what a low
+    version means.
+    """
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while True:
+        try:
+            r = c.get("/api/cron")
+            if r.status_code == 200:
+                return int(r.json().get("v", 0))
+        except Exception:
+            pass
+        if _t.monotonic() >= deadline:
+            return 0
+        _t.sleep(0.5)

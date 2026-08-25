@@ -5,7 +5,7 @@ description: Use when the user wants an interactive view, dashboard, chart, or s
 
 # Building an artifact
 
-An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: it has no network access, no cookies, no access to the app around it. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read a file, write a file, toggle a task — **each executed as the person viewing the artifact**.
+An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, toggle a task, upload, copy to clipboard, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
 
 Create one by writing an `.html` file, e.g. `company/dashboards/mychart.html` (shared) or `users/<you>/scratch.html` (private).
 
@@ -68,6 +68,8 @@ Writing a `.md` file that someone is live-editing is safe: the change flows thro
 # Sandbox rules (important)
 
 The iframe blocks all external resources. **Everything must be inline**: no `<script src>`, no external CSS, no web fonts, no remote images. Write your CSS in a `<style>` tag and your JS in `<script>`. Use system fonts. To auto-refresh, `setInterval(render, 2000)`.
+
+`fetch()` from inside the artifact is blocked too. To call an API, send `{type:"kb-fetch", url, method, headers, body}` over the bridge: the **hub** makes the request, checks the admin's per-artifact domain allowlist, and substitutes any header value written as `secret:_secrets/<file>` server-side — so the credential is used without the artifact ever seeing it. No allowlist entry = 403 with a message saying so.
 
 # Sharing an artifact = two deliberate acts
 
@@ -132,4 +134,4 @@ blue-accented — the live example is `company/cron-demo/pulse.html`.
 
 # Trust note
 
-Every bridge action runs as the viewer, so an artifact can do anything the *viewer* could do in a terminal — including **reading and writing that viewer's files** — and nothing more. The sandbox + no-network + per-viewer identity protect every viewer's session, other users' data, and anything outside the viewer's own permissions. They do **not** protect a viewer from a hostile artifact author acting *within* the viewer's own authority (e.g. overwriting a file the viewer can write). Now that artifacts can write files, treat opening one like running a shared script: only open artifacts from people you'd trust with your own access.
+Every bridge action runs as the viewer, so an artifact can do anything the *viewer* could do in a terminal — including **reading and writing that viewer's files** — and nothing more. The sandbox + allowlisted-only egress + per-viewer identity protect every viewer's session, other users' data, and anything outside the viewer's own permissions. They do **not** protect a viewer from a hostile artifact author acting *within* the viewer's own authority (e.g. overwriting a file the viewer can write). Now that artifacts can write files, treat opening one like running a shared script: only open artifacts from people you'd trust with your own access.
