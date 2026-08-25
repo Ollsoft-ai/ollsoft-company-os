@@ -20,7 +20,7 @@ services, so it isn't something to install on your laptop.
 
 ```bash
 sudo bash scripts/install.sh --admin $USER
-sudo bash scripts/seed-demo.sh
+sudo bash scripts/seed-demo.sh          # optional: the human-facing demo company
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/playwright install chromium
@@ -42,9 +42,15 @@ sudo bash scripts/deploy.sh
 .venv/bin/python -m pytest tests/ -q        # everything, needs chromium
 ```
 
-`tests/cli/` is the loop you want while working. The suite assumes the demo
-users `alice`, `bob` and `carol` exist — that's deliberate: most of these tests
-assert that *one user cannot see another's data*, which needs real accounts.
+`tests/cli/` is the loop you want while working. Nothing needs seeding first:
+the suite creates its own throwaway accounts and documents in a namespace of its
+own and removes them afterwards. Real accounts are essential — most of these
+tests assert that *one user cannot see another's data*, which no mock reproduces
+— but they are made and destroyed per run, so a run never touches real content.
+
+Address people and paths through `tests/kbenv.py`, never by literal name:
+`U("alice")` is the account that exists right now, `doc("x.md")` is this run's
+copy of a document. A literal only passes on a box that happens to have a demo.
 
 Please add a test for behaviour you change. The security-relevant ones
 (`test_rls.py`, `test_visibility.py`, `test_security_fixes.py`) are the ones that

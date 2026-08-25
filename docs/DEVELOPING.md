@@ -35,12 +35,22 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
 - `tests/cli/` drive the HTTP API with `httpx` (permission matrix, RLS, admin,
   security regressions). `tests/e2e/` drive a real chromium via Playwright
   (multiplayer convergence, the editor, artifacts, the file manager).
+- The root `conftest.py` seeds a namespace in `pytest_configure` and removes it
+  in `pytest_unconfigure`. It has to be `configure`, not a fixture: ~20 modules
+  read the credentials file at IMPORT time, so it must exist before collection.
+- `tests/kbenv.py` maps logical names to what exists right now — `U("alice")`,
+  `doc("x.md")`, `proj()`, `home("bob")`, and `L(real)` for names coming BACK
+  from the API. Use it for every path and account; never a literal.
 - `tests/e2e/conftest.py` has the `browser` fixture + `login()`/`open_doc()`
-  helpers. Test credentials come from `/tmp/kb-test-creds.json` (write it once:
-  `{"alice": "...", "bob": "...", "carol": "..."}`).
+  helpers. It resolves `kbenv` LAZILY — it is an "initial" conftest whenever
+  pytest is given `tests/e2e`, so pytest loads it before `pytest_configure` has
+  seeded anything. A module-level import there breaks every e2e run at
+  collection.
 - **Tests that add ACLs must clean up** (including any auto-granted ancestor
   traverse) — otherwise they pollute state across runs now that shares are
   effective. See `test_share_reachable.py` for the pattern.
+- **CI runs `tests/cli` only.** `tests/e2e` is not gated, which is exactly how it
+  rotted unnoticed once — if you change shared test plumbing, run it by hand.
 
 ## How to add things
 

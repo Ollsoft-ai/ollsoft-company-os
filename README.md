@@ -195,7 +195,7 @@ ollsoft-company-os/
 │   └── build.mjs           esbuild bundler
 ├── scripts/
 │   ├── install.sh          one-command install / upgrade  ← start here
-│   ├── seed-demo.sh        optional sample company (alice/bob/carol + acme)
+│   ├── seed-demo.sh        sample company, and the test suite's fixtures
 │   ├── deploy.sh           redeploy code after editing it (development)
 │   ├── kb-heartbeat.sh     functional health check (kb-heartbeat.timer, 5 min)
 │   ├── kb-alert.sh         append an alert to /var/log/kb/alerts.log (push is opt-in)
@@ -280,17 +280,23 @@ sudo /opt/kb-platform/scripts/kb-maintenance.sh --dry-run --stdout   # triage no
 
 ### Running the tests
 
-The suite assumes the demo company exists, because it tests the permission model
-against real accounts. `seed-demo.sh` writes the logins the tests read from
-`/tmp/kb-test-creds.json`, so run it first:
+The suite seeds and removes its own fixtures — there is nothing to set up first.
+Each run creates a namespace of its own (`company/kbtest-<ns>/`,
+`projects/kbtest-<ns>-acme/`, throwaway `kbt_<ns>_*` accounts), and removes all of
+it afterwards, so a run cannot collide with — or delete — real content. It needs
+passwordless sudo to create those accounts.
 
 ```bash
-sudo bash scripts/seed-demo.sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/playwright install chromium        # for tests/e2e
 .venv/bin/python -m pytest tests/ -q
 ```
+
+Set `KB_TEST_NS=<id>` to reuse a namespace you seeded yourself (conftest will not
+tear down what it did not create — this is what CI does, because pytest runs
+there as an account without sudo), or `KB_TEST_NO_SEED=1` to skip the lifecycle
+entirely.
 
 `tests/cli/` needs no browser and is the fast loop. See
 **[docs/DEVELOPING.md](docs/DEVELOPING.md)**.
