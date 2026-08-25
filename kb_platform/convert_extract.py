@@ -91,7 +91,13 @@ def extract_xlsx(src: Path) -> str:
     """
     import openpyxl
 
-    wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
+    # A file OBJECT, not the path: openpyxl picks its reader from the
+    # filename's extension, and the parent hands us a /proc/self/fd/N pin
+    # (no extension) so the document cannot be swapped mid-parse. Reading the
+    # handle decides the format from the zip content instead, which is the
+    # more honest test anyway.
+    fh = open(src, "rb")
+    wb = openpyxl.load_workbook(fh, read_only=True, data_only=True)
     out: list[str] = []
     used = 0
     stopped_early = False
@@ -121,6 +127,7 @@ def extract_xlsx(src: Path) -> str:
                 out.append("_(empty sheet)_")
     finally:
         wb.close()                                 # releases the streaming file handles
+        fh.close()
 
     if stopped_early:
         out.append(f"\n> ⚠ This sheet sample is capped at {XLSX_ROW_CAP} rows per sheet "
@@ -160,14 +167,20 @@ def _volunteer_for_the_oom_killer():
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: python -m kb_platform.convert_extract <source> <out-file>",
+    if len(argv) not in (3, 4):
+        print("usage: python -m kb_platform.convert_extract <source> <out-file> "
+              "[<original-name>]",
               file=sys.stderr)
         return 64
     src, out = Path(argv[1]), Path(argv[2])
     _volunteer_for_the_oom_killer()
 
-    suffix = src.suffix.lower()
+    # argv[3] is the document's real NAME, given when argv[1] is a
+    # /proc/self/fd/N pin. The parent opens the source once, O_NOFOLLOW, and
+    # hands us that fd so a swap between its check and our open cannot
+    # redirect us at another file (convert.py:_convert_locked). A pin has no
+    # extension, and every parser below dispatches on the suffix.
+    suffix = Path(argv[3] if len(argv) == 4 else src).suffix.lower()
     note = ""
     try:
         if suffix == ".xlsx":

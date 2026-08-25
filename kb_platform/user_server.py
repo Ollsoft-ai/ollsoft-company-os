@@ -326,17 +326,16 @@ def _audience_of(p: Path) -> dict:
         st, entries = common.stat_and_acl(p)
     except OSError:
         return {"scope": "unknown", "group": "", "people": 0}
-    mode = common.effective_mode(st, entries)
     try:
         group = grp.getgrgid(st.st_gid).gr_name
     except KeyError:
         group = str(st.st_gid)
-    if mode & 0o004:
-        scope = "everyone"
-    elif mode & 0o040:
-        scope = "people"
-    else:
-        scope = "private"
+    # Named ACL entries count. The share panel grants by named user and named
+    # group, so reading mode bits alone called every shared document "private"
+    # and put a "this changes who can open it" modal in front of drags that
+    # changed nothing.
+    world, team, named = common.read_audience(st, entries)
+    scope = "everyone" if world else ("people" if (team or named) else "private")
     try:
         g = grp.getgrnam(group)
         people = len(set(g.gr_mem) | {e.pw_name for e in pwd.getpwall()

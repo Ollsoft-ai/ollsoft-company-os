@@ -152,13 +152,11 @@ def _uid_gids(user: str) -> tuple[int, list[int]]:
 
 def _fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
     """Evaluate a user's Unix read/write access to path (root can't rely on
-    os.access). Kernel-exact including POSIX ACLs — the platform's own share
-    feature grants by ACL, so bare mode bits routinely lie here."""
-    try:
-        st, entries = common.stat_and_acl(path)   # one pinned inode; symlink -> ELOOP
-    except OSError:
-        return False
-    return common.unix_access(st, entries, uid, gids, 2 if need_write else 4)
+    os.access). One adapter over common.can — which also walks the ancestors.
+    This used to check the inode alone and so authorised reads the kernel
+    refuses: world-readable files inside a project folder the caller cannot
+    traverse."""
+    return common.can(path, uid, gids, 2 if need_write else 4)
 
 
 def _is_admin(user: str) -> bool:
@@ -208,33 +206,11 @@ def _dir_traversable(dfd: int, st: os.stat_result, flag: str, name: str) -> bool
         return common.unix_access(st, entries, e.pw_uid,
                                   os.getgrouplist(name, e.pw_gid), 1)
     gid = grp.getgrnam(name).gr_gid
-    m = st.st_mode
-    if entries is None:
-        if st.st_gid == gid:
-            return bool((m >> 3) & 1)
-        return bool(m & 1)
-    # Mirror the kernel for a hypothetical user whose only relevant group is
-    # `name`: EVERY matching group-class entry contributes and any grant wins
-    # (a named entry for the owning group is legal and must be unioned, not
-    # shadowed); if no group-class entry matches, `other` decides.
-    group_obj, mask, named_g, other = 0, 7, {}, m & 7
-    for tag, perm, qual in entries:
-        if tag == common._ACL_GROUP_OBJ:
-            group_obj = perm
-        elif tag == common._ACL_GROUP:
-            named_g[qual] = perm
-        elif tag == common._ACL_MASK:
-            mask = perm
-        elif tag == common._ACL_OTHER:
-            other = perm
-    granted, matched = 0, False
-    if st.st_gid == gid:
-        granted, matched = granted | group_obj, True
-    if gid in named_g:
-        granted, matched = granted | named_g[gid], True
-    if matched:
-        return bool(granted & mask & 1)
-    return bool(other & 1)
+    # A hypothetical user whose only relevant group is `name`: uid -1 can never
+    # match an owner, so evaluation falls to the group class, where every
+    # matching entry is unioned and the mask applied. This was 35 lines of
+    # hand-rolled kernel emulation that duplicated unix_access exactly.
+    return common.unix_access(st, entries, -1, [gid], 1)
 
 
 def _grp_ok(gid: int) -> bool:
@@ -1478,6 +1454,12 @@ class Hub:
             return web.json_response({"error": "not found"}, status=404)
         st = os.lstat(p)
         uid, gids = _uid_gids(user)
+        # Authentication is not authorisation. This returns owner, group, mode
+        # and the full named-ACL list — the company's whole sharing topology —
+        # plus a 404-vs-200 existence oracle. Its sibling fs_share_get has
+        # always gated on readability; this one never did.
+        if not _fs_can(p, uid, gids, False) and not _is_admin(user):
+            return web.json_response({"error": "no access"}, status=403)
         return web.json_response({
             "path": str(p.relative_to(common.REPO_ROOT)),
             "owner": _owner_name(p) or str(st.st_uid),
@@ -2133,6 +2115,10 @@ class Hub:
         # characters is not a password; twelve of anything memorable is.
         if len(pw) < 12:
             return web.json_response({"error": "password must be at least 12 characters \u2014 use a short phrase"}, status=400)
+        # chpasswd reads one user:password per LINE from stdin, so a newline in
+        # the password is a second instruction to a root helper.
+        if "\n" in pw or "\r" in pw:
+            return web.json_response({"error": "password cannot contain line breaks"}, status=400)
         try:
             pwd.getpwnam(u)
             return web.json_response({"error": "user already exists"}, status=409)
@@ -2153,8 +2139,30 @@ class Hub:
             rollback(); return web.json_response({"error": "setting password failed"}, status=500)
         if _run(["gpasswd", "-a", u, "kb-users"]).returncode != 0:
             rollback(); return web.json_response({"error": "adding to kb-users failed"}, status=500)
-        pdir = common.REPO_ROOT / "users" / u
-        _run(["install", "-d", "-m", "700", "-o", u, "-g", u, str(pdir)])
+        # users/ is group-writable, so any member can pre-plant an entry named
+        # after a future account — and new hires are named in the KB, so the
+        # name is guessable. `install -d` would follow a symlink there and hand
+        # its TARGET to the new user (reproduced: a victim dir went
+        # krystof:krystof -> nobody:nogroup). mkdir at a pinned dir fd fails
+        # EEXIST on anything already sitting at the name, symlink included.
+        try:
+            e = pwd.getpwnam(u)
+            pfd = common.opendir_beneath("users")
+            try:
+                os.mkdir(u, 0o700, dir_fd=pfd)
+                dfd = os.open(u, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                              dir_fd=pfd)
+                try:
+                    os.fchown(dfd, e.pw_uid, e.pw_gid)
+                    os.fchmod(dfd, 0o700)
+                finally:
+                    os.close(dfd)
+            finally:
+                os.close(pfd)
+        except (OSError, KeyError) as exc:
+            rollback()
+            return web.json_response(
+                {"error": f"could not create the account's folder: {exc}"}, status=500)
         # kb_users is the DB-side mirror of the kb-users OS group: joining it is
         # what carries over access to company-shared app tables (games, todos,
         # timesheets...) that live in someone's personal u_<user> schema. Without

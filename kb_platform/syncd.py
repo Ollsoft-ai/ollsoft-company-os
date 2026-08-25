@@ -53,36 +53,16 @@ DOC_STATE_DIR = Path("/var/lib/kb-syncd")
 GIT_DEBOUNCE = 4.0      # seconds of quiet before an auto-commit
 
 
-def _perm(path: Path, uid: int, gids: list[int], want: int) -> bool:
-    """Kernel-exact access check on one object, symlinks refused."""
-    try:
-        st, entries = common.stat_and_acl(path)
-    except OSError:
-        return False                      # missing, or a symlink (ELOOP)
-    return common.unix_access(st, entries, uid, gids, want)
-
-
 def fs_can(path: Path, uid: int, gids: list[int], need_write: bool) -> bool:
     """Replicate FULL Unix access for a specific user, since root (this daemon)
-    bypasses os.access. Kernel-exact including POSIX ACLs — the platform's own
-    share feature grants by ACL, so bare mode bits both under-grant (named
-    entries) and over-grant (the mask shows in st_mode's group bits). The
-    caller must be able to read/write the file AND traverse (x) every ancestor
-    directory up to REPO_ROOT — otherwise a world-readable file inside a 0700
-    private dir would leak. Symlinks refused.
+    bypasses os.access. One adapter over common.can.
+
+    This file used to carry its own inode check plus the ancestor-traverse
+    walk, and the hub carried the inode half WITHOUT the walk — so the two
+    root daemons disagreed about who could read what. The walk now lives in
+    common.can and both share it.
     """
-    if not _perm(path, uid, gids, 2 if need_write else 4):
-        return False
-    # every ancestor directory, up to (but not including) the repo root, needs x
-    root = common.REPO_ROOT.resolve()
-    parent = path.resolve().parent
-    while parent != root:
-        if root not in parent.parents:
-            return False  # escaped the repo tree
-        if not _perm(parent, uid, gids, 1):
-            return False
-        parent = parent.parent
-    return True
+    return common.can(path, uid, gids, 2 if need_write else 4)
 
 
 class AiohttpChannel:

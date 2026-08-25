@@ -153,3 +153,95 @@ def test_convert_one_xlsx_end_to_end(tmp_path, monkeypatch):
     # so assert via the mode bits which setfacl/chmod both set)
     mode = side.stat().st_mode & 0o777
     assert mode & 0o022 == 0, f"sidecar is group/other-writable: {oct(mode)}"
+
+
+# ---- the extraction child reads a PINNED fd, not a path --------------------
+# convert._convert_locked opens the source once with O_NOFOLLOW and hands the
+# child /proc/self/fd/N, so a user who owns the directory cannot swap a symlink
+# in between the is-it-a-regular-file check and the parser's open. A pin has no
+# extension, which is exactly what broke xlsx the first time: openpyxl picks
+# its reader from the filename. These pin the plumbing that fixes that.
+
+def _extract_via(argv_path, out, name=None):
+    import os, subprocess, sys
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    argv = [sys.executable, "-m", "kb_platform.convert_extract", str(argv_path), str(out)]
+    fds = ()
+    if name is not None:
+        argv.append(name)
+        fds = (int(str(argv_path).rsplit("/", 1)[1]),)
+    return subprocess.run(argv, capture_output=True, text=True, env=env,
+                          timeout=120, pass_fds=fds)
+
+
+@pytest.mark.parametrize("suffix", [".xlsx", ".docx"])
+def test_pinned_extraction_matches_extraction_by_path(tmp_path, suffix):
+    import os
+    openpyxl = pytest.importorskip("openpyxl")
+    if suffix == ".docx":
+        pytest.importorskip("markitdown")
+    src = tmp_path / f"book{suffix}"
+    if suffix == ".xlsx":
+        wb = openpyxl.Workbook(); wb.active["A1"] = "pinned-roundtrip"; wb.save(src)
+    else:
+        real = Path("/srv/kb")
+        cand = [p for p in real.rglob("*.docx")][:1]
+        if not cand:
+            pytest.skip("no .docx on this box to compare against")
+        src.write_bytes(cand[0].read_bytes())
+
+    by_path, by_pin = tmp_path / "a.md", tmp_path / "b.md"
+    assert _extract_via(src, by_path).returncode == 0, "extraction by path failed"
+
+    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        r = _extract_via(f"/proc/self/fd/{fd}", by_pin, name=src.name)
+    finally:
+        os.close(fd)
+    assert r.returncode == 0, f"extraction through a pinned fd failed: {r.stderr[:300]}"
+    assert by_pin.read_text() == by_path.read_text(), \
+        "a pinned fd produced different text than the path — format dispatch is broken"
+
+
+# ---- a sidecar's audience follows its source -------------------------------
+# The staleness gate is a CONTENT hash and permissions are not content, so a
+# permission-only change used to never reach the extracted text. The sidecar is
+# what the index serves and what agents are told to read, so un-sharing a
+# document left its full text searchable to the old audience, silently.
+
+def test_tightening_a_source_reaches_its_sidecar(tmp_path):
+    import os
+    src = tmp_path / "doc.docx"
+    side = tmp_path / ".doc.docx.md"
+    src.write_bytes(b"pk-not-really")
+    side.write_text("---\nsource_sha256: deadbeef\n---\n\nextracted text\n")
+    os.chmod(src, 0o644)
+    os.chmod(side, 0o644)
+
+    c = convert.Converter()
+    c._refresh_sidecar_acl(src, side)          # mirrors the wide source
+    world, _team, _named = common.read_audience(*common.stat_and_acl(side))
+    assert world, "precondition: the sidecar should start world-readable"
+
+    os.chmod(src, 0o600)                        # the document goes private
+    c._refresh_sidecar_acl(src, side)
+    world, team, named = common.read_audience(*common.stat_and_acl(side))
+    assert not world, "sidecar stayed world-readable after its source was tightened"
+    assert not team, "sidecar still grants the owning group"
+
+
+def test_refresh_is_a_no_op_when_the_audience_has_not_moved(tmp_path):
+    """It runs on every sweep for every convertible file — it must not fork
+    setfacl each time."""
+    import os
+    src = tmp_path / "doc.docx"
+    side = tmp_path / ".doc.docx.md"
+    src.write_bytes(b"x")
+    side.write_text("---\nsource_sha256: deadbeef\n---\n")
+    os.chmod(src, 0o644)
+    c = convert.Converter()
+    c._refresh_sidecar_acl(src, side)
+    before = dict(c._aud)
+    assert before, "the first call should record the audience"
+    c._refresh_sidecar_acl(src, side)
+    assert c._aud == before, "a second call with no change should do nothing"
