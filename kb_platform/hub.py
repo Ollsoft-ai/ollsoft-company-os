@@ -1556,6 +1556,20 @@ class Hub:
                          "company": (0o2775, 0o664)}
                 if vis not in modes:
                     return web.json_response({"error": "visibility must be private/team/company"}, status=400)
+                # A folder inherits its parent's DEFAULT acl, and that is what
+                # decides the audience of files created in it later. Setting the
+                # folder private used to rewrite only the ACCESS acl, so the
+                # folder itself went private while every document created or
+                # copied into it afterwards was still born world-readable from
+                # the stale `default:other::r-x`. Verified: a copy into a
+                # "private" folder landed `other::r--`. /fs/share's private
+                # branch has always cleared both; this is that, kept narrow —
+                # widening presets have no such hazard, so they are left alone.
+                if vis == "private" and is_dir:
+                    try:
+                        os.removexattr(tfd, _ACL_DEFAULT)
+                    except OSError:
+                        pass
                 os.fchmod(tfd, modes[vis][0 if is_dir else 1])
                 # With an extended ACL present, chmod's group bits set the MASK,
                 # not the real group:: entry — a stale group::--- would keep
@@ -2143,7 +2157,7 @@ class Hub:
         # after a future account — and new hires are named in the KB, so the
         # name is guessable. `install -d` would follow a symlink there and hand
         # its TARGET to the new user (reproduced: a victim dir went
-        # krystof:krystof -> nobody:nogroup). mkdir at a pinned dir fd fails
+        # alice:alice -> nobody:nogroup). mkdir at a pinned dir fd fails
         # EEXIST on anything already sitting at the name, symlink included.
         try:
             e = pwd.getpwnam(u)
