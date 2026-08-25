@@ -74,6 +74,13 @@ _NUM_RE = re.compile(r"(\d+)")
 _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 
 
+# Backend build marker. scripts/bounce_backends.py imports this rather than
+# restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
+# Bump whenever backend behaviour changes, so a stale backend cannot report
+# itself current and be silently skipped by a bounce.
+BACKEND_V = 24
+
+
 def _name_key(name: str):
     """Explorer-style ordering: symbols, then digits, then letters, then emoji.
 
@@ -1098,7 +1105,7 @@ def _cron_listing() -> dict:
         jobs.append({"line": i, "raw": line, "schedule": job[0], "command": job[1],
                      "paused": paused})
     return {"available": available, "installed": installed, "user": ME,
-            "jobs": jobs, "raw": raw, "v": 23}
+            "jobs": jobs, "raw": raw, "v": BACKEND_V}
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
