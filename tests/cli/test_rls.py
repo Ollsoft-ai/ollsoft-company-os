@@ -3,6 +3,7 @@ in the engine, via RLS — tested through the real search path (each user's
 backend connects to PG as that user over peer auth).
 """
 import json
+import getpass
 import subprocess
 import time
 
@@ -52,6 +53,15 @@ def test_company_content_visible_to_all():
 def test_rls_direct_psql_as_alice():
     # DB-level proof: alice (peer auth) can see acme rows. Poll — the indexer
     # is eventually consistent, and can lag briefly under a heavy suite.
+    #
+    # psql peer-auths as whoever launched pytest, so this only means anything
+    # when that IS the demo user (CI runs the suite as alice). Run locally as
+    # yourself it proves nothing and fails — skip loudly rather than sit red,
+    # because a suite with a known-red test trains people to ignore red.
+    me = getpass.getuser()
+    if me != U("alice"):
+        pytest.skip(f"peer auth would connect as {me!r}, not {U('alice')!r} — "
+                    "this assertion is only meaningful when run as the demo user")
     deadline = time.time() + 6
     n = 0
     while time.time() < deadline:

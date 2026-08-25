@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # 03:17 UTC — the full browser suite, too slow to gate every push.
+    - cron: '17 3 * * *'
 
 jobs:
   # The important job: prove scripts/install.sh works on a machine that is not
@@ -96,6 +99,36 @@ jobs:
           sudo chmod -R a+rX "$GITHUB_WORKSPACE"
           sudo -u kbt_ci_alice env HOME=/home/kbt_ci_alice KB_TEST_NS=ci \
             /opt/kb-testvenv/bin/python -m pytest tests/cli -q --maxfail=5
+
+      # tests/e2e was never run in CI at all: 177 of 367 tests, and the ONLY
+      # coverage of the CRDT layer, the 3-way merge and the artifact bridge —
+      # the subsystem that has already corrupted a live document. A containment
+      # escape once sat behind a green build because the test that proves
+      # containment lives in here.
+      #
+      # Per PR: the four files guarding code with a history of breaking.
+      # Nightly: all of it. Browser tests are slow, and a suite people start
+      # skipping protects nothing.
+      - name: Browser dependencies
+        run: |
+          sudo /opt/kb-testvenv/bin/python -m playwright install --with-deps chromium
+          sudo chmod -R a+rX /opt/kb-testvenv
+
+      - name: E2E — merge, artifact scope, artifact XSS, presence (every PR)
+        if: github.event_name != 'schedule'
+        run: |
+          sudo -u kbt_ci_alice env HOME=/home/kbt_ci_alice KB_TEST_NS=ci \
+            /opt/kb-testvenv/bin/python -m pytest -q --maxfail=3 \
+              tests/e2e/test_external_merge.py \
+              tests/e2e/test_artifact_scope.py \
+              tests/e2e/test_artifact_xss.py \
+              tests/e2e/test_collab_presence.py
+
+      - name: E2E — the whole browser suite (nightly)
+        if: github.event_name == 'schedule'
+        run: |
+          sudo -u kbt_ci_alice env HOME=/home/kbt_ci_alice KB_TEST_NS=ci \
+            /opt/kb-testvenv/bin/python -m pytest tests/e2e -q
 
       - name: Diagnostics on failure
         if: failure()

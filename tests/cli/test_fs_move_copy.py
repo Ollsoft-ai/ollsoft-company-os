@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from kbenv import BASE, CREDS, U, doc
+from kbenv import BASE, CREDS, U, doc, backend_v
 
 TAG = str(int(time.time()))
 DIR = doc(f"mvcp_{TAG}")
@@ -20,10 +20,6 @@ def cl(user):
     assert r.status_code == 200, r.text
     return c
 
-
-def backend_v(c) -> int:
-    r = c.get("/api/cron")
-    return r.json().get("v", 0) if r.status_code == 200 else 0
 
 
 def write(c, path, content):

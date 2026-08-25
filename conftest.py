@@ -66,8 +66,30 @@ def _wait_for_index(area: str, timeout: float = 90.0) -> None:
           "index-dependent tests may fail.", file=sys.stderr)
 
 
+def _reap_stale_namespaces():
+    """Clean up after runs that were KILLED.
+
+    Teardown lives in pytest_unconfigure, which only runs on a clean exit.
+    Ctrl-C, a killed background job, a session that goes away — none reach it,
+    and each strands three OS accounts, three Postgres roles, three schemas and
+    two directories in the real knowledgebase.
+
+    The work happens in seed-demo.sh because /var/lib/kb-seed is 0700 root: a
+    first version globbed it from here, could not read it, and silently reaped
+    nothing. Failure is printed, never swallowed.
+    """
+    r = _sudo("--reap-stale")
+    out = (r.stdout or "").strip()
+    if r.returncode != 0:
+        print(f"WARNING: could not reap stale fixtures: {(r.stderr or '')[-500:]}",
+              file=sys.stderr)
+    elif out and "reaped 0 " not in out:
+        print(out, file=sys.stderr)
+
+
 def pytest_configure(config):
     global _OWNED_NS
+    _reap_stale_namespaces()       # before seeding: clear anything a killed run left
     if os.environ.get("KB_TEST_NO_SEED") or os.environ.get("KB_TEST_NS"):
         return
     ns = "p" + secrets.token_hex(3)

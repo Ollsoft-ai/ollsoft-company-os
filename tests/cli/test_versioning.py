@@ -11,7 +11,7 @@ import time
 
 import httpx
 import pytest
-from kbenv import BASE, CREDS, L, U, doc
+from kbenv import BASE, CREDS, L, U, doc, backend_v
 
 TAG = str(int(time.time()))
 DIR = doc(f"vc_{TAG}")
@@ -24,13 +24,33 @@ def cl(user):
     return c
 
 
-def backend_v(c) -> int:
-    r = c.get("/api/cron")
-    return r.json().get("v", 0) if r.status_code == 200 else 0
-
-
 def write(c, path, content):
     assert c.post("/api/artifact/write", json={"path": path, "content": content}).status_code == 200
+
+
+def wait_for_activity(c, path, author, timeout=30):
+    """Poll the ACTIVITY FEED until it reports `path` for `author`.
+
+    wait_for_rev polls /api/vc/log for one path, which git answers the moment
+    the commit exists. The activity feed is a different query — repo-wide, with
+    its own since-window and author filter — and it can lag that by a beat.
+    Waiting on the first and asserting on the second is a race, and it is why
+    this file had two intermittently-red tests. Poll the thing you assert on.
+    """
+    deadline = time.time() + timeout
+    last = []
+    while time.time() < deadline:
+        q = {"since": "10 minutes ago", "author": author, "limit": 1000}
+        r = c.get("/api/vc/activity", params=q)
+        if r.status_code == 200:
+            j = r.json()
+            last = [pp for cm in j["commits"] for f in cm["files"] for pp in f["paths"]]
+            if path in last:
+                return j
+        time.sleep(1)
+    raise AssertionError(
+        f"activity feed never reported {path!r} for {author!r} in {timeout}s; "
+        f"saw {last[:10]}")
 
 
 def wait_for_rev(c, path, n=1, timeout=25):
@@ -245,7 +265,15 @@ def test_cli_reports_who_did_what(k):
     assert k.post("/api/file", json={"path": p}).status_code == 200
     write(k, p, f"cli marker {TAG}\n")
     wait_for_rev(k, p, 1)
-    out = subprocess.run(["kb-history", "--since", "10 minutes ago",
+    # Same race as the emoji test: a revision existing is not the same as the
+    # history being queryable BY AUTHOR. kb-history reads the same data the
+    # activity feed does, so wait for that before shelling out.
+    wait_for_activity(k, p, U("alice"))
+    # Resolve it the way the emoji test below already does: /usr/local/bin is
+    # not on every login PATH, and a bare name turns a real assertion into a
+    # FileNotFoundError that reads like a platform bug.
+    cli = shutil.which("kb-history") or "/usr/local/bin/kb-history"
+    out = subprocess.run([cli, "--since", "10 minutes ago",
                           "--author", U("alice"), "--json"],
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
@@ -272,8 +300,7 @@ def test_activity_sees_non_ascii_folders(k):
     write(k, p, f"emoji path marker {TAG}\n")
     wait_for_rev(k, p, 1)
 
-    q = {"since": "10 minutes ago", "author": U("alice"), "limit": 1000}
-    act = k.get("/api/vc/activity", params=q).json()
+    act = wait_for_activity(k, p, U("alice"))
     paths = [pp for c in act["commits"] for f in c["files"] for pp in f["paths"]]
     assert p in paths, f"emoji-named folder missing from the feed: {paths[:10]}"
     assert not any("\\" in pp or pp.startswith('"') for pp in paths), \

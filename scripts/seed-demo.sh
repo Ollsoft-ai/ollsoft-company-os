@@ -29,6 +29,8 @@ set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO=/srv/kb
 UNDO=0
+REAP=0                           # --reap-stale: clean up after killed runs
+STALE=7200                       # --older-than <seconds>; 2h, see reap()
 NS=""                            # --namespace <id>: isolate a test run
 # The demo users are declared at their add_user calls below, each with its own
 # group list. Teardown no longer needs a list here: it reads the manifest, so it
@@ -53,6 +55,8 @@ while [ $# -gt 0 ]; do
     --repo) REPO="${2:?}"; shift 2 ;;
     --namespace) NS="${2:?}"; shift 2 ;;
     --undo) UNDO=1; shift ;;
+    --reap-stale) REAP=1; shift ;;
+    --older-than) STALE="${2:?}"; shift 2 ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -117,6 +121,36 @@ if [ -f /etc/kb/kb.env ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Fixtures left behind by a run that was KILLED. Teardown lives in pytest's
+# unconfigure hook, which only runs on a clean exit — Ctrl-C, a killed
+# background job or a vanished session never reach it, and each one strands
+# three OS accounts, three Postgres roles, three schemas and two directories
+# in the real knowledgebase. They were piling up in company/ and users/ where
+# people could see them.
+#
+# This lives here, not in conftest, for one dull reason: $MANIFEST_DIR is 0700
+# root, so an ordinary test user cannot even list it. A first attempt globbed
+# it from Python and silently found nothing.
+#
+# A manifest older than --older-than cannot belong to a live run; the whole
+# suite finishes in minutes.
+if [ "$REAP" -eq 1 ]; then
+  now=$(date +%s); reaped=0
+  for m in "$MANIFEST_DIR"/*.manifest; do
+    [ -e "$m" ] || continue
+    ns="$(basename "$m" .manifest)"
+    [ "$ns" = "demo" ] && continue                  # the human demo is not a test run
+    age=$(( now - $(stat -c %Y "$m") ))
+    [ "$age" -lt "$STALE" ] && continue
+    echo "reaping fixtures from an interrupted run: $ns (${age}s old)"
+    bash "$0" --namespace "$ns" --undo >/dev/null 2>&1 \
+      && reaped=$((reaped+1)) \
+      || echo "  WARNING: could not reap $ns" >&2
+  done
+  echo "reaped $reaped stale namespace(s)"
+  exit 0
+fi
+
 if [ "$UNDO" -eq 1 ]; then
   say "removing seeded content (${NS:-demo})"
   if [ ! -f "$MANIFEST" ]; then
@@ -157,6 +191,10 @@ EOF
           runuser -u postgres -- psql -d "$PGDB" -qc "DROP ROLE IF EXISTS \"$val\";" >/dev/null
         fi
         userdel -r "$val" 2>/dev/null || true
+        # The backend's socket dir lives in /run, not under $REPO, so the
+        # `tree` rule below never sees it. 190 of these accumulated before
+        # anyone looked. Guarded on the kbt_ marker like everything else here.
+        case "$val" in kbt_*) rm -rf "/run/kb/users/$val" 2>/dev/null || true ;; esac
         echo "  user  $val" ;;
       group) groupdel "$val" 2>/dev/null && { echo "  group $val"; : > "$MANIFEST.groups-went"; }
         : ;;
