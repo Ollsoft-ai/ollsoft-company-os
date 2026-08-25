@@ -7,7 +7,7 @@ Read this before exposing the platform beyond a trusted single box.
 | Boundary | Enforced by | Notes |
 |----------|-------------|-------|
 | A user can only read/write their own files | **the Linux kernel** | the per-user backend *is* the user (`runuser`); every open/write is kernel-checked |
-| Search / DB queries can't return files you can't read | **Postgres RLS** (`kb.can_read`) | mirrors full Unix path resolution (read on file + traverse on every ancestor dir + ACLs) |
+| Search / DB queries can't return files you can't read | **Postgres RLS** (`kb.visible_files`) | both policies gate on a materialized (usr, path) set the indexer keeps in sync; `kb.can_read` is the live-computed oracle the parity test checks it against, not the policy |
 | A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component |
 | An artifact can't touch the app or exfiltrate | **opaque-origin iframe + CSP** | `sandbox="allow-scripts"` (no same-origin) + `connect-src 'none'` — the artifact itself never reaches the network |
 | An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.claude/egress.json` (root:kb-users, admin-writable). Requests are proxied by the hub, so the artifact never holds the credential |
@@ -28,9 +28,11 @@ Three things run as root and are therefore the audited core:
 1. **`kb-hub`** — auth + reverse proxy + `/fs/*` + `/admin/*`. It never runs
    business logic as a user; it re-derives the caller from the signed cookie and
    checks Unix authorization before any privileged filesystem op.
-2. **`kb-syncd`** — the CRDT/file daemon. Reads/writes docs as root, so it carries
-   `fs_can` (a full Unix permission check *including ancestor traversal*) as its
-   sole gate, plus symlink-safe writes.
+2. **`kb-syncd`** — the CRDT/file daemon. Reads/writes docs as root, so its sole
+   gate is `common.can()` (inode access with POSIX ACLs + execute on every
+   ancestor), reached through the `fs_can` adapter — the same evaluator the hub
+   uses, which is the point: the two root daemons used to disagree about who
+   could read what. Plus symlink-safe writes.
 3. **`/admin/*` in the hub** — user/group management. Admin-only; inputs are
    regex-validated so they can't inject into `useradd`/`psql`/`setfacl`.
 

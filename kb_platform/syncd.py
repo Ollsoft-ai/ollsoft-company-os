@@ -36,7 +36,6 @@ logging.basicConfig(level=logging.INFO, format="syncd %(message)s")
 log = logging.getLogger("kb.syncd")
 
 from aiohttp import WSMsgType, web
-from diff_match_patch import diff_match_patch
 from pycrdt import Text
 from pycrdt.websocket import WebsocketServer
 from watchfiles import awatch
@@ -212,7 +211,8 @@ def _apply_line_edits(txt, live: str, target: str) -> None:
     Never a global character diff. diff3 gives a clean `target`, but flattening
     it back to `diff_main(live, target)` re-introduces exactly the problem diff3
     was chosen to avoid: on repetitive prose (near-identical lines, runs of the
-    same letter) dmp finds no good alignment and emits one huge delete plus one
+    same letter) diff-match-patch finds no good alignment and emits one huge
+    delete plus one
     huge insert.
 
     That is data loss, not cosmetics. A concurrent keystroke from a browser that
@@ -326,13 +326,6 @@ class SyncDaemon:
     def __init__(self):
         self.key = common.load_session_key()
         self.server = WebsocketServer(auto_clean_rooms=False)
-        self.dmp = diff_match_patch()
-        # Fuzzy patching must be CONSERVATIVE: prose is full of near-identical
-        # tokens, and a hunk that anchors on the wrong lookalike injects
-        # characters mid-word. Prefer dropping a hunk (the flush then reverts
-        # that one external change) over guessing where it goes.
-        self.dmp.Match_Threshold = 0.25
-        self.dmp.Patch_DeleteThreshold = 0.25
         self.text_handles: dict[str, Text] = {}
         self.meta: dict[str, tuple[int, int, int]] = {}  # room -> (uid, gid, mode)
         self.last_written: dict[str, bytes] = {}
@@ -762,8 +755,8 @@ class SyncDaemon:
 
         The external writer (vim, a script, claude code) based its write on some
         earlier file state; the live doc may hold keystrokes typed since then.
-        Naive live-vs-disk diffing scattered char ops ("word salad"); dmp's
-        fuzzy patch_apply was no better — it silently splits hunks into
+        Naive live-vs-disk diffing scattered char ops ("word salad"); the
+        diff-match-patch fuzzy patch_apply this used to run was no better — it silently splits hunks into
         <=32-char chunks (its bitap Match_MaxBits) and anchors each chunk
         independently, splicing fragments into lookalike lines. diff3 instead:
         base = shadow (last agreed state); regions changed by ONE side apply

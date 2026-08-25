@@ -1,9 +1,11 @@
 # Remote access — putting Ollsoft Company OS behind a front door
 
-The hub binds to **127.0.0.1 only**. It speaks plain HTTP and has no TLS, no rate
-limiting on the login endpoint, and no protection against someone who can reach
-the port. That is deliberate: the platform assumes something in front of it is
-handling transport security and the first identity gate.
+The hub binds to **127.0.0.1 only**. It speaks plain HTTP, has no TLS, and no
+protection against someone who can reach the port. That is deliberate: the
+platform assumes something in front of it is handling transport security and the
+first identity gate. `POST /login` **is** throttled (8 failures per 5 min locks
+that key for 15 min, counted independently per account and per source) — that is
+a backstop against guessing, not a substitute for gate 1.
 
 This document covers the three sane ways to reach it from somewhere else, in
 increasing order of effort.
@@ -23,8 +25,9 @@ They are not the same question, and keeping them separate is what makes external
 collaborators safe: someone can hold an account without being reachable, or be
 reachable without holding an account. A guest needs **both**.
 
-Never satisfy gate 1 by exposing port 8300 directly. There is no TLS and no login
-throttling — that is a password-guessing oracle against real Unix accounts.
+Never satisfy gate 1 by exposing port 8300 directly. There is no TLS, and the
+login throttle is a backstop, not a front door — an exposed port is still a
+password-guessing surface against real Unix accounts, in cleartext.
 
 ---
 
@@ -96,8 +99,10 @@ mTLS, an authenticating proxy), point it at `127.0.0.1:8300`. Requirements:
   and `Connection` headers passed through — `/ws/doc/*` and `/pty` will silently
   fail otherwise, and the symptom is "the editor loads but never syncs".
 - **Do not buffer.** Response buffering breaks the terminal and live presence.
-- **Rate-limit `POST /login`.** The platform does not; PAM will happily be asked
-  a thousand times a second.
+- **Rate-limit `POST /login` at the proxy too.** The platform throttles per
+  account and per source (see the top of this file), but it identifies the source
+  from `CF-Connecting-IP`/`X-Forwarded-For` — so your proxy must set one, or every
+  remote attempt shares the single account counter.
 - **Preserve the path.** The app is served from the root; it does not support
   being mounted under a subpath.
 

@@ -693,27 +693,6 @@ def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
     return n
 
 
-def _acl_walk(root: Path, args: list[str]) -> int:
-    """Apply one ACL change to a whole subtree, secrets excluded (_walk_repo),
-    each inode pinned. This is the one O(files) step in the model — it runs when
-    a viewer group is first bound to a folder; adding or removing a viewer after
-    that is a gpasswd on the group and touches no files at all."""
-    n = 0
-    for path, is_dir in _walk_repo(root):
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
-                         | (os.O_DIRECTORY if is_dir else 0))
-        except OSError:
-            continue
-        try:
-            _acl_apply_fd(fd, is_dir, args)
-            n += 1
-        except (OSError, subprocess.SubprocessError):
-            pass
-        finally:
-            os.close(fd)
-    return n
-
 
 def _perm_str(bits: int) -> str:
     return ("r" if bits & 4 else "-") + ("w" if bits & 2 else "-") + ("x" if bits & 1 else "-")

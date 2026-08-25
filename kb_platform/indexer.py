@@ -97,7 +97,6 @@ TASK_RE = re.compile(r"^\s*[-*]\s+\[([ xX])\]\s*(.*?)\s*$")
 REF_RE = re.compile(r"\s\^([A-Za-z0-9_-]+)\s*$")
 ASSIGNEE_RE = re.compile(r"(?:^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)")
 TAG_RE = re.compile(r"(?:^|\s)#([A-Za-z0-9_][A-Za-z0-9_-]*)")
-NOLOGIN = {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false", ""}
 PERMS_RESCAN = 1.0  # seconds; fallback so chmod propagates even if inotify misses IN_ATTRIB
 # Advisory-lock key serialising kb.visible_files writers (this daemon and
 # scripts/refresh_visibility.py). Arbitrary but must match on both sides.

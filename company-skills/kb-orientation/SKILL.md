@@ -20,8 +20,11 @@ This is good news: you can act freely and safely. The worst you can do is limite
 ├── company/          shared with everyone — the common knowledgebase
 ├── projects/<name>/  restricted to that project's team (you may not see all of these)
 ├── users/<you>/      your own private space (only you can read it)
-└── .git/             full version history (auto-committed for you)
+└── .git/             version history — 0700 root-only, you cannot read it
 ```
+
+Don't run `git` here; it will just fail. Ask history questions with the
+`kb-history` CLI (or the **kb-history** skill), which is the supported way in.
 
 Use ordinary tools — `ls`, `cat`, `grep`, `find`. **You will only ever see what you are allowed to see**; restricted folders simply won't list for you. Don't interpret a "permission denied" as something to bypass.
 
@@ -84,10 +87,14 @@ so it is what you should reach for every time:
 3. Whole-company audience = the existing `kb-users` group. No new group, and
    new hires inherit access automatically — same reasoning as `kb_users` in
    **kb-database**.
-4. Changing who is *in* a group takes effect for new logins, but processes
-   that are already running keep their old group list. After adding or
-   removing a member, ask krystof to restart `kb-indexer` (so search catches
-   up) — otherwise the change looks like it did not work.
+4. Changing who is *in* a group takes effect for new logins; already-running
+   processes keep their old group list. **Search needs no restart** — kb-indexer
+   re-reads `getent` every 5 s, so RLS sees the new membership within seconds.
+   The one case that DOES need `systemctl restart kb-indexer` is adding
+   **`kbindexer` itself** to a brand-new group: its own supplementary groups are
+   fixed when systemd execs it, so until it restarts it cannot read the folder's
+   files at all and they never enter the index. Ask krystof, and expect ~10 min
+   of stale search while it resweeps.
 
 Per-user ACLs (`setfacl -m u:<name>:r`) still work and are the right tool for
 sharing ONE file with ONE person — the "share" button uses them, and the

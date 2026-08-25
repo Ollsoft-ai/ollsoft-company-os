@@ -12,8 +12,12 @@ How the KB platform actually works, component by component.
 - **The kernel is the authorization engine.** A request that touches user data is
   served by a process running *as that OS user*. The kernel enforces reads/writes.
   There is deliberately almost no application-level permission code — the two
-  places that exist (RLS in SQL, and the daemon's `fs_can`) exist only to *mirror*
-  the kernel for surfaces the kernel can't reach (a shared DB index; a root daemon).
+  places that exist (RLS in SQL, and `common.can()` in Python) exist only to
+  *mirror* the kernel for surfaces the kernel can't reach (a shared DB index; the
+  two root daemons). `common.can()` is THE evaluator: inode access including
+  POSIX ACLs, plus execute on every ancestor up to the repo root.
+  `syncd.fs_can` and `hub._fs_can` are one-line adapters over it — they used to
+  be separate checks, and the hub's was missing the ancestor walk.
 
 ## The processes
 
@@ -36,8 +40,10 @@ the minimal audited surface.
 
 `kb_platform/hub.py`. Listens on `127.0.0.1:8300`.
 
-- **Login** (`POST /login`): authenticates against PAM (`pam_auth.py`, only real
-  uid≥1000 accounts with a normal shell), then sets a signed session cookie
+- **Login** (`POST /login`): authenticates against PAM (`pam_auth.py`, uid
+  1000-64999 only, so no service account can ever sign in; a **nologin shell is
+  deliberately allowed** — viewer accounts use the web app with no terminal, and
+  pty/cron are gated on the shell instead), then sets a signed session cookie
   `kb_session` (HMAC-SHA256 over `{user, exp}`, httponly, 12h TTL). The hub is the
   *only* component that ever sees a password.
 - **Spawner** (`ensure_backend`): on demand, starts the user's backend with
@@ -109,8 +115,11 @@ there is no permission code here to get wrong.
 - **File daemon**: for each open doc it (a) **flushes** the CRDT text to disk on a
   250ms debounce, preserving the file's owner/group/mode; and (b) **watches** the
   filesystem (`watchfiles`/inotify) and merges *external* edits (vim, an agent,
-  `git`) into the live doc via `diff-match-patch`. So five writers — browser, vim,
-  agent, git, script — converge through one CRDT.
+  `git`) into the live doc via a **line-level three-way merge (diff3)** against
+  the last-agreed shadow — never a character diff and never fuzzy patching, both
+  of which spliced fragments into lookalike lines and lost concurrent keystrokes
+  (`tests/e2e/test_external_merge.py`). So five writers — browser, vim, agent,
+  git, script — converge through one CRDT.
 - **git auto-commit**: debounced snapshots into `/srv/kb/.git` (history/rollback).
 - **Authorization**: the hub-signed token carries the caller's uid/gids; `fs_can`
   re-checks Unix **read to join** and **write to edit**, including **traverse (x)
@@ -142,18 +151,23 @@ there is no permission code here to get wrong.
 `scripts/schema.sql`. One database `kb`, local peer auth (PG role == OS user).
 
 - `kb.files`, `kb.blocks` have **RLS enabled**. Users get `SELECT` only.
-- `kb.can_read(path)` is a `SECURITY DEFINER` function used by the RLS policy. It
-  replicates **full Unix path resolution** using `session_user`: the caller must
-  be able to **read the file** (owner/group/other bits, OR a named-user ACL, OR a
-  named-group ACL) **AND traverse (x) every ancestor directory** (bits or a named
-  traverse ACL). This is why a raw query can never return a row you couldn't
-  `cat`, and why a file made world-readable *inside* a `0700` dir stays hidden.
-- `kb.blocks` delegates its policy to `kb.files` (`file_path IN (SELECT path
-  FROM kb.files)`): the subquery runs under the files policy, so `can_read`
-  still decides — but once per *file* (a single hashed subplan), not once per
-  *block*. With ~100k blocks over ~700 files that is the difference between a
-  15-second search and a fast one; the visible row set is identical, and a
-  block cannot outlive its file row (FK `ON DELETE CASCADE`).
+- **Both policies gate on `kb.visible_files`**, a materialized (usr, path) table:
+  `files_read` on `path IN (…)`, `blocks_read` on `file_path IN (…)`, each
+  filtered by `usr = session_user`. One hashed subplan per statement (~1 ms).
+  kb.blocks does **not** delegate to kb.files.
+- `kb.visible_files` is written by the indexer's `compute_visibility()`, diff-
+  synced on the same ~1 s sweep that refreshes kb.files' permission columns —
+  so revocation latency is the sweep, not a restart.
+- `kb.can_read(path)` is a `SECURITY DEFINER` function that replicates **full
+  Unix path resolution** using `session_user`: read on the file (bits, OR a
+  named-user ACL, OR a named-group ACL) **AND traverse (x) on every ancestor
+  directory**. **The policies no longer call it.** It is the live-computed
+  *oracle*: `compute_visibility()` must agree with it pair-for-pair, asserted
+  per user in `tests/cli/test_visible_files.py`. Change the two together.
+- This is why a raw query can never return a row you couldn't `cat`, and why a
+  file made world-readable *inside* a `0700` dir stays hidden. An empty
+  `visible_files` means everyone sees nothing through the index — the safe
+  direction; the filesystem, tree and open documents are unaffected.
 - **Per-user schemas** `u_<user>`: each user owns a private, default-deny schema
   for structured scratch data (an agent's scraped feed, a computed rollup). Nobody
   else has access until the owner `GRANT`s it. This is the *one* place primary
@@ -172,8 +186,13 @@ each executed **as the viewer**:
 |---------------|---------------------|--------|
 | `kb-query`    | `/api/artifact/query` | arbitrary SQL as the viewer (RLS applies; SELECT-only on `kb`) |
 | `kb-read`     | `/api/artifact/read`  | read a file as the viewer — **scoped to the artifact's own folder** |
+| `kb-read-bytes` | `/api/attachment`   | the file's **bytes** as a Blob (video/image/PDF next to it), same folder scope, 512 MB cap. blob: is a local handle — bytes display without becoming sendable |
 | `kb-write`    | `/api/artifact/write` | write a file as the viewer — **scoped to the artifact's own folder** |
 | `kb-toggle`   | `/api/tasks/toggle`   | flip a checkbox — only on a genuinely indexed task line |
+| `kb-fetch`    | `/egress` (hub)       | HTTPS to an **allowlisted domain only**, per artifact, with `secret:` refs injected server-side so the artifact never holds the credential |
+| `kb-upload`   | `/api/upload`         | binary into the artifact's own `_files/`, as the viewer |
+| `kb-save-as`  | `/api/file` + `/api/artifact/write` | writes **outside** the folder scope — allowed only because the destination is chosen by the user in trusted chrome, not by the artifact |
+| `kb-clipboard`| (host page)           | copy text to the viewer's clipboard |
 
 The default **To-dos** view (`company/todos.html`) and the demo dashboards are
 themselves artifacts — the platform dogfoods its own runtime. Artifacts are
@@ -183,13 +202,24 @@ macro), which is why `kb-read`/`kb-write` are folder-scoped.
 
 ## 7. Sharing & the permission UI
 
-The ⚙ permissions modal (`/fs/props`) lets an owner/admin change owner, group, and
-POSIX ACLs on a file/folder. Sharing a **file** with a user who can't reach it
-would be a dead grant (Unix needs traverse on every ancestor dir), so `/fs/props`
-**auto-grants traverse-only (`x`, no listing)** on the ancestor directories the
-grantee can't already traverse — the surgical "share just this one file". The
-response reports which directories got a traverse grant. The indexer records those
-grants so search/RLS agree with the kernel.
+The ⚙ panel speaks **people**, not octal. `/fs/share` takes a scope — *same as the
+folder it's in* / *everyone at Ollsoft* / *specific people* / *only me* — and
+hub.py picks the mechanism per object, so the everyday action (adding or removing
+one person) is a `gpasswd` on the owning group and touches no files at all. The
+O(files) ACL walk happens once, when a viewer group is first bound to a folder.
+
+`/fs/props` is still there, one disclosure down in **Advanced**: raw owner, group,
+mode preset and named ACL entries, for the cases the people list deliberately
+cannot express. Same authorization either way — only the owner or an admin may
+change who can open something, and `chgrp` additionally requires **membership** of
+the target group (owning the inode is not enough).
+
+Sharing a **file** with someone who can't reach it would be a dead grant (Unix
+needs traverse on every ancestor dir), so a read grant **auto-grants traverse-only
+(`x`, no listing)** on the ancestors the grantee can't already traverse — skipping
+any they can, since a named `--x` entry would *downgrade* them. The response
+reports which directories got one. The indexer records those grants so search/RLS
+agree with the kernel.
 
 ## 8. The UI shell — tabs, terminals, cron panel
 
@@ -286,7 +316,8 @@ Agents run as the user (`claude` / any harness) — an SSH/PTY shell or a headle
 sessions; they query Postgres as themselves; they schedule work with their own
 `crontab`. Company **skills** in `/srv/kb/.claude/skills/` (root-owned,
 world-readable, admin-write-only) teach them the platform:
-`kb-orientation`, `kb-database`, `kb-automation`, `kb-artifacts`, `kb-todos`.
+`kb-orientation`, `kb-database`, `kb-automation`, `kb-artifacts`, `kb-todos`,
+`kb-history`.
 
 ## Data-flow example: toggling a checkbox in the To-dos view
 

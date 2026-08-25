@@ -7,7 +7,7 @@ about people who were already there (the re-announce-on-join fix)."""
 import time
 
 from conftest import BASE, CREDS, dlg_fill
-from kbenv import U, doc
+from kbenv import L, U, doc
 
 
 def login(ctx, user):
@@ -62,8 +62,13 @@ def test_presence_shows_all_viewers_both_sides(browser):
     (ck, cj), k, j = open_shared(browser, paths, doc(f"pres_{int(time.time())}.md"))
     try:
         kp, jp = presence_titles(k), presence_titles(j)
-        assert any("alice (you)" in t for t in kp) and any(t.startswith("bob") for t in kp), kp
-        assert any("bob (you)" in t for t in jp) and any(t.startswith("alice") for t in jp), jp
+        # The chips carry the REAL account name, which is namespaced per run
+        # (kbt_<ns>_bob). Compare on the logical name via L(), the way the rest
+        # of the suite does — this is what the namespace migration missed here.
+        assert any(f"{U('alice')} (you)" in t for t in kp) \
+            and any(t.startswith(U("bob")) for t in kp), kp
+        assert any(f"{U('bob')} (you)" in t for t in jp) \
+            and any(t.startswith(U("alice")) for t in jp), jp
         # self avatar carries the accent ring class
         assert k.locator("#presence .presence-avatar.self").count() == 1
     finally:
@@ -79,11 +84,12 @@ def test_remote_cursor_renders_with_name_in_rich_view(browser):
                    "v.dispatch({selection:{anchor:l.from+3}}); v.focus(); }")
         time.sleep(1.5)
         assert k.locator(".cm-ySelectionCaret").count() >= 1, "alice must see bob's caret"
-        assert "bob" in caret_names(k), "the caret must be labelled with the collaborator's name"
+        assert "bob" in [L(n) for n in caret_names(k)], \
+            "the caret must be labelled with the collaborator's name"
         # and the reverse: alice's caret is visible to bob with alice's name
         k.evaluate("() => { const v=window.__kbview; v.dispatch({selection:{anchor:2}}); v.focus(); }")
         time.sleep(1.5)
-        assert "alice" in caret_names(j)
+        assert "alice" in [L(n) for n in caret_names(j)]
     finally:
         ck.close(); cj.close(); _cleanup(paths)
 
