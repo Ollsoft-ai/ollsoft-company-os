@@ -74,8 +74,55 @@ signature cache skips unchanged files; and auto-granting `u:X:--x` on a dir the
 user already reached via group **downgraded** them (a named ACL entry overrides
 the group entry) — sharing now skips dirs the grantee can already traverse.
 
+## Second adversarial audit — 2026-08-24
+
+A second sweep (10 parallel finders, every finding independently verified by a
+refuter and an exploitability check, plus a completeness critic). Threat model:
+an authenticated **non-admin** KB user, or an AI agent running as one. 42
+candidates, 35 upheld. The ones that mattered and what closed them:
+
+| Finding (severity) | Fix |
+|--------------------|-----|
+| No sticky bit on `users/`, `company/`, `projects/` → any member could rename another user's home aside and put their own in its place. That directory is where the platform loads that user's agent skills from, so it was a path from ordinary account to **code running as an admin** (**critical**) | `+t` on `users/` and `projects/` (see the note below on why NOT `company/`) |
+| `fs_props_set` gated `chgrp` on inode ownership, and `_share_apply` then rewrote the owning group's ENTIRE roster → three requests let a non-member join any `proj-*`/`team-*` group and evict everyone else (**critical**) | authorization for both is group **membership**, not inode ownership |
+| `convert.py` wrote its sidecar to a predictable temp path with `O_CREAT\|O_TRUNC` and no `O_NOFOLLOW` → planted symlink = arbitrary overwrite as the indexer service account, which belongs to every project group (**critical**) | pinned dir fd, random name, `O_EXCL\|O_NOFOLLOW`, ACL applied via `/proc/self/fd`, `renameat` |
+| The unattended maintenance agent's tool allowlist contained `Bash(find:*)` — `find -exec` is general command execution — while its context is fed attacker-writable text (**critical**) | `find`/`grep` removed from both the normal and dry-run allowlists; work dir `0750`, report `0600` |
+| Caddy's admin API listened unauthenticated on `127.0.0.1:2019`; any local account could rewrite the config of the process terminating public TLS (**high**) | `admin off`, with a systemd drop-in so `reload` still works |
+| `artifact_query` ran artifact-authored SQL with the VIEWER's database authority, so a shared dashboard could `CREATE TABLE … ; GRANT … TO <author>` (**high**) | privilege/role/ownership statements refused; `statement_timeout`. Honest limit: a lexical check, not a parser — the structural fix is a consent gate before opening someone else's artifact |
+| A file's owner could `chown` it to root or another user while keeping write access — provenance forgery (**medium**) | reassignment requires admin, and never to a system account |
+| The admin override reached `_secrets/` files (**medium**) | admins can no longer widen a `_secrets/` file they do not own; the owner still can, which is the documented design |
+| `x-kb-user` from the client survived into the proxied request (**low**, latent) | asserted headers stripped on the way in |
+| The Olingo CRM and timesheet tables were granted `INSERT/UPDATE/DELETE` to every employee, and anyone could make themselves a timesheet admin (**low**) | revoked; the games and lunch votes stay shared on purpose |
+| `seed-demo.sh` wrote `/tmp/kb-test-creds.json` `0644` with three working passwords, one of them an admin's (**low**) | `0600`, owned by whoever will run the suite |
+
+**Why `company/` is deliberately NOT sticky.** Setting `+t` there looked correct
+and broke shared editing, because the kernel does more than the classic
+rename/delete restriction: with `fs.protected_regular=2` (default since Linux
+4.19) a sticky, group-writable directory also refuses `O_CREAT` opens of files
+you do not own — and both `open(path,"w")` and a shell `>` issue `O_CREAT`. Every
+top-level company document silently became read-only to everyone but its author,
+while `access(2)` kept reporting it writable. `company/` is a deliberate
+free-for-all; the subdirectory that is not — `company/.infrastructure/`, the
+maintenance agent's input — is protected directly by dropping group write.
+
 ## Residual risks / known limitations
 
+- **Deferred from the 2026-08-24 audit**, each for a stated reason:
+  `kb.can_read` is a timing/existence oracle (it is `SECURITY DEFINER` and
+  granted to `PUBLIC`, and does measurably different work for "no such path"
+  versus "denied") — revoking it breaks the parity test that guards the RLS
+  invariant, so the test has to be reworked first. The index can also
+  **over-grant versus the kernel** when a named ACL entry grants LESS than the
+  class it overrides: POSIX says a matching named entry is authoritative, while
+  `compute_visibility()` and `kb._has` treat named entries as additive only.
+  Nothing on a normal box triggers it, because the share panel only ever grants
+  — but the documented "a raw query can never return a row the caller couldn't
+  read on disk" is, strictly, not yet true. The session cookie also has no
+  `Secure` flag and the site sends no HSTS.
+- **Platform admin is the OS `sudo` group** by default (`KB_ADMIN_GROUP`).
+  That makes any web-admin grant also an OS-root-capable one, and it is why a
+  seeded demo account was briefly a full platform admin. Decoupling it into a
+  dedicated non-privileged group is the obvious hardening.
 - **Single-box only.** OS users + inotify don't span machines; there is no
   off-box replication yet (git history + a manual `_files/` rsync are your DR).
 - **Localhost-bound.** No TLS front door is wired in. Put Caddy/nginx in front

@@ -130,6 +130,10 @@ location / {
 - Remove the demo company if this is a real deployment:
   `sudo bash scripts/seed-demo.sh --undo`. It drops the demo accounts, the
   restricted project, the seeded documents and the test credentials file.
-  Anything you wrote yourself under `company/` is deliberately left alone.
+  Anything you wrote yourself is left alone — and that is now enforced rather
+  than intended: teardown reads a manifest of what the seeder actually created,
+  refuses to run at all when there is no manifest, and never touches a path it
+  did not record. A file the seeder skipped because you already had one is
+  therefore never a candidate.
 - Decide whether you want `KB_PROTECTED_USERS` to cover more than the founding
   admin — it is the only thing stopping one admin from deleting another.
