@@ -536,6 +536,13 @@ def _content_disposition(filename: str, download: bool) -> str:
     return f"{disp}; filename=\"{safe}\"; filename*=UTF-8''{quote(filename)}"
 
 
+ATTACHMENT_CSP = (
+    "default-src 'none'; img-src 'self' data: blob:; media-src 'self' blob:; "
+    "style-src 'unsafe-inline'; object-src 'none'; script-src 'none'; "
+    "form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
+)
+
+
 async def attachment(request: web.Request) -> web.StreamResponse:
     rel = request.query.get("path", "")
     p = common.resolve_repo_path(rel)
@@ -554,7 +561,23 @@ async def attachment(request: web.Request) -> web.StreamResponse:
     except OSError:
         return web.Response(status=404)
     dl = request.query.get("dl") == "1"
-    return web.FileResponse(p, headers={"Content-Disposition": _content_disposition(p.name, dl)})
+    # This route serves ARBITRARY uploaded bytes inline, on the app's own
+    # origin. Artifacts do not come through here — a .html is classified as an
+    # artifact and goes to /api/artifact/raw, which sandboxes it. But an SVG is
+    # XML that may carry <script>, uploads have no extension check, and the
+    # browser will happily render one as a document: click it in the tree and
+    # its script runs as you, with your session, against /fs/share and
+    # /admin/*.
+    #
+    # The CSP costs nothing visible — images, PDFs and SVGs still preview
+    # exactly as before, scripts simply do not run. nosniff stops a mislabelled
+    # file being re-interpreted as HTML. frame-ancestors keeps the response out
+    # of a foreign frame.
+    return web.FileResponse(p, headers={
+        "Content-Disposition": _content_disposition(p.name, dl),
+        "Content-Security-Policy": ATTACHMENT_CSP,
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 async def tasks(request: web.Request) -> web.Response:
