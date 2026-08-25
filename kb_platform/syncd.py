@@ -267,6 +267,8 @@ class SyncDaemon:
         self.recent_editors: dict[str, dict[str, float]] = {}
         self.dirty_docs: dict[str, str] = {}
         self.git_dirty = False
+        self.tasks: list[asyncio.Task] = []
+        self._loop_deaths: dict[str, float] = {}
 
     def note_edit(self, name: str, user: str) -> None:
         self.recent_editors.setdefault(name, {})[user] = time.time()
@@ -326,7 +328,50 @@ class SyncDaemon:
         self.recent_editors.pop(name, None)
         self.dirty_docs.pop(name, None)
 
-    def _retire_room(self, name: str) -> None:
+    async def _drop_room(self, name: str) -> None:
+        """Forget the pycrdt YRoom behind `name`.
+
+        auto_clean_rooms=False, so pycrdt never removes a room by itself: unless
+        we do it, self.server.rooms keeps the room — and its Y.Doc — for the life
+        of the process, and the next get_room(name) hands back the OLD document.
+        For a path whose file changed underneath that IS the bug: seed_room's two
+        "is the text empty?" guards both see the dead content, refuse to load the
+        file now at that path, and every flush afterwards defers on the
+        last_written mismatch. Delete a file and recreate it and the editor shows
+        the deleted text while nothing you type ever reaches disk.
+
+        Callers do their own bookkeeping FIRST and call this LAST: everything
+        they drop is synchronous, so a half-retired room is never observable
+        across the await here.
+        """
+        room = self.server.rooms.get(name)
+        if room is None:
+            return
+        try:
+            await self.server.delete_room(name=name)   # pops the map, then stops
+        except KeyError:
+            return                                     # already gone; nothing to do
+        except RuntimeError:
+            # YRoom.stop() awaits awareness.stop() BEFORE cancelling its own
+            # scope, so a room caught in its startup window raises here and
+            # strands a live task group, its pumps and the ydoc observer for the
+            # life of the process. The map entry — the half that poisons the next
+            # open — is already gone (delete_room pops before its first await),
+            # so finish the teardown by hand. This reaches into pycrdt internals
+            # and is pinned to pycrdt-websocket 0.16.4.
+            tg = room._task_group
+            if tg is not None:
+                tg.cancel_scope.cancel()
+                room._task_group = None
+            if room._subscription is not None:
+                try:
+                    room.ydoc.unobserve(room._subscription)
+                except Exception:
+                    pass
+                room._subscription = None
+            log.warning("room %s was mid-startup; tore it down by hand", name)
+
+    async def _retire_room(self, name: str) -> None:
         """The file backing an open room vanished (renamed or deleted out from
         under the editors). Drop ALL room state instead of letting flush_loop
         resurrect the file at the old path (it would recreate it as root from
@@ -346,6 +391,7 @@ class SyncDaemon:
                 f.unlink()
             except OSError:
                 pass
+        await self._drop_room(name)
         log.info("retired room %s (backing file gone)", name)
 
     def _save_doc_state(self, name: str, ydoc) -> None:
@@ -469,7 +515,7 @@ class SyncDaemon:
                 # path's stale CRDT state authoritative over anything later
                 # written to disk there.
                 if not (common.REPO_ROOT / name).exists():
-                    self._retire_room(name)
+                    await self._retire_room(name)
                     continue
                 if content.encode() == self.last_written.get(name):
                     continue
@@ -559,6 +605,53 @@ class SyncDaemon:
                 if data == self.last_written.get(name):
                     continue
                 self.apply_external(name, data.decode(errors="replace"))
+
+    # --- loop supervision ---------------------------------------------------
+    _RESTART_WINDOW = 60.0     # a second death inside this is persistent, not a blip
+
+    def supervise(self, name: str, factory) -> asyncio.Task:
+        """Run one of the three loops as a task that cannot die quietly.
+
+        Each loop IS a guarantee: flush = your edits reach disk, watch =
+        external edits reach the doc, git = the KB stays versioned. A bare
+        create_task loses all three the same way — the task ends, asyncio
+        mentions it at GC as "Task exception was never retrieved", /health keeps
+        answering ok and git-state.json keeps looking green while the KB quietly
+        stops being versioned.
+
+        One retry, then take the process down. The two failures are not the same
+        shape: a transient (a git index.lock, an inotify hiccup) is worth a
+        restart rather than dropping every live editing session, but a
+        persistent one must NOT be restarted in a tight loop — that is how one
+        incident buried 61,895 identical lines in the journal. Exiting is the
+        loud option and it already has a ladder: Restart=on-failure brings the
+        daemon back with rooms resumed from saved state, and StartLimitBurst
+        gives up into `failed`, which fires OnFailure=kb-alert@ with the journal
+        tail. A dead loop has no ladder.
+        """
+        task = asyncio.get_running_loop().create_task(factory(), name=name)
+        task.add_done_callback(lambda t: self._loop_died(name, factory, t))
+        self.tasks.append(task)
+        return task
+
+    def _loop_died(self, name: str, factory, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return                                    # shutdown, not a fault
+        exc = task.exception()
+        now = time.monotonic()
+        again = now - self._loop_deaths.get(name, 0.0) < self._RESTART_WINDOW
+        self._loop_deaths[name] = now
+        log.error("LOOP %s STOPPED (%s) — %s", name,
+                  type(exc).__name__ if exc else "returned unexpectedly",
+                  "twice in a minute, taking the daemon down" if again else "restarting it",
+                  exc_info=exc)
+        if again:
+            # A plain SystemExit, NOT aiohttp's GracefulExit: run_app catches
+            # GracefulExit and returns normally, which is exit status 0 — and
+            # Restart=on-failure would never fire. This one still runs
+            # on_cleanup, then leaves the process with status 1.
+            raise SystemExit(1)
+        self.supervise(name, factory)
 
     async def git_loop(self) -> None:
         while True:
@@ -1190,12 +1283,14 @@ def make_app() -> web.Application:
         await web.UnixSite(vc_runner, str(common.VC_SOCK)).start()
         os.chmod(common.VC_SOCK, 0o666)
         app["vc_runner"] = vc_runner
-        app["tasks"] = [
-            asyncio.create_task(daemon.flush_loop()),
-            asyncio.create_task(daemon.watch_loop()),
-            asyncio.create_task(daemon.git_loop()),
-            asyncio.create_task(_lock_socket()),
-        ]
+        for name, factory in (("flush", daemon.flush_loop),
+                              ("watch", daemon.watch_loop),
+                              ("git", daemon.git_loop)):
+            daemon.supervise(name, factory)
+        # _lock_socket is not supervised: it is a one-shot that RETURNS, and its
+        # only failure mode (chmod) is already caught inside it.
+        daemon.tasks.append(asyncio.create_task(_lock_socket()))
+        app["tasks"] = daemon.tasks
 
     async def _lock_socket():
         # run_app binds the socket after startup; tighten it to root-only once it exists.

@@ -109,16 +109,23 @@ jobs:
       # Per PR: the four files guarding code with a history of breaking.
       # Nightly: all of it. Browser tests are slow, and a suite people start
       # skipping protects nothing.
+      # PLAYWRIGHT_BROWSERS_PATH is load-bearing. `playwright install` under sudo
+      # drops the browser in ROOT's cache, while the suite runs as the demo user
+      # and looks in ITS home — "Executable doesn't exist at
+      # /home/kbt_ci_alice/.cache/ms-playwright/...". Install once, somewhere
+      # both can read, and point every run at it.
       - name: Browser dependencies
         run: |
-          sudo /opt/kb-testvenv/bin/python -m playwright install --with-deps chromium
-          sudo chmod -R a+rX /opt/kb-testvenv
+          sudo PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+            /opt/kb-testvenv/bin/python -m playwright install --with-deps chromium
+          sudo chmod -R a+rX /opt/ms-playwright /opt/kb-testvenv
 
       - name: E2E — merge, artifact scope, artifact XSS, presence (every PR)
         if: github.event_name != 'schedule'
         run: |
           sudo -u kbt_ci_alice env HOME=/home/kbt_ci_alice KB_TEST_NS=ci \
-            /opt/kb-testvenv/bin/python -m pytest -q --maxfail=3 \
+            PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+            /opt/kb-testvenv/bin/python -m pytest -q --maxfail=3 -p no:cacheprovider \
               tests/e2e/test_external_merge.py \
               tests/e2e/test_artifact_scope.py \
               tests/e2e/test_artifact_xss.py \
@@ -128,7 +135,8 @@ jobs:
         if: github.event_name == 'schedule'
         run: |
           sudo -u kbt_ci_alice env HOME=/home/kbt_ci_alice KB_TEST_NS=ci \
-            /opt/kb-testvenv/bin/python -m pytest tests/e2e -q
+            PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+            /opt/kb-testvenv/bin/python -m pytest tests/e2e -q -p no:cacheprovider
 
       - name: Diagnostics on failure
         if: failure()
