@@ -312,3 +312,74 @@ def test_quota_eventually_429s(k):
             break
     assert last is not None and last.status_code == 429, "quota never engaged"
     assert "limit" in last.json()["error"]
+
+
+# ---- reading the upstream reply whole ---------------------------------------
+# The bug this section exists for: `raw = await resp.content.read(8 MiB + 1)`
+# looks like "read up to 8 MiB" and is not. StreamReader.read(n) waits for the
+# first chunk and hands back whatever is buffered by then, so any reply that
+# arrived in more than one chunk was silently cut short, json.loads raised, and
+# /stt answered 502 "unreadable response from upstream". A short dictation fits
+# one chunk and worked; a long one did not, which is why this only ever bit real
+# recordings — and why the same audio transcribed fine on the retry.
+#
+# These run without the hub, a key, or a network: the failure was entirely in
+# how the reply was read, so a real chunked HTTP reply is the whole fixture.
+
+def _serve_chunked(payload: bytes, chunk: int):
+    """A real aiohttp server that writes `payload` in `chunk`-sized pieces with a
+    yield between them, so the client genuinely sees several chunks. Returns
+    (bytes the hub would have kept, whole payload length)."""
+    import asyncio
+    from aiohttp import web as aweb
+    import aiohttp as _aiohttp
+    from kb_platform.hub import _read_capped
+
+    async def handler(request):
+        resp = aweb.StreamResponse(headers={"content-type": "application/json"})
+        await resp.prepare(request)
+        for i in range(0, len(payload), chunk):
+            await resp.write(payload[i:i + chunk])
+            await asyncio.sleep(0.01)
+        await resp.write_eof()
+        return resp
+
+    async def main():
+        app = aweb.Application()
+        app.router.add_get("/", handler)
+        runner = aweb.AppRunner(app)
+        await runner.setup()
+        site = aweb.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            async with _aiohttp.ClientSession() as s:
+                async with s.get(f"http://127.0.0.1:{port}/") as r:
+                    return await _read_capped(r.content, 8 * 1024 * 1024)
+        finally:
+            await runner.cleanup()
+
+    return asyncio.new_event_loop().run_until_complete(main())
+
+
+def test_multi_chunk_reply_is_read_whole():
+    """The regression itself: a transcript spanning several chunks must parse."""
+    payload = json.dumps({"text": "slovo " * 4000, "language_code": "ces",
+                          "audio_duration_secs": 600.0}).encode()
+    got = _serve_chunked(payload, 8192)
+    assert got is not None and len(got) == len(payload), \
+        f"read {len(got or b'')} of {len(payload)} bytes — truncated again"
+    assert json.loads(got)["text"].startswith("slovo ")
+
+
+def test_single_chunk_reply_still_works():
+    """The short-dictation case that always worked, so the fix cannot regress it."""
+    payload = json.dumps({"text": "ahoj", "language_code": "ces"}).encode()
+    assert json.loads(_serve_chunked(payload, 65536)) == json.loads(payload)
+
+
+def test_oversize_reply_is_refused_not_truncated():
+    """Over the cap must be None — a refusal the caller can see — and never a
+    prefix that parses into a plausible-looking half transcript."""
+    payload = b"x" * (8 * 1024 * 1024 + 4096)
+    assert _serve_chunked(payload, 256 * 1024) is None

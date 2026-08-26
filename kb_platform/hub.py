@@ -71,6 +71,28 @@ FULL_SHELL = "/bin/bash"
 CRON_DENY = Path("/etc/cron.deny")
 
 
+async def _read_capped(stream, cap: int) -> bytes | None:
+    """Read a body to the end, or None if it is larger than `cap`.
+
+    `StreamReader.read(n)` is NOT "read n bytes": it waits for the first chunk
+    to land and returns whatever is buffered by then, up to n. Called once with
+    a big cap it therefore truncates any body that arrives in more than one
+    chunk — silently, because a short read is indistinguishable from a short
+    body. That is exactly how a long dictation 502'd: the transcript spanned two
+    chunks, the hub kept the first, and json.loads raised on the fragment. The
+    bug scales with the payload, so it hides in testing and shows up on real
+    input. Loop, always.
+    """
+    buf = bytearray()
+    while True:
+        chunk = await stream.read(64 * 1024)
+        if not chunk:
+            return bytes(buf)
+        buf += chunk
+        if len(buf) > cap:
+            return None
+
+
 # --- audit -------------------------------------------------------------------
 # Every privileged mutation this daemon performs, on one greppable line.
 #
@@ -1995,8 +2017,8 @@ class Hub:
             async with aiohttp.ClientSession(timeout=timeout) as s:
                 async with s.request(method, url, headers=headers,
                                      allow_redirects=False, **req_kwargs) as resp:
-                    body = await resp.content.read(32 * 1024 * 1024 + 1)
-                    if len(body) > 32 * 1024 * 1024:
+                    body = await _read_capped(resp.content, 32 * 1024 * 1024)
+                    if body is None:
                         return web.json_response({"error": "response too large"}, status=502)
                     self._egress_audit({"ts": int(started), "user": user, "artifact": artifact,
                                         "method": method, "url": url, "status": resp.status,
@@ -2082,21 +2104,13 @@ class Hub:
         if not ctype.startswith("audio/"):
             return web.json_response({"error": "expected an audio body"}, status=400)
 
-        # Read with an explicit cap. NOT `request.content.read(cap + 1)`: that
-        # returns whatever is buffered, not the number of bytes asked for, so a
-        # single read both fails to detect an oversize body AND silently truncates
-        # it into the upstream call. The app-wide client_max_size is 2 GiB (it has
-        # to be, for uploads), so this is the only thing standing between a stray
+        # Read with an explicit cap (see _read_capped for why a single read()
+        # will not do). The app-wide client_max_size is 2 GiB (it has to be, for
+        # uploads), so this is the only thing standing between a stray
         # multi-gigabyte POST and the hub's memory.
-        buf = bytearray()
-        while True:
-            chunk = await request.content.read(64 * 1024)
-            if not chunk:
-                break
-            buf += chunk
-            if len(buf) > self.STT_MAX_BYTES:
-                return web.json_response({"error": "that recording is too long"}, status=413)
-        body = bytes(buf)
+        body = await _read_capped(request.content, self.STT_MAX_BYTES)
+        if body is None:
+            return web.json_response({"error": "that recording is too long"}, status=413)
         if len(body) < self.STT_MIN_BYTES:
             # A tap, not speech. Answer without spending an API call.
             return web.json_response({"ok": True, "text": ""})
@@ -2122,7 +2136,7 @@ class Hub:
             async with aiohttp.ClientSession(timeout=timeout) as s:
                 async with s.post(self.STT_URL, headers={"xi-api-key": self._stt_key},
                                   data=fd, allow_redirects=False) as resp:
-                    raw = await resp.content.read(8 * 1024 * 1024 + 1)
+                    raw = await _read_capped(resp.content, 8 * 1024 * 1024)
                     ms = int((time.time() - started) * 1000)
                     if resp.status != 200:
                         self._stt_audit({"ts": int(started), "user": user, "bytes": len(body),
@@ -2135,7 +2149,14 @@ class Hub:
                         return web.json_response({"error": msg}, status=502)
                     try:
                         j = json.loads(raw)
-                    except ValueError:
+                    except (ValueError, TypeError):
+                        # TypeError = raw is None = over the cap. Audit it: this
+                        # was the one /stt failure path that wrote no line at
+                        # all, so a truncated transcript looked, in the log,
+                        # exactly like a dictation that never happened.
+                        self._stt_audit({"ts": int(started), "user": user, "bytes": len(body),
+                                         "status": 502, "ms": ms,
+                                         "error": "unreadable upstream response"})
                         return web.json_response(
                             {"error": "unreadable response from upstream"}, status=502)
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:

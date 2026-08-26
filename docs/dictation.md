@@ -173,6 +173,10 @@ premise is that the kernel is the boundary. The mic button's tooltip says so.
 - `/var/log/kb/stt.log` records one JSON line per call:
   `{ts, user, bytes, status, ms, chars, secs}`. **Never the transcript** — this is
   a microphone in an office, and what someone said is nobody else's business.
+  A failed call is logged too, with `status` (and `error` where there was no
+  reply to have a status): every request that reached upstream leaves a line,
+  because a dictation that was billed and then lost is precisely the one you
+  will want to find later.
 
 ## Operational notes
 

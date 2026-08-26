@@ -24,8 +24,25 @@ def cl(user):
     return c
 
 
+BIG = bytes((i * 7 + 11) % 251 for i in range(300_000))
+
+
 class Echo(BaseHTTPRequestHandler):
+    def _big(self):
+        """A reply too big for one chunk, written in pieces with a pause between
+        them so the hub genuinely reads it across several reads."""
+        self.send_response(200)
+        self.send_header("content-type", "application/octet-stream")
+        self.send_header("content-length", str(len(BIG)))
+        self.end_headers()
+        for i in range(0, len(BIG), 8192):
+            self.wfile.write(BIG[i:i + 8192])
+            self.wfile.flush()
+            time.sleep(0.002)
+
     def _do(self):
+        if self.path == "/big":
+            return self._big()
         ln = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(ln)
         out = json.dumps({"path": self.path, "key": self.headers.get("X-Api-Key", ""),
@@ -157,3 +174,18 @@ def test_delegated_non_admin_and_agent_can_manage_network(setup):
         k.post("/admin/egress", json={"artifact": art2, "domains": []})
         k.post("/api/fs/delete", json={"path": art2})
     assert cl("bob").get("/admin/egress").json()["can_edit"] is False
+
+
+def test_large_reply_is_not_truncated(setup):
+    """Regression. The hub read the upstream reply with one
+    `resp.content.read(cap + 1)`, which returns only what happens to be buffered
+    — so any reply arriving in more than one chunk reached the artifact as a
+    silent prefix, status 200 and all. /stt at least noticed (json.loads raised,
+    502); here there was nothing to notice it. Bytes in must equal bytes out."""
+    port = setup
+    r = cl("alice").post("/egress", json={
+        "artifact": ART, "url": f"http://127.0.0.1:{port}/big"})
+    assert r.status_code == 200, r.text
+    body = base64.b64decode(r.json()["body_b64"])
+    assert len(body) == len(BIG), f"got {len(body)} of {len(BIG)} bytes"
+    assert body == BIG
