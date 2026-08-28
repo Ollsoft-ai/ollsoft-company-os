@@ -36,7 +36,7 @@ logging.basicConfig(level=logging.INFO, format="syncd %(message)s")
 log = logging.getLogger("kb.syncd")
 
 from aiohttp import WSMsgType, web
-from pycrdt import Text
+from pycrdt import Text, write_var_uint
 from pycrdt.websocket import WebsocketServer
 from watchfiles import awatch
 

@@ -97,3 +97,37 @@ async def test_retiring_a_moved_document_cuts_its_readers(d, tmp_path):
     await d._retire_room("doc.md")
     assert not ch.readable and ch.told == ["read"], \
         "a moved document kept streaming to readers who lost access"
+
+
+def test_the_deny_frame_is_a_well_formed_auth_message():
+    """The frames above are asserted through FakeChannel, which never builds
+    one — so a deny frame that could not be encoded at all rode along unseen:
+    auth_denied called an undefined write_var_uint and raised NameError inside
+    the fire-and-forget notice task, i.e. the revoked tab was never told why.
+    Decode it back the way y-protocols does: messageAuth 2, then subtype 0
+    (permission denied), then a varstring."""
+    reason = "kb:read-revoked"
+    frame = syncd.auth_denied(reason)
+
+    def read_var_uint(buf, i):
+        num = shift = 0
+        while True:
+            b = buf[i]; i += 1
+            num |= (b & 127) << shift
+            if b < 128:
+                return num, i
+            shift += 7
+
+    msg_type, i = read_var_uint(frame, 0)
+    subtype, i = read_var_uint(frame, i)
+    length, i = read_var_uint(frame, i)
+    assert (msg_type, subtype) == (2, 0)
+    assert frame[i:i + length].decode() == reason
+    assert i + length == len(frame), "trailing bytes would desync the decoder"
+
+
+def test_a_long_reason_encodes_as_a_multi_byte_varint():
+    """A one-byte length would silently truncate any reason past 127 bytes."""
+    frame = syncd.auth_denied("x" * 300)
+    assert frame[2:4] == bytes([300 % 128 | 128, 300 // 128])
+    assert frame[4:] == b"x" * 300
