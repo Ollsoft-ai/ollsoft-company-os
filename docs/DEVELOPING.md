@@ -49,8 +49,13 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
 - **Tests that add ACLs must clean up** (including any auto-granted ancestor
   traverse) — otherwise they pollute state across runs now that shares are
   effective. See `test_share_reachable.py` for the pattern.
-- **CI runs `tests/cli` only.** `tests/e2e` is not gated, which is exactly how it
-  rotted unnoticed once — if you change shared test plumbing, run it by hand.
+- **What CI gates:** the installer + `tests/cli`, on every push and PR. The
+  browser suite is **opt-in**, because it costs ~12 minutes: run it from Actions
+  → CI → *Run workflow* (or `gh workflow run CI --ref <branch> -f e2e=true`).
+  Nothing runs it for you, so run it yourself before merging anything that
+  touches the editor, the CRDT layer, the artifact bridge, or shared test
+  plumbing (`tests/kbenv.py`, `tests/e2e/conftest.py`, fixture paths) — that is
+  precisely the class of change that green cli tests cannot see.
 
 ## How to add things
 
