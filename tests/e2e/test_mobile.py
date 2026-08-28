@@ -4,7 +4,7 @@ toggle, and modals become full-width bottom sheets. Every desktop feature must
 stay reachable with a finger."""
 import time
 
-from conftest import BASE, CREDS, dlg_fill, dlg_ok
+from conftest import BASE, CREDS, dlg_fill, dlg_ok, wait_path
 from kbenv import AREA, U, doc
 
 MOBILE = dict(viewport={"width": 390, "height": 844}, is_mobile=True,
@@ -86,7 +86,7 @@ def test_drawer_boots_open_and_closes_on_file_open(browser):
     assert not page.locator(".brand-word").is_visible()
     # opening a document dismisses the drawer and shows the editor
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     assert not nav_open(page)
     # the hamburger brings the tree back
     page.click("#nav-btn")
@@ -381,12 +381,14 @@ def test_terminal_touch_swipe_sends_wheel_in_mouse_apps(browser):
 def test_doc_header_shows_filename_only(browser):
     ctx, page = m_login(browser)
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     # the path collapses to its final segment; toolbar + mode switch stay usable
     crumbs = page.locator("#doc-title .crumb")
-    assert crumbs.count() == 2
-    assert not crumbs.nth(0).is_visible()
-    assert crumbs.nth(1).is_visible()
+    segments = doc("overview.md").split("/")      # deeper than 2 when namespaced
+    assert crumbs.count() == len(segments)
+    for i in range(len(segments) - 1):
+        assert not crumbs.nth(i).is_visible()
+    assert crumbs.nth(len(segments) - 1).is_visible()
     assert page.locator("#modeswitch").is_visible()
     assert page.locator('[data-testid="mdbar"]').is_visible()
     ctx.close()
@@ -398,7 +400,7 @@ def test_drawer_opens_centred_on_the_active_file(browser):
     row unrendered and the highlight nowhere at all."""
     ctx, page = m_login(browser)
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     assert not nav_open(page)
     # collapse everything behind the drawer's back
     page.click("#nav-btn")
@@ -428,7 +430,7 @@ def test_toolbar_tap_keeps_editor_focus_and_selection(browser):
     ctx, page = m_login(browser)
     cdp = ctx.new_cdp_session(page)
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     page.click(".cm-content")
     # select the first word of the document body programmatically
     start, end = page.evaluate("""() => {
@@ -464,7 +466,7 @@ def test_mic_is_one_tap_away_and_steals_no_focus(browser):
     assert page.locator("#mic-btn").is_visible()       # no ⋯ menu needed
     assert not page.locator("#topbar-actions").is_visible()
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     page.click(".cm-content")
     page.wait_for_timeout(200)
     in_editor = "() => !!(document.activeElement && document.activeElement.closest('.cm-editor'))"

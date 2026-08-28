@@ -3,7 +3,7 @@ tabbed terminals in a docked panel that actually disappears when closed,
 and the cron panel."""
 import time
 
-from conftest import dlg_ok, login, open_doc
+from conftest import dlg_ok, login, open_doc, wait_path
 from kbenv import CREDS, U, doc
 
 
@@ -19,13 +19,13 @@ def test_editor_tabs_open_switch_close(browser):
 
     # switching back re-activates the existing live tab (no re-open)
     page.click(f'.tab[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     assert page.locator(".tab.active").get_attribute("data-path") == doc("overview.md")
 
     # close the active tab -> neighbour becomes active
     page.hover(f'.tab[data-path="{doc("overview.md")}"]')
     page.click(f'.tab[data-path="{doc("overview.md")}"] .tab-x')
-    page.wait_for_function("() => window.__kbpath === 'company/onboarding.md'")
+    wait_path(page, doc("onboarding.md"))
     assert page.locator("#tabbar .tab").count() == 1
 
     # close the last tab -> empty state, tab bar hides

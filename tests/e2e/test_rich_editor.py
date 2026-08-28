@@ -211,9 +211,9 @@ def test_screenshot_paste_stores_and_renders(browser):
         # the bytes are really stored and served through the attachment endpoint
         import re
         link = re.search(r"\((_files/[^)]+)\)", src).group(1)
-        r = api("alice").get("/api/attachment", params={"path": "company/" + link})
+        r = api("alice").get("/api/attachment", params={"path": kbdoc(link)})
         assert r.status_code == 200 and r.content[:8] == b"\x89PNG\r\n\x1a\n"
-        cleanup([doc, "company/" + link])
+        cleanup([doc, kbdoc(link)])
     finally:
         ctx.close()
 

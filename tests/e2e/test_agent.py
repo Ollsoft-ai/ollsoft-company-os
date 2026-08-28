@@ -3,6 +3,7 @@ identity edits a plain markdown file, and the edit flows into a live multiplayer
 session — the AI-native thesis, proven end to end. Also asserts the kernel bounds
 an agent to its user's permissions.
 """
+import shutil
 import subprocess
 import time
 
@@ -31,6 +32,8 @@ def _ensure_agent_doc():
     time.sleep(0.6)
 
 
+@pytest.mark.skipif(shutil.which("claude") is None,
+                    reason="headless `claude` is not installed on this machine")
 def test_agent_edit_flows_into_live_session(browser):
     _ensure_agent_doc()
     ctx = browser.new_context()

@@ -6,7 +6,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, CREDS, login
+from conftest import BASE, CREDS, login, wait_path
 from kbenv import U, doc
 
 
@@ -38,9 +38,7 @@ def test_company_button_reaches_everyone_and_opens_artifact(browser):
         chip = page.locator('.launchbar .lchip.company', has_text="Pulse")
         chip.wait_for(timeout=8000)
         chip.click()
-        page.wait_for_function(
-            "() => window.__kbkind === 'artifact' && window.__kbpath === 'company/cron-demo/pulse.html'",
-            timeout=8000)
+        wait_path(page, doc("cron-demo/pulse.html"), timeout=8000, kind="artifact")
         ctx.close()
     finally:
         set_company([])

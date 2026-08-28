@@ -4,7 +4,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, CREDS
+from conftest import BASE, CREDS, wait_path
 from kbenv import U, doc
 
 VU = f"vwui{int(time.time()) % 100000}"
@@ -51,7 +51,7 @@ def test_viewer_browser_experience(browser, viewer):
         assert page.locator('.launchbar .lchip.company', has_text="Shell thing").count() == 0
         # documents still open — and are editable (kb-users group write)
         page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-        page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+        wait_path(page, doc("overview.md"))
         page.wait_for_selector('#access-badge:not([hidden])')
         assert "write" in page.inner_text('#access-badge')
     finally:

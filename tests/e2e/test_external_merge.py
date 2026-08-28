@@ -93,44 +93,86 @@ def type_at(page, anchor_snippet, text):
            }""", [anchor_snippet, text])
 
 
+def _fresh_doc():
+    """Another document of this test's own, seeded with BASE_TEXT.
+
+    A retry cannot reuse the previous attempt's file: that one already holds the
+    external tool's rewrite, so "the agent's edit landed exactly once" would be
+    asserted against text that starts with it.
+    """
+    global DOC, DISK
+    DOC = kbdoc(f"extmerge_{int(time.time() * 1000)}.md")
+    DISK = f"/srv/kb/{DOC}"
+    k = api("alice")
+    assert k.post("/api/file", json={"path": DOC}).status_code in (200, 409)
+    assert k.post("/api/artifact/write", json={"path": DOC, "content": BASE_TEXT}).status_code == 200
+    time.sleep(1.0)   # let the daemon/watcher settle on the seeded content
+    return DOC
+
+
 def test_stale_external_rewrite_keeps_concurrent_typing_intact(browser, doc):
-    ck, k, cj, j = open_both(browser)
+    """The merge only happens when bob's keystrokes are still UNFLUSHED as the
+    external write lands — that is the scenario. The daemon flushes on its own
+    ~250 ms tick, so on a loaded machine (CI) the flush can win the race; the
+    external tool then writes text it had ALREADY seen on disk, which is a
+    legitimate revert and not this test's subject. So check the precondition —
+    is bob's typing still absent from disk? — and if it is not, run the whole
+    thing again on a fresh document instead of asserting about a race that
+    never ran.
+    """
+    spares = []
     try:
-        # the external tool reads the file NOW (this is its stale base)...
-        stale = open(DISK).read()
+        for attempt in range(4):
+            if attempt:
+                spares.append(_fresh_doc())     # a retry needs virgin text
+            ck, k, cj, j = open_both(browser)
+            try:
+                # the external tool reads the file NOW (this is its stale base)...
+                stale = open(DISK).read()
+                external = stale.replace(
+                    "line four about the delta project",
+                    "line four about the delta project (REWRITTEN BY AGENT)"
+                ) + "\n## Agent addendum\n\nadded by the external tool\n"
 
-        # ...meanwhile bob types into line two (unflushed for ~250ms)...
-        type_at(j, "line two", " [bob-was-here]")
+                # ...meanwhile bob types into line two (unflushed for ~250ms)...
+                type_at(j, "line two", " [bob-was-here]")
+                unflushed = "[bob-was-here]" not in open(DISK).read()
 
-        # ...and the external tool writes its modification of the STALE text:
-        # edit line four + append a section (a classic claude code Edit).
-        external = stale.replace(
-            "line four about the delta project",
-            "line four about the delta project (REWRITTEN BY AGENT)"
-        ) + "\n## Agent addendum\n\nadded by the external tool\n"
-        open(DISK, "w").write(external)
+                # ...and the external tool writes its modification of the STALE
+                # text: edit line four + append a section (a classic claude code
+                # Edit).
+                open(DISK, "w").write(external)
+                if not unflushed:
+                    continue                      # the flush won; try again
 
-        # bob keeps typing while the daemon merges — the real-session killer
-        time.sleep(0.15)
-        type_at(j, "line three", " [more-typing]")
+                # bob keeps typing while the daemon merges — the real-session killer
+                time.sleep(0.15)
+                type_at(j, "line three", " [more-typing]")
 
-        # let everything converge (merge + flush + relay)
-        wait_converged([k, j])
-        tk, tj = text_of(k), text_of(j)
-        disk = open(DISK).read()
-        assert tk == tj == disk, f"all peers+disk must converge:\nK={tk!r}\nJ={tj!r}\nD={disk!r}"
-        # human keystrokes survive, contiguous, exactly once, where they were typed
-        for needle in ("line two [bob-was-here] about the beta project",
-                       "line three [more-typing] about the gamma project"):
-            assert tk.count(needle) == 1, f"typed text mangled: wanted {needle!r} in:\n{tk}"
-        # the external edit landed too, exactly once
-        assert tk.count("(REWRITTEN BY AGENT)") == 1, tk
-        assert tk.count("## Agent addendum") == 1, tk
-        # and nothing got duplicated wholesale
-        assert tk.count("line four about the delta project") == 1, tk
+                # let everything converge (merge + flush + relay)
+                wait_converged([k, j])
+                tk, tj = text_of(k), text_of(j)
+                disk = open(DISK).read()
+                assert tk == tj == disk, f"all peers+disk must converge:\nK={tk!r}\nJ={tj!r}\nD={disk!r}"
+                # human keystrokes survive, contiguous, exactly once, where they were typed
+                for needle in ("line two [bob-was-here] about the beta project",
+                               "line three [more-typing] about the gamma project"):
+                    assert tk.count(needle) == 1, f"typed text mangled: wanted {needle!r} in:\n{tk}"
+                # the external edit landed too, exactly once
+                assert tk.count("(REWRITTEN BY AGENT)") == 1, tk
+                assert tk.count("## Agent addendum") == 1, tk
+                # and nothing got duplicated wholesale
+                assert tk.count("line four about the delta project") == 1, tk
+                return
+            finally:
+                ck.close()
+                cj.close()
+        pytest.fail("bob's keystrokes reached disk before the external write on "
+                    "every attempt — the merge path was never exercised")
     finally:
-        ck.close()
-        cj.close()
+        c = api("alice")
+        for p in spares:
+            c.post("/api/fs/delete", json={"path": p})
 
 
 def test_repetitive_tokens_never_mutate_midword(browser, doc):

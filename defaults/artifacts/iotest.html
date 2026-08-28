@@ -7,7 +7,11 @@
   const kbRead=(path)=>_send({type:"kb-read",path});
   const kbWrite=(path,content)=>_send({type:"kb-write",path,content});
   (async()=>{
-    const path="company/dashboards/io_written.md";
+    // The bridge only allows an artifact its OWN folder, and that folder is not
+    // "company/dashboards" on every install (a test run is namespaced). The
+    // frame is loaded as /api/artifact/raw?path=<this file>, so ask the URL.
+    const me=new URLSearchParams(location.search).get("path")||"";
+    const path=me.slice(0,me.lastIndexOf("/"))+"/io_written.md";
     const w=await kbWrite(path,"# artifact write proof\nvalue=IO_PROOF_42\n");
     const rd=await kbRead(path);
     const ok = rd.content && rd.content.includes("IO_PROOF_42");

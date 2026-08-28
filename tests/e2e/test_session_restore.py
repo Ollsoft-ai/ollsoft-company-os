@@ -4,7 +4,7 @@ environment, recent output replayed). Plus desktop-style terminal copy."""
 import re
 import time
 
-from conftest import BASE, CREDS, login
+from conftest import BASE, CREDS, login, wait_path
 from kbenv import doc
 
 
@@ -24,7 +24,7 @@ def test_tabs_and_terminal_survive_reload(browser):
 
     # a doc tab + a live shell with state in it
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     wait_prompt(page)
@@ -39,7 +39,7 @@ def test_tabs_and_terminal_survive_reload(browser):
     page.reload()
     page.wait_for_selector('[data-testid="tree"] .tree-item')
     # the doc tab is back and active
-    page.wait_for_function("() => window.__kbpath === 'company/overview.md'", timeout=10000)
+    wait_path(page, doc("overview.md"), timeout=10000)
     # the terminal is back — with the SAME shell: replayed output AND live env
     page.wait_for_selector("#terminal-panel:not([hidden])", timeout=10000)
     page.wait_for_selector("#terminal .xterm-rows")
@@ -114,7 +114,7 @@ def test_sync_badge_shows_live(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
-    page.wait_for_function("() => window.__kbpath === 'company/overview.md'")
+    wait_path(page, doc("overview.md"))
     page.wait_for_selector(".sync-badge.live", timeout=8000)
     assert "live" in page.inner_text('[data-testid="sync-badge"]')
     ctx.close()

@@ -1,6 +1,6 @@
 """End-to-end: a real artifact writes then reads a file through the bridge."""
 from conftest import login
-from kbenv import doc
+from kbenv import doc, full
 
 
 def test_artifact_writes_and_reads_a_file(browser):
@@ -20,5 +20,5 @@ def test_artifact_writes_and_reads_a_file(browser):
     assert "write_ok=true" in text, f"artifact write failed: {text!r}"
     assert "read_proof=true" in text, f"artifact read-back failed: {text!r}"
     # and it really landed on disk (company files are world-readable)
-    assert "IO_PROOF_42" in open("/srv/kb/company/dashboards/io_written.md").read()
+    assert "IO_PROOF_42" in full(doc("dashboards/io_written.md")).read_text()
     ctx.close()

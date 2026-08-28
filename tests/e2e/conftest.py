@@ -70,9 +70,21 @@ def expand_folder(page, path):
         page.wait_for_timeout(150)
 
 
+def wait_path(page, path, timeout=None, kind=None):
+    """Wait until THIS path is the open tab.
+
+    The path is passed as an argument rather than baked into the JS source: a
+    literal 'company/overview.md' in here is a fixture path from before
+    namespacing, and it can never become true again on a namespaced run.
+    """
+    page.wait_for_function(
+        "([p, k]) => window.__kbpath === p && (!k || window.__kbkind === k)",
+        arg=[path, kind], timeout=timeout)
+
+
 def open_doc(page, path):
     page.click(f'.tree-item[data-path="{path}"]')
-    page.wait_for_function("() => window.__kbview && window.__kbpath")
+    wait_path(page, path)
     # wait until the CRDT text is populated from the server seed
     page.wait_for_function(
         "() => window.__kbview && window.__kbview.state.doc.length > 0", timeout=8000)

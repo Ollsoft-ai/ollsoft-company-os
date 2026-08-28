@@ -39,7 +39,7 @@ def test_collapse_and_expand_all(browser):
     assert page.locator(inner).is_visible()               # expanded by default
     page.click('[data-testid="tree-fold"]')               # collapse all
     assert not page.locator(inner).is_visible()
-    assert page.locator(f'.tree-item[data-path="{AREA}"]').is_visible()
+    assert page.locator(f'.tree-item[data-path="{AREA.split("/")[0]}"]').is_visible()
     page.click('[data-testid="tree-fold"]')               # now it expands all
     assert page.locator(inner).is_visible()
     ctx.close()
@@ -77,19 +77,25 @@ def test_permissions_modal_adds_acl(browser):
     # alice owns his private file, so he can edit its ACLs.
     target = home("alice", "private.md")
     page.hover(f'.tree-item[data-path="{target}"]')
-    page.click(f'.tree-item[data-path="{target}"] .tbtn[title="Permissions"]')
+    page.click(f'.tree-item[data-path="{target}"] .tbtn[title="Who can open this"]')
+    # The modal leads with the people list; owner/group/mode and the raw ACL
+    # entries this test drives live behind "Advanced", built on first open.
+    page.click('.sh-adv summary')
     page.wait_for_selector('#pm-addacl')
     page.select_option('#pm-type', 'user')
-    page.select_option('#pm-name', 'bob')   # picker, fed by /api/principals
+    page.select_option('#pm-name', U("bob"))   # picker, fed by /api/principals
     page.select_option('#pm-perms', 'r')
     page.click('#pm-addacl')
     page.click('#pm-save')
     # sharing a file inside a 0700 home auto-grants ancestor traverse; the app
     # explains that in its own dialog — acknowledge it
     dlg_ok(page)
+    # "Apply raw permissions" applies in place — the share modal it lives in
+    # stays open on purpose, so close it before asserting the page is back.
+    page.click('#sh-close')
     page.wait_for_selector('.modal-overlay', state='detached', timeout=5000)
     acls = props("alice", target)["acls"]
-    assert any(a["type"] == "user" and a["name"] == "bob" for a in acls), acls
+    assert any(a["type"] == "user" and a["name"] == U("bob") for a in acls), acls
     # Clean up: undo the share AND the auto-granted ancestor traverse, so the
     # "bob can't read alice's private" invariant is restored for other tests.
     c = httpx.Client(base_url=BASE, timeout=15)

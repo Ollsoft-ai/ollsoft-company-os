@@ -6,7 +6,7 @@ import time
 
 import httpx
 from conftest import BASE, CREDS, login
-from kbenv import U, doc, proj
+from kbenv import U, doc, full, proj
 
 TODOS = doc("todos.html")
 
@@ -98,14 +98,16 @@ def test_toggle_from_todos_writes_file(browser):
     frame.locator("#showdone").check()
     time.sleep(0.8)
     # onboarding.md 'Read the security policy @carol' is a company task alice can write.
-    line = 5
-    before = open("/srv/kb/company/onboarding.md").read().splitlines()[line - 1]
+    src = full(doc("onboarding.md"))
+    line = next(i for i, t in enumerate(src.read_text().splitlines(), 1)
+                if "Read the security policy" in t)
+    before = src.read_text().splitlines()[line - 1]
     # find that task's checkbox and click it
     task = frame.locator('.task', has_text="Read the security policy").first
     task.locator("input[type=checkbox]").click()
     ok = False
     for _ in range(15):
-        now = open("/srv/kb/company/onboarding.md").read().splitlines()[line - 1]
+        now = src.read_text().splitlines()[line - 1]
         if now != before:
             ok = True
             break

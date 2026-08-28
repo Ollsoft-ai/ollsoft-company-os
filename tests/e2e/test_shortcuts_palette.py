@@ -11,7 +11,7 @@ import os
 import httpx
 import pytest
 
-from conftest import BASE, CREDS, login
+from conftest import BASE, CREDS, login, wait_path
 from kbenv import NS, U, doc, proj
 
 SCRATCH = doc(f"kbtest_keys_{os.getpid()}.md")
@@ -82,7 +82,7 @@ def test_quick_open_finds_a_file_by_name(page):
 def test_quick_open_opens_it_with_the_right_viewer(page):
     palette(page, mine("todos"))
     page.keyboard.press("Enter")
-    page.wait_for_function("() => window.__kbpath === 'company/todos.html'", timeout=8000)
+    wait_path(page, doc("todos.html"), timeout=8000)
     assert page.evaluate("() => window.__kbkind") == "artifact"
 
 
@@ -143,7 +143,10 @@ def test_rows_keep_their_labels_across_re_renders(page):
     """render() runs again on every arrow key and when the content results land.
     Assert on the TEXT, not just data-path: a row can keep its path attribute
     and still paint empty (a DocumentFragment is emptied by the first append)."""
-    palette(page, "plan")
+    # "onboarding" is both a fixture FILE name and fixture document TEXT
+    # ("Write the onboarding guide"), so both palette sections are populated on
+    # any box — a query that only matches files leaves nothing to re-render.
+    palette(page, "onboarding")
     labels = lambda: [t.strip() for t in page.locator(".pi-main").all_inner_texts()]
     assert all(labels()), labels()
     page.keyboard.press("ArrowDown")
@@ -232,9 +235,9 @@ def test_the_menu_button_opens_it_too(page):
 # --- tab navigation ----------------------------------------------------------
 
 def test_tab_shortcuts(page):
-    palette(page, "overview.md")
+    palette(page, mine("overview.md"))
     page.keyboard.press("Enter")
-    page.wait_for_function("() => window.__kbpath === 'company/overview.md'", timeout=8000)
+    wait_path(page, doc("overview.md"), timeout=8000)
     n = page.evaluate("() => document.querySelectorAll('#tabbar .tab').length")
     assert n >= 2, n
 

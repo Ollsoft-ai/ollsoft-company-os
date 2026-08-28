@@ -82,18 +82,21 @@ def test_mention_autocomplete(browser, box):
     page.wait_for_function("() => window.__kbsynced === true", timeout=8000)
     cursor_to_end(page)
     # A real box has arbitrary principals (not just the demo trio), so a short
-    # fuzzy prefix may rank other users into the list. Type enough of "bob" to
-    # be deterministic, but stop short of the full name so the completion still
-    # has something to INSERT — the doc gains characters we never typed.
-    page.keyboard.type("ping @bo")
+    # fuzzy prefix may rank other users into the list. Type enough of bob's
+    # account name to be deterministic, but stop short of the whole thing so the
+    # completion still has something to INSERT — the doc gains characters we
+    # never typed. The list offers real account names, not logical ones.
+    bob = U("bob")
+    page.keyboard.type(f"ping @{bob[:-2]}")
     page.wait_for_selector(".cm-tooltip-autocomplete li", timeout=6000)
-    # click the EXACT "bob" row (substring matching could hit e.g. a "bobby")
+    # click the EXACT row (substring matching could hit e.g. a "bobby")
     row = page.locator(".cm-tooltip-autocomplete li").filter(
-        has_text=re.compile(r"^bob$")).first
+        has_text=re.compile(f"^{re.escape(bob)}$")).first
     row.wait_for(timeout=6000)
     row.click()
     page.wait_for_function(
-        '() => window.__kbview.state.doc.toString().includes("ping @bob")', timeout=6000)
+        '(n) => window.__kbview.state.doc.toString().includes("ping @" + n)',
+        arg=bob, timeout=6000)
     ctx.close()
 
 
