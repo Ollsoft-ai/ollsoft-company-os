@@ -31,9 +31,17 @@ The platform continuously parses every markdown file into the `kb` schema so you
 ```sql
 -- every open task across everything you can see:
 SELECT file_path, line, text FROM kb.blocks WHERE kind='task' AND checked=false ORDER BY file_path;
--- full-text search:
-SELECT file_path, text FROM kb.blocks WHERE tsv @@ plainto_tsquery('english', 'onboarding');
+-- full-text search (websearch_to_tsquery handles "quoted phrases" and -exclusions,
+-- and never raises on odd input the way to_tsquery does):
+SELECT file_path, text FROM kb.blocks
+WHERE tsv @@ websearch_to_tsquery('pg_catalog.english', 'onboarding');
+-- partial words need either a prefix query or a plain substring match —
+-- 'budg' does NOT match the lexeme 'budget':
+SELECT file_path, text FROM kb.blocks WHERE tsv @@ to_tsquery('pg_catalog.english', 'budg:*');
+SELECT file_path, text FROM kb.blocks WHERE text ILIKE '%budg%';
 ```
+
+**Know what is NOT in here.** The indexer only reads `.md` files, so `kb.blocks` has no rows for anything else and `kb.files` holds only markdown files and directories. Artifacts (`.html`), images, PDFs and attachments are invisible to SQL. To find those, walk the filesystem or call `GET /api/search`, whose `files` half searches real paths as your user. `_secrets/` is excluded everywhere by design.
 
 You have **SELECT only** on this schema — it's a rebuilt-from-markdown index, not a place to write.
 
