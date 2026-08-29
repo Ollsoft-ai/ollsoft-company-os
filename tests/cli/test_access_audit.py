@@ -254,9 +254,14 @@ def bob():
 
 
 async def _join(cookie: str, path: str, epoch: str, frames: int = 0) -> bool:
-    """Join a document the way the editor does. Returns whether the bridge
-    stayed up — a refusal downstream closes it immediately, because the hub
-    has already prepared the client's own socket by then."""
+    """Join a document the way the editor does; returns whether syncd admitted us.
+
+    The client handshake ALWAYS succeeds, even on a refusal: the hub prepares
+    our socket before it asks syncd, so a 403/404/409 reaches us as the bridge
+    closing rather than as a failed connect. And `ws.closed` only flips once
+    that close frame has been read — so read the socket instead of polling it.
+    An admitted session answers with the y-protocol SYNC_STEP1 straight away.
+    """
     import aiohttp
     from pycrdt import Doc, create_sync_message
 
@@ -265,13 +270,19 @@ async def _join(cookie: str, path: str, epoch: str, frames: int = 0) -> bool:
     async with aiohttp.ClientSession(
             headers={"Cookie": f"{common.COOKIE_NAME}={cookie}"}) as s:
         async with s.ws_connect(url, heartbeat=None) as ws:
-            for _ in range(frames):
-                await ws.send_bytes(create_sync_message(Doc()))
-                await asyncio.sleep(0.1)
-            await asyncio.sleep(0.5)
-            alive = not ws.closed
+            try:
+                first = await asyncio.wait_for(ws.receive(), timeout=10)
+            except asyncio.TimeoutError:
+                await ws.close()
+                return False
+            admitted = first.type in (aiohttp.WSMsgType.BINARY, aiohttp.WSMsgType.TEXT)
+            if admitted:
+                for _ in range(frames):
+                    await ws.send_bytes(create_sync_message(Doc()))
+                    await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)
             await ws.close()
-            return alive
+            return admitted
 
 
 def join(c, path: str, frames: int = 0) -> bool:
