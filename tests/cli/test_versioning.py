@@ -219,6 +219,14 @@ def test_pathspec_magic_cannot_dump_other_files(k):
         j.post("/api/fs/delete", json={"path": decoy})
 
 
+# A repo-wide "30 days ago" window meant paging every commit in the live
+# knowledgebase — 5406 of them in the 30 days to 2026-08-29 — which took ~29s
+# and blew the client timeout, failing this test on its own BASELINE rather
+# than on the leak it exists to catch. The writes it asserts on are seconds
+# old, so the narrow window this file already uses everywhere else is enough.
+WINDOW = {"since": "10 minutes ago", "limit": 1000}
+
+
 def test_activity_only_shows_readable_files(k):
     """The 'what changed' feed never reveals a path the caller can't read.
     Uses a dedicated private file (not the shared private.md fixture)."""
@@ -230,10 +238,10 @@ def test_activity_only_shows_readable_files(k):
     write(k, hidden, f"private change 2 {TAG}\n")
     time.sleep(6)
     # alice sees his own change in the feed…
-    kact = k.get("/api/vc/activity", params={"since": "30 days ago"}).json()
+    kact = k.get("/api/vc/activity", params=WINDOW).json()
     assert any(hidden in f["paths"] for c in kact["commits"] for f in c["files"]), "owner must see own change"
     # …but bob's feed must not mention it at all
-    jact = j.get("/api/vc/activity", params={"since": "30 days ago"}).json()
+    jact = j.get("/api/vc/activity", params=WINDOW).json()
     leaked = [pp for c in jact["commits"] for f in c["files"] for pp in f["paths"] if pp == hidden]
     assert not leaked, f"activity leaked alice's private file to bob: {leaked}"
 

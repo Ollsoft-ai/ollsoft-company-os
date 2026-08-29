@@ -374,7 +374,11 @@ class Indexer:
         # a write landing mid-read would be invisible until the next restart.
         try:
             pre = p.lstat()
-            text = p.read_text(errors="replace")
+            # Strip NUL bytes: Postgres text cannot hold them, so a single 0x00
+            # anywhere in a file made every insert for it raise DataError and the
+            # file was retried, and re-logged, on every sweep forever. kb-convert
+            # PDF sidecars are the source (38 of them from one 2026-08-20 batch).
+            text = p.read_text(errors="replace").replace("\x00", "")
         except OSError:
             with self.conn.cursor() as cur:
                 cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
