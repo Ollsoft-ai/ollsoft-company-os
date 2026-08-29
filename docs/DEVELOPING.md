@@ -9,11 +9,18 @@ prefix recorded in `/etc/kb/kb.env` (default `/opt/kb-platform`). To ship a
 change:
 
 ```bash
-# backend change:
-sudo bash scripts/deploy.sh                       # rsync code to /opt (keeps the venvs)
-sudo systemctl restart kb-hub kb-syncd kb-indexer # restart what you changed
-sudo systemctl restart kb-convert                 # only for convert.py / common.py changes
-sudo rm -f /run/kb/users/*/backend.sock           # drop cached per-user backends so they respawn with new code
+# backend change: rsync to /opt (keeps the venvs), then restart kb-syncd, kb-hub
+# and kb-indexer — plus kb-convert where its venv exists.
+sudo bash scripts/deploy.sh
+
+# ...or, if anyone is mid-session: the hub's cgroup holds every web terminal, and
+# an indexer restart costs a full resweep (SCALING.md). Skip the restarts, then
+# bounce only what your change touched.
+sudo bash scripts/deploy.sh --no-restart
+sudo systemctl restart kb-syncd
+# per-user backends keep serving old code until their process ends. A hub restart
+# takes them with it; scripts/bounce_backends.py ends only the ones reporting a
+# stale version marker, driving the product as each user rather than as root.
 
 # frontend change:
 (cd frontend && node build.mjs)
@@ -79,6 +86,8 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
 
 ## Gotchas that will bite you
 
+- **Install into the platform venv by interpreter.** `sudo /opt/kb-venv/bin/python
+  -m pip install <pkg>`, never the venv's `pip` console script
   (its shebang points at the original venv path).
 - **A long-lived shell has stale group membership.** If you add a user to a group,
   a shell that started *before* that doesn't have it. Backends spawned via
@@ -118,10 +127,11 @@ natural next steps.
   resolved per-viewer, and a rotation runbook.
 - **True logout / session revocation.** A server-side session store or a
   per-user token version, so logout invalidates immediately instead of at TTL.
-- **Real embeddings.** Search currently uses FTS + a *deterministic hash*
-  `vector(64)` placeholder. Swap `indexer.embed()` for a real embedding API and
-  the pgvector search becomes semantic (add an embedding cache keyed by content
-  hash for cheap rebuilds).
+- **Real embeddings.** Search is FTS only. The `vector(64)` hash placeholder was
+  dropped 2026-08-07 — never a model, never read, and pure heap weight on every
+  (necessarily sequential) content search. The `vector` extension stays installed,
+  so adding it back needs no superuser step; the shape that works here is in
+  [SCALING.md](SCALING.md#future-semantic-search).
 - **Per-user Postgres schema UI.** The `u_<user>` schemas exist and are default-deny;
   a UI to browse/grant them (and back them up) isn't built.
 - **Live agent-in-the-doc.** Agents currently participate by editing files (which

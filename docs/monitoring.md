@@ -28,7 +28,8 @@ humans and agents alike can read it.
 
 That folder is a **dot-directory on purpose**: readable to `kb-users` on disk and
 versioned by syncd, but the indexer prunes dot-dirs, so it is absent from
-`kb.blocks`, from search and from the app's file tree. Read the file by path;
+`kb.blocks` and from search, and the app's file tree hides it until you flip the
+sidebar's `.*` toggle. Read the file by path;
 `rg`/Grep need `--hidden`. The heartbeat's staleness check prunes the same set as
 the indexer for the same reason — comparing a never-indexed file against
 `kb.files` is a permanent false STALE.

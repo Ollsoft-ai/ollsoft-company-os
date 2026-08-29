@@ -10,8 +10,9 @@ Read this before exposing the platform beyond a trusted single box.
 | Search / DB queries can't return files you can't read | **Postgres RLS** (`kb.visible_files`) | both policies gate on a materialized (usr, path) set the indexer keeps in sync; `kb.can_read` is the live-computed oracle the parity test checks it against, not the policy |
 | A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component |
 | An artifact can't touch the app or exfiltrate | **opaque-origin iframe + CSP** | `sandbox="allow-scripts"` (no same-origin) + `connect-src 'none'` — the artifact itself never reaches the network |
-| An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.claude/egress.json` (root:kb-users, admin-writable). Requests are proxied by the hub, so the artifact never holds the credential |
+| An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.claude/egress.json` (root:kb-users 0644 — an admin, or anyone granted write on that file, may change it). Requests are proxied by the hub, so the artifact never holds the credential |
 | An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write` limited to the artifact's own directory |
+| An uploaded file can't run script on the app's origin | **CSP + `nosniff` on `/api/attachment`** | `script-src 'none'`, so a planted SVG previews but never executes; a `.html` is classified as an artifact and served sandboxed by `/api/artifact/raw` instead |
 | A session cookie can't be forged | **HMAC-SHA256** with a root-only key | `/etc/kb/session.key`, 12h TTL |
 | A read-only viewer can't mutate a doc | **`kb-syncd` drops their CRDT writes** | they still see content + live updates |
 | Only admins can manage users/groups | **admin-group check** on every `/admin/*` call (membership of `KB_ADMIN_GROUP`, default `sudo`) | |
@@ -109,8 +110,8 @@ maintenance agent's input — is protected directly by dropping group write.
 
 ## Audit trail — who changed access
 
-The hub records every privileged mutation it performs — the actions that change
-who can reach what — as one line per event in journald:
+The hub records five events — logins, and the sharing and account changes that
+decide who can reach what — as one line each in journald:
 
 ```bash
 journalctl -u kb-hub -g AUDIT --since yesterday
@@ -122,6 +123,11 @@ journald shows every other account nothing but its own messages.
 
 What it does NOT cover, and should not be relied on for:
 
+- **Not every privileged action.** Only the five above. Deleting a user,
+  switching an account between full and viewer, creating or deleting a group,
+  rewriting the launcher list and editing `.claude/egress.json` all run in the
+  hub as root and write no AUDIT line — the raw hub log shows the
+  `POST /admin/...`, but not who sent it.
 - **Reads are not logged.** The trail shows that access was granted, never that
   a file was opened. Content exfiltration by someone who legitimately had access
   leaves no trace here.
@@ -149,7 +155,10 @@ it can only show what the caller could already open.
   Nothing on a normal box triggers it, because the share panel only ever grants
   — but the documented "a raw query can never return a row the caller couldn't
   read on disk" is, strictly, not yet true. The session cookie also has no
-  `Secure` flag and the site sends no HSTS.
+  `Secure` flag, the site sends no HSTS, and the app shell still ships without a
+  CSP (`Hub.SHELL_CSP` is written but not applied — enabling it broke the
+  artifact iframes, and `tests/cli/test_security_headers.py` keeps the gap
+  visible as an `xfail`).
 - **Platform admin is the OS `sudo` group** by default (`KB_ADMIN_GROUP`).
   That makes any web-admin grant also an OS-root-capable one, and it is why a
   seeded demo account was briefly a full platform admin. Decoupling it into a

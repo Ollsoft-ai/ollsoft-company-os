@@ -160,7 +160,7 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
         ┌────────▼─────────┐    /srv/kb  ·  git-versioned markdown = TRUTH
         │   PostgreSQL     │◀── kb-indexer (user kbindexer): parses md → rows,
         │  RLS = Unix      │    refreshes group membership, honors POSIX ACLs.
-        │  read + traverse │    Disposable · rebuildable · pgvector + FTS.
+        │  read + traverse │    Disposable · rebuildable · Postgres FTS.
         └──────────────────┘
                                 kb-convert (same user): office/PDF binaries →
                                 hidden read-only .md sidecars, so their text is
@@ -209,7 +209,7 @@ ollsoft-company-os/
 │                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
-├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright) + torture/
+├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
 └── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · monitoring · dictation · remote-access · converted-documents · windows-drive
 ```
 
@@ -324,7 +324,7 @@ Readability is enforced per request against the kernel, so it can only ever show
 you documents you could open anyway.
 
 **Privileged-action audit — who changed who can see what.** The hub records
-every privileged mutation it performs, one greppable line each, to journald.
+the sharing and account events below, one greppable line each, to journald.
 This is the question `kb-history` cannot answer: it tracks content, never
 permissions.
 
@@ -334,7 +334,7 @@ journalctl -u kb-hub -g AUDIT --since yesterday
 
 ```
 hub AUDIT share.set actor=alice result=ok path='company/HR/x.md' scope='people'
-hub AUDIT login     actor=mallory result=DENIED source='203.0.113.4'
+hub AUDIT login actor=mallory result=DENIED source='203.0.113.4'
 ```
 
 Events: `login`, `share.set`, `props.set`, `group.member`, `user.create`.
@@ -346,10 +346,12 @@ shows everyone else nothing but their own messages, so the people being audited
 cannot read the audit.
 
 **Know the limits before relying on it.** Reads are NOT logged — you can see
-that someone was granted access, never that they opened the file. Anything done
-as root or directly on disk bypasses it. Anyone with `sudo` can edit the
-journal, so it is evidence about users, not about administrators. And journald
-rotates, so old entries age out silently.
+that someone was granted access, never that they opened the file. Nor is every
+admin action: deleting a user, switching an account between full and viewer,
+creating or deleting a group, and editing the artifact egress allow-list all
+happen without a line. Anything done as root or directly on disk bypasses it.
+Anyone with `sudo` can edit the journal, so it is evidence about users, not
+about administrators. And journald rotates, so old entries age out silently.
 
 Agents investigating an incident should load the **`kb-audit`** skill, which
 covers the patterns worth chasing and — as importantly — the normal platform

@@ -10,6 +10,11 @@ overwritten by a re-run or an upgrade.
 | `egress.json` | Per-artifact network allow-list. Empty (deny-all) by default; the only way an artifact reaches the network. |
 | `launchers.json` | Buttons in the UI's launcher bar. Default: one terminal button that runs `claude`. |
 
+`artifacts/todos.html` is installed too, but to `company/todos.html` — the
+To-dos view is a shipped feature, not agent config. The other files under
+`artifacts/` are demo and test fixtures; `scripts/seed-demo.sh` places those, and
+a plain install does not.
+
 The agent skills in `company-skills/` are installed alongside these, at
 `<repo>/.claude/skills/`. Those *are* refreshed on every install, since they
 document the platform and should track the code.

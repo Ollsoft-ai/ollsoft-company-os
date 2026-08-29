@@ -14,7 +14,9 @@ A false alarm costs trust; the next real one gets ignored.
 | Source | Command | Answers |
 |---|---|---|
 | **Hub audit** | `journalctl -u kb-hub -g AUDIT --since yesterday` | who logged in, shared, changed permissions, created accounts |
-| Hub raw | `journalctl -u kb-hub --since yesterday` | every HTTP request, throttle lockouts, tracebacks |
+| Hub raw | `journalctl -u kb-hub --since yesterday` | every HTTP request, throttle lockouts, tracebacks — the request line, never the caller |
+| Artifact egress | `sudo cat /var/log/kb/egress.log` | every outbound call an artifact made: user, artifact, method, URL, status |
+| Dictation | `sudo cat /var/log/kb/stt.log` | who dictated, how much and when — never what was said |
 | Content history | `kb-history --since '7 days ago' --author <user>` | what someone *wrote* — never who changed permissions |
 | Sync daemon | `journalctl -u kb-syncd --since yesterday` | live editing, revocations, room retires |
 | Shell access | `journalctl -u ssh --since yesterday` | SSH logins (key-only since 2026-08-24) |
@@ -27,8 +29,9 @@ hub AUDIT share.set actor=alice result=ok path='company/HR/x.md' scope='people' 
 hub AUDIT login actor=mallory result=DENIED source='203.0.113.4'
 ```
 
-Events: `login`, `share.set`, `props.set`, `group.member`, `user.create`.
-`result=DENIED` is the interesting half — that is someone being refused.
+Events: `login`, `share.set`, `props.set`, `group.member`, `user.create` — and
+nothing else. `result=DENIED` is the interesting half — that is someone being
+refused.
 
 ## Who can read this
 
@@ -127,6 +130,12 @@ Be honest about these rather than inferring past them:
 
 - **Reads are not logged.** Only mutations. You can see that someone was given
   access; you cannot see that they opened the file.
+- **Not every mutation, either.** Deleting a user, flipping an account between
+  full and viewer, creating or deleting a group, and editing `.claude/egress.json`
+  write no AUDIT line. The raw hub log shows the `POST /admin/...` that did it,
+  but not who sent it — so corroborate with `getent`, `/etc/passwd` and, for the
+  allow-list, `sudo git -C /srv/kb log -p -- .claude/egress.json` (`kb-history`
+  covers `.md`/`.html` only).
 - **It starts 2026-08-25.** There is nothing before the audit log existed.
 - **Anything done as root, or directly on disk, bypasses it entirely** — an SSH
   user running `setfacl` by hand leaves no audit line. Check `journalctl` for

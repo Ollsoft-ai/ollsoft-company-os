@@ -68,16 +68,16 @@ file after your first login.
 ### 4. The repo skeleton
 
 ```
-/srv/kb              2775 root:kb-users, sticky   the knowledgebase (a git repo)
+/srv/kb              3775 root:kb-users, sticky   the knowledgebase (a git repo)
 ├── .git             0700 root                     history — root-only, always
-├── .gitignore       0644 root:kb-users            only .md/.html enter history
+├── .gitignore       0644 root:kb-users            .md, .html and .claude/*.json only
 ├── .claude/         0755 root:kb-users            agent context, skills, egress rules
 ├── company/         2775 root:kb-users + default ACL   everyone reads and writes
-├── projects/        2775 root:kb-users            restricted folders go here
-└── users/<name>/    0700 <name>:<name>            private per person
+├── projects/        3775 root:kb-users, sticky    restricted folders go here
+└── users/           3775 root:kb-users, sticky    one 0700 <name>:<name> dir per person
 ```
 
-Two details that matter more than they look:
+Three details that matter more than they look:
 
 - **setgid (`2775`) plus a default ACL** on `company/` means new files are
   group-writable no matter what umask the writer had. Without it, `vim`, the web
@@ -86,6 +86,10 @@ Two details that matter more than they look:
   of every file. Group access there would let anyone read the history of content
   they cannot read on disk — bypassing both file permissions and RLS. `syncd`
   re-asserts this on start; the installer re-asserts it on every run.
+- **Sticky (`+t`) on the repo root, `projects/` and `users/` — deliberately not on
+  `company/`.** Sticky is what stops one member renaming another's directory
+  aside; on `company/`, whose top level holds shared documents, it would also
+  block `O_CREAT` on files you do not own. See [SECURITY.md](SECURITY.md).
 
 ### 5. Python venv and frontend bundle
 
@@ -179,8 +183,9 @@ is meant to be a full account rather than a viewer.
 upgrades. See [remote-access.md](remote-access.md).
 
 **Search and to-dos are empty**
-`kb-indexer` is down, or the `vector` extension is missing. The index is
-disposable — `sudo systemctl restart kb-indexer` rebuilds it from the markdown.
+`kb-indexer` is down, or it was restarted and is still part-way through its
+resweep. The index is disposable — `sudo systemctl restart kb-indexer` rebuilds
+it from the markdown, at the cost of a full pass (see [SCALING.md](SCALING.md)).
 
 **An office file or PDF has no text in search**
 `kb-convert` is down, or the conversion failed — check
