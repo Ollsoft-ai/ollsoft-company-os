@@ -125,8 +125,10 @@ The script validates the key against ElevenLabs before installing it. On the
 ElevenLabs side, scope the key to **`speech_to_text` only** — this is a credential
 every logged-in user can spend, so it should be able to do exactly one thing.
 
-If the key is missing, `/stt` returns **503** and the mic button hides itself.
-Nothing else on the platform is affected; `deploy.sh` prints a warning.
+If the key is missing, `/stt` returns **503** ("dictation is not set up on this
+server") and the mic reports that when you try to use it — the button itself is
+hidden only when the *browser* cannot record (see Operational notes). Nothing
+else on the platform is affected.
 
 ---
 

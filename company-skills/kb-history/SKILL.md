@@ -20,14 +20,18 @@ read the file now** — re-checked by the kernel, as you, per query.
 ## Who did what
 
 ```bash
-/usr/local/bin/kb-history --author tomas_vargosko --since "8 days ago" --limit 2000 --json
+/usr/local/bin/kb-history --author tomas_vargosko --since "8 days ago" --limit 1000 --json
 ```
 
-**Always pass `--author` for per-person questions.** Not just as a filter —
+**Pass `--author` for per-person questions** — it filters server-side, so the window's
+budget is spent on that person's commits instead of everyone's.
 
-> **Gotcha: without `--author`, `--since` is ignored.** The unfiltered call returns the same
-> newest ~32 commits whatever you pass (`1 day ago` and `30 days ago` give identical output).
-> An unfiltered sweep will silently under-report and make someone look inactive.
+> **Read `truncated` before you conclude anything.** The feed pages newest-first until
+> `--limit` visible commits (default 200), a 20 000-commit scan ceiling, or a 20 s budget
+> — whichever comes first. When it stops early it says so: `! showing the newest N changes
+> only` in text, `"truncated": true` in `--json`. An unfiltered week-long sweep reaches that
+> easily, and a report built on a truncated feed makes someone look inactive. Narrow it
+> (`--author`, `--until`) or raise `--limit`.
 
 Other flags: `--until`, `--limit`, `--json`, and per-file `--rev <id>` with `--diff` (default),
 `--show` (full content at that revision), `--restore` (write it back, as you).

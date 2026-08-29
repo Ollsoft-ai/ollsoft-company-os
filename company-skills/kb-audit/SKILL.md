@@ -15,7 +15,9 @@ A false alarm costs trust; the next real one gets ignored.
 |---|---|---|
 | **Hub audit** | `journalctl -u kb-hub -g AUDIT --since yesterday` | who logged in, shared, changed permissions, created accounts |
 | **Access audit** | `journalctl -u kb-hub -g 'AUDIT (document.open\|file.preview\|file.download)' --since yesterday` | who opened a document, previewed or downloaded an attachment (since 2026-08-29) |
-| Hub raw | `journalctl -u kb-hub --since yesterday` | every HTTP request, throttle lockouts, tracebacks |
+| Hub raw | `journalctl -u kb-hub --since yesterday` | every HTTP request, throttle lockouts, tracebacks — the request line, never the caller |
+| Artifact egress | `sudo cat /var/log/kb/egress.log` | every outbound call an artifact made: user, artifact, method, URL, status |
+| Dictation | `sudo cat /var/log/kb/stt.log` | who dictated, how much and when — never what was said |
 | Content history | `kb-history --since '7 days ago' --author <user>` | what someone *wrote* — never who changed permissions |
 | Sync daemon | `journalctl -u kb-syncd --since yesterday` | live editing, revocations, room retires |
 | Shell access | `journalctl -u ssh --since yesterday` | SSH logins (key-only since 2026-08-24) |
@@ -31,8 +33,8 @@ hub AUDIT file.download actor=bob result=ok path='company/HR/salaries.xlsx' byte
 ```
 
 Mutation events: `login`, `share.set`, `props.set`, `group.member`,
-`user.create`. `result=DENIED` is the interesting half — that is someone being
-refused.
+`user.create` — and no others. `result=DENIED` is the interesting half — that is
+someone being refused.
 
 Access events: `document.open`, `file.preview`, `file.download`. These are
 always `result=ok` by construction — they are written only after the service
@@ -178,6 +180,13 @@ Be honest about these rather than inferring past them:
 - **No access event proves reading.** `file.download` means the server sent the
   bytes with a save-me header. Whether a human looked, understood, or kept the
   file is outside what any of this can see — say so rather than implying it.
+- **Not every mutation is recorded either.** Deleting a user, flipping an
+  account between full and viewer, creating or deleting a group, and editing
+  `.claude/egress.json` write no AUDIT line. The raw hub log shows the
+  `POST /admin/...` that did it, but not who sent it — so corroborate with
+  `getent`, `/etc/passwd` and, for the allow-list,
+  `sudo git -C /srv/kb log -p -- .claude/egress.json` (`kb-history` covers
+  `.md`/`.html` only).
 - **The mutation events start 2026-08-25, the access events 2026-08-29.** There
   is nothing before the log existed, and no way to reconstruct it.
 - **Anything done as root, or directly on disk, bypasses it entirely** — an SSH

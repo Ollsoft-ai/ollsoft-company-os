@@ -107,5 +107,5 @@ rclone mount kb:/srv/kb K: --network-mode --vfs-cache-mode full `
 - Mounting the repo root means everything you can read — including any
   `_secrets/` you own — gets cached in plaintext on the laptop while in use.
   If the laptop isn't encrypted, consider turning on BitLocker.
-- Binaries have no version history (`.gitignore` admits only `.md`/`.html`):
-  an overwritten `.pptx` is only as recoverable as your backups.
+- Binaries have no version history (`.gitignore` admits documents and artifacts,
+  never binaries): an overwritten `.pptx` is only as recoverable as your backups.

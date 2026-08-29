@@ -73,9 +73,19 @@ there is no permission code here to get wrong.
   or folder (recursive), **as the user** — same authority as `mkdir`/`rm -r` in
   their terminal. Delete refuses the top-level areas (`company`/`projects`/
   `users`); a blocked ancestor is a clean 403, not a 500.
+- `POST /api/fs/rename`, `POST /api/fs/copy` — move/rename and copy **as the
+  user** (`mv` / `cp -r`). Both re-home the result to the **destination folder's**
+  audience (`audience: "keep"` opts out of a rename), because a plain `mv` carries
+  the old owner/group/ACLs into a folder with a different readership — a private
+  note dragged into a team folder would stay unreadable to that team, and to the
+  indexer. `POST /api/fs/move-preview` answers "would this change who can open
+  it?" before the move, so the app can ask.
 - `POST /api/upload`, `GET /api/attachment` — attachments in a `_files/` sibling.
-- `GET /pty` — a **real login shell** in a PTY (via `pty.fork` + `bash -l`),
-  starting in `/srv/kb` (the knowledgebase root), bridged to xterm.js in the browser. Shells are
+  Attachments are served with `script-src 'none'` + `nosniff`, so an uploaded SVG
+  previews without executing.
+- `GET /pty` — a **real login shell** in a PTY (`pty.fork` + the account's own
+  login shell, `-l`), starting in `/srv/kb` (the knowledgebase root), bridged to
+  xterm.js in the browser. A viewer account (nologin shell) gets 403. Shells are
   **persistent sessions** (`?session=<sid>&have=<bytes>`): they outlive the
   websocket, buffer 256 KB of output, and a reconnect replays only what the
   client missed (or sends `{"reset":true,"base":N}` + the full buffer when the
@@ -96,9 +106,10 @@ there is no permission code here to get wrong.
   a bare `%` is refused since cron would silently truncate there) and
   `crontab(1)` itself re-validates;
   remove/toggle must echo the current raw line back and get a 409 if the crontab
-  changed underneath them. Every user has cron on this box (no
-  `/etc/cron.allow`/`cron.deny`), and jobs run with the user's kernel + Postgres
-  identity — scheduling is just *the user acting later*, no privilege to escalate.
+  changed underneath them. **Full accounts only**: a viewer (nologin shell) gets
+  403 here, and the hub lists it in `/etc/cron.deny` so the OS refuses it too.
+  Jobs run with the user's kernel + Postgres identity — scheduling is just *the
+  user acting later*, no privilege to escalate.
 - **Artifact bridge**: `POST /api/artifact/{query,read,write}`, `GET
   /api/artifact/raw`, `POST /api/tasks/toggle` — see §6.
 - Connects to Postgres with `psycopg.connect("dbname=kb")` over the unix socket →
@@ -133,10 +144,11 @@ there is no permission code here to get wrong.
 
 `kb_platform/indexer.py`, runs as `kbindexer` (a member of every content group).
 
-- Parses every `.md` file into `kb.blocks` (one row per task/heading/line, with
-  `tsvector` for FTS and a 64-dim hash `vector` placeholder for pgvector) and
-  denormalises each file's owner/group/mode into `kb.files`.
-- Extracts `@assignees` and `#tags` from tasks into array columns (GIN-indexed).
+- Parses every `.md` file into `kb.blocks` (one row per task/heading/line, with a
+  `tsvector` for FTS) and denormalises each file's owner/group/mode into
+  `kb.files`. There is no embedding column: the 64-dim hash placeholder and its
+  indexes were dropped 2026-08-07 — see [SCALING.md](SCALING.md).
+- Extracts `@assignees` and `#tags` from tasks into array columns.
 - **ACL-aware**: reads real POSIX ACLs via `getfacl`, *de-masks* the group bits
   (so a file locked to owner and shared with one user via ACL doesn't look
   group-readable), and records named read/traverse grants in
@@ -336,9 +348,11 @@ permissions.
 
 **Privileged-action audit** — who changed who can see what. `kb-history` tracks
 content and is silent on permissions, which is the question that matters after
-an incident. The hub logs every privileged mutation to journald as
+an incident. The hub logs five events to journald as
 `hub AUDIT <event> actor=… result=…`: `login` (both outcomes), `share.set`,
-`props.set`, `group.member`, `user.create`.
+`props.set`, `group.member`, `user.create`. Other privileged actions — user
+deletion, the full↔viewer switch, group create/delete, the launcher list, the
+egress allow-list — write no AUDIT line.
 
 **Access audit** — who opened what. Three events on the same line format record
 access being *used*: `document.open` (a `/ws/doc/*` session syncd accepted),

@@ -5,7 +5,7 @@ description: Use when the user wants an interactive view, dashboard, chart, or s
 
 # Building an artifact
 
-An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, toggle a task, upload, copy to clipboard, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
+An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, read a neighbouring file's raw bytes (`kb-read-bytes`, for showing a video/image/PDF; 512 MB cap), toggle a task, upload, save-as through a prompt the *user* answers, copy to clipboard, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
 
 Create one by writing an `.html` file, e.g. `company/dashboards/mychart.html` (shared) or `users/<you>/scratch.html` (private).
 
