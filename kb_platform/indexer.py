@@ -200,7 +200,7 @@ def parse_blocks(text: str) -> list[dict]:
 
 class Indexer:
     def __init__(self):
-        self.conn = psycopg.connect(f"dbname={common.PG_DB}", autocommit=False)
+        self._conn = psycopg.connect(f"dbname={common.PG_DB}", autocommit=False)
         self.root = common.REPO_ROOT.resolve()
         self._sig: dict[str, tuple] = {}   # path -> cheap stat signature, to skip unchanged files
         self._warned: set[str] = set()          # paths already logged as failing (log once per streak)
@@ -225,6 +225,31 @@ class Indexer:
         # invisible to every user, in search and in the To-dos view, until an
         # unrelated permission change happens to force a full diff.
         self._vis_cache = None
+
+    @property
+    def conn(self) -> psycopg.Connection:
+        """The one long-lived connection, re-opened if Postgres went away.
+
+        This daemon holds a single connection from __init__ to shutdown and
+        every write path reuses it, so a Postgres restart used to wedge the
+        process for good: psycopg raises OperationalError("the connection is
+        closed") on every later use, each `except` here only rolls back, and
+        nothing reconnected. On 2026-08-29 a security upgrade restarted
+        Postgres at 06:16 and this service logged 5134 failed writes over the
+        next hour and three quarters — still `active (running)`, NRestarts
+        unchanged, silently indexing nothing. A restart by hand was the only
+        cure, and only until the next time Postgres bounces.
+
+        Reconnecting behind the attribute covers every call site at once,
+        including the ones that only open a cursor. Whatever was uncommitted
+        in the dead transaction is lost either way — the point is that the
+        NEXT write succeeds instead of failing forever. The sweep re-derives
+        anything missed; this index is disposable by design.
+        """
+        if self._conn.closed:
+            log.warning("postgres connection closed; reconnecting")
+            self._conn = psycopg.connect(f"dbname={common.PG_DB}", autocommit=False)
+        return self._conn
 
     def _note_failure(self, rel: str, err: Exception):
         """A path exists but could not be indexed. Log ONCE per failure streak —
