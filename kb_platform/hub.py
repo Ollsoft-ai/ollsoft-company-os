@@ -136,6 +136,102 @@ def _audit(event: str, actor: str | None, ok: bool = True, **fields) -> None:
         pass
 
 
+# --- access audit (reads, not mutations) ------------------------------------
+# The trail above answers "who changed who can see what". It could not answer
+# "who opened it": a read left no trace anywhere on the box, so exfiltration by
+# someone who legitimately HAD access was invisible — the likeliest shape of an
+# incident here, since everyone is already authenticated.
+#
+# What is deliberately NOT recorded: every /api/* request. Tree listings,
+# search, presence polling, autosaves and CRDT frames are the app breathing,
+# not a person reaching for a document. Logging them would bury the signal and
+# turn an audit trail into a surveillance stream, so only two acts count — a
+# collaborative document being joined, and an attachment's bytes being served.
+#
+#     journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)'
+#
+# Read the events for exactly what they say. `document.open` means a session
+# was joined, `file.preview` and `file.download` mean the server sent the
+# bytes. None of the three proves anyone read, understood or saved anything.
+ACCESS_EVENTS = ("document.open", "file.preview", "file.download")
+
+
+def _audit_path(rel: str) -> str | None:
+    """A raw request path -> the normalized repo-relative path, or None when it
+    is not a path inside the repo.
+
+    The same resolution the attachment handler and syncd use, so the line
+    records the path that was actually served rather than the caller's spelling
+    of it — `../`, a doubled slash or an absolute path all normalize here, and
+    anything escaping REPO_ROOT audits as nothing at all. The root itself is
+    not a document, so it is None too.
+    """
+    p = common.resolve_repo_path(rel)
+    if p is None:
+        return None
+    try:
+        out = str(p.relative_to(common.REPO_ROOT.resolve()))
+    except ValueError:                      # resolve_repo_path already refuses
+        return None                         # this; belt and braces
+    return out if out not in ("", ".") else None
+
+
+def _range_from_zero(value: str) -> bool:
+    """True for `Range: bytes=0-…`, the request that OPENS a media file.
+
+    A browser plays a video or pages a PDF with a byte range per seek. Counting
+    each of those as an access would write a dozen `file.preview` lines for one
+    play; counting none of them would miss videos entirely. The range that
+    starts at byte 0 is the open, so it is the one that is recorded.
+    """
+    v = value.replace(" ", "")
+    if v[:6].lower() != "bytes=":
+        return False
+    return v[6:].split(",")[0].startswith("0-")
+
+
+def _access_event(request: web.Request, status: int) -> tuple[str, str] | None:
+    """Classify a FINISHED /api/* round-trip as an attachment access, or None.
+
+    Only `GET /api/attachment` counts, and only once the backend has actually
+    served the bytes. That ordering is the whole point: the backend runs as the
+    user, so the kernel has already ruled by the time a status exists, and a
+    401/403/404 can never be mistaken for a read. Every other route under
+    /api — tree, search, artifacts, upload, vc, presence — returns None, as do
+    a HEAD, a conditional 304 and a path that does not resolve into the repo.
+    """
+    if request.method != "GET" or request.path != "/api/attachment":
+        return None
+    # 200 is a whole file served; 206 is a byte range, and only the opening one
+    # counts (see _range_from_zero).
+    if not (status == 200
+            or (status == 206 and _range_from_zero(request.headers.get("Range", "")))):
+        return None
+    rel = _audit_path(request.query.get("path", ""))
+    if rel is None:
+        return None
+    # Exactly the flag the attachment handler reads to decide
+    # Content-Disposition, so the event cannot disagree with what was served.
+    return ("file.download" if request.query.get("dl") == "1" else "file.preview"), rel
+
+
+def _audit_access(event: str, actor: str, rel: str, source: str | None = None,
+                  **safe) -> None:
+    """One access line. Takes ALREADY-VALIDATED data only.
+
+    By the time anything reaches here the hub has authenticated `actor`, the
+    downstream service has authorized and served `rel`, and `rel` has been
+    through _audit_path. This helper never sees the request, which is what
+    keeps a query string, a cookie, an Authorization header or a user agent
+    from leaking into the trail by accident: `safe` is for small numeric facts
+    (bytes served), nothing else.
+
+    `source` is the same trusted-proxy-derived value the `login` event already
+    records — Cloudflare's, or nothing at all for a local caller.
+    """
+    _audit(event, actor, path=rel, **safe, source=source or None)
+
+
 def _cron_deny_set(user: str, denied: bool) -> None:
     lines = [l for l in CRON_DENY.read_text().splitlines() if l.strip()] if CRON_DENY.exists() else []
     if denied and user not in lines:
@@ -1344,6 +1440,14 @@ class Hub:
                                     allow_redirects=False) as resp:
                 out_body = await resp.read()
                 out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP}
+                # After the status is known, and after the body is already
+                # buffered — the audit changes nothing about what is served,
+                # and `bytes` is the count we were going to hold anyway, so
+                # nothing here weakens the response or its streaming.
+                hit = _access_event(request, resp.status)
+                if hit:
+                    _audit_access(hit[0], user, hit[1], _login_source(request),
+                                  bytes=len(out_body))
                 return web.Response(status=resp.status, body=out_body, headers=out_headers)
         except aiohttp.ClientError as e:
             return web.json_response({"error": f"backend error: {e}"}, status=502)
@@ -1388,11 +1492,22 @@ class Hub:
         token = common.make_token(self.key, {"user": user, "uid": uid,
                                              "gids": self.gids_for(user)}, ttl=common.SESSION_TTL)
         path = request.match_info["path"]
+        # Normalized BEFORE the query string is glued on, so ?e=<epoch> can
+        # never reach the audit line. None means the path does not resolve into
+        # the repo — syncd is about to refuse it anyway, and an unresolvable
+        # path is not something to record as an open.
+        rel = _audit_path(path)
+        source = _login_source(request)
         # forward the query string — ?e=<epoch> is the lineage gate
         if request.query_string:
             path += "?" + request.query_string
+        # Only once syncd has ACCEPTED the socket: it answers 403 (no read, or
+        # a secret), 404 (bad path) or 409 (stale lineage) before the handshake,
+        # and each of those raises out of ws_connect instead. So this fires per
+        # accepted session join — never per CRDT frame, never on a refusal.
+        on_accept = (lambda: _audit_access("document.open", user, rel, source)) if rel else None
         return await self._bridge_ws(request, self._syncd(), f"http://kb/ws/doc/{path}",
-                                     {"X-KB-Auth": token})
+                                     {"X-KB-Auth": token}, on_accept=on_accept)
 
     # --- privileged filesystem admin (runs as root; carefully authorized) ---
     # These are the ONLY places the hub mutates the filesystem. Every handler
@@ -2405,12 +2520,24 @@ class Hub:
         _audit("group.member", admin, group=group, target=user, action=action)
         return web.json_response({"ok": True, "restarted": [user]})
 
-    async def _bridge_ws(self, request, target_session, target_url, extra_headers):
+    async def _bridge_ws(self, request, target_session, target_url, extra_headers,
+                         on_accept=None):
+        """Bridge the client socket to `target_url`. `on_accept` runs once, as
+        soon as the DOWNSTREAM handshake succeeds — the client's own socket was
+        already prepared above, so it is the upstream one that carries the
+        accept/refuse answer. Swallowing its errors keeps the _audit contract:
+        recording an event must never be able to break the thing it records."""
         server_ws = web.WebSocketResponse(heartbeat=30, max_msg_size=16 * 1024 * 1024)
         await server_ws.prepare(request)
         try:
             async with target_session.ws_connect(target_url, headers=extra_headers,
                                                   max_msg_size=16 * 1024 * 1024) as client_ws:
+                if on_accept is not None:
+                    try:
+                        on_accept()
+                    except Exception:
+                        pass
+
                 async def pump(src, dst, is_server_side):
                     async for msg in src:
                         if msg.type == WSMsgType.TEXT:

@@ -14,6 +14,7 @@ A false alarm costs trust; the next real one gets ignored.
 | Source | Command | Answers |
 |---|---|---|
 | **Hub audit** | `journalctl -u kb-hub -g AUDIT --since yesterday` | who logged in, shared, changed permissions, created accounts |
+| **Access audit** | `journalctl -u kb-hub -g 'AUDIT (document.open\|file.preview\|file.download)' --since yesterday` | who opened a document, previewed or downloaded an attachment (since 2026-08-29) |
 | Hub raw | `journalctl -u kb-hub --since yesterday` | every HTTP request, throttle lockouts, tracebacks |
 | Content history | `kb-history --since '7 days ago' --author <user>` | what someone *wrote* — never who changed permissions |
 | Sync daemon | `journalctl -u kb-syncd --since yesterday` | live editing, revocations, room retires |
@@ -25,10 +26,28 @@ Audit lines look like:
 ```
 hub AUDIT share.set actor=alice result=ok path='company/HR/x.md' scope='people' group='kbs-hr'
 hub AUDIT login actor=mallory result=DENIED source='203.0.113.4'
+hub AUDIT document.open actor=bob result=ok path='company/HR/x.md'
+hub AUDIT file.download actor=bob result=ok path='company/HR/salaries.xlsx' bytes=48211
 ```
 
-Events: `login`, `share.set`, `props.set`, `group.member`, `user.create`.
-`result=DENIED` is the interesting half — that is someone being refused.
+Mutation events: `login`, `share.set`, `props.set`, `group.member`,
+`user.create`. `result=DENIED` is the interesting half — that is someone being
+refused.
+
+Access events: `document.open`, `file.preview`, `file.download`. These are
+always `result=ok` by construction — they are written only after the service
+served the bytes, so a refusal never reaches them (look in the raw log for
+those). Read each for exactly what it says:
+
+| Event | Means | Does NOT mean |
+|---|---|---|
+| `document.open` | a live editing session for that doc was joined and accepted | that it was read, or stayed open |
+| `file.preview` | the server served the attachment inline | that anyone looked at it |
+| `file.download` | the server served an explicit download (`dl=1`) | that it landed on their disk |
+
+One `document.open` per accepted session, not per keystroke — but a reconnect
+(dropped wifi, reopened tab, a lineage refresh) is a new join and a new line, so
+count *people and documents*, never lines.
 
 ## Who can read this
 
@@ -56,7 +75,9 @@ journalctl -u kb-hub -g AUDIT --since '7 days ago' | grep -E 'share.set|props.se
 ```
 Look for a person widening a folder they do not work in, or setting
 `scope='everyone'` on anything under `projects/` or `company/🫂 Human Resources`.
-Cross-check: did the same actor then read it? `journalctl -u kb-hub | grep <path>`.
+Cross-check: did the same actor then read it? Since 2026-08-29 there is a real
+answer — `journalctl -u kb-hub -g AUDIT | grep "path='<path>'"` shows the opens
+and downloads alongside the sharing change.
 
 **2. Someone adding themselves to a group**
 ```
@@ -77,14 +98,32 @@ The throttle allows 8 failures per 5 min per account and per source, then locks
 for 15. Many DENIED for ONE account = someone guessing that person's password.
 Many DENIED across MANY accounts from one source = spraying. Both are real.
 
-**4. An account created that nobody remembers**
+**4. A download burst out of someone's own area**
+```
+journalctl -u kb-hub -g 'AUDIT file.download' --since '7 days ago' \
+  | grep -oP "actor=\\K\\S+" | sort | uniq -c | sort -rn
+```
+This is an **activity signal, not an incident**. Normal work downloads things.
+What is worth a question is a shape: one actor pulling many files out of an
+area they do not work in, in a short window, especially right after a
+`share.set` widened it or right before a departure. Scope it to the paths, not
+the count:
+```
+journalctl -u kb-hub -g 'AUDIT file.(download|preview)' --since '7 days ago' \
+  | grep "actor=<user>" | grep -oP "path='\\K[^']+" | sort | uniq -c | sort -rn
+```
+Do not use these events to report on how much someone works, what hours they
+keep, or which documents they linger in. That is not what the trail is for, and
+reading it that way is how a security control becomes surveillance.
+
+**5. An account created that nobody remembers**
 ```
 journalctl -u kb-hub -g AUDIT | grep user.create
 ```
 Every real hire should be traceable to a conversation. `kind='viewer'` is the
 restricted tier; a `full` account nobody asked for is serious.
 
-**5. Escalation attempts in the raw log**
+**6. Escalation attempts in the raw log**
 ```
 journalctl -u kb-hub --since '7 days ago' | grep -E ' 40[13] | 500 '
 ```
@@ -105,6 +144,11 @@ Do **not** report these:
 - **`kbt_*` accounts and `kbtest-*` folders.** Test fixtures. They are created
   and destroyed constantly and are namespaced per run.
 - **Bursts of `/api/presence` and `/api/tree`.** The open tab polls.
+- **A stream of `document.open` for one person.** Every tab they open, and
+  every reconnect after a dropped socket, writes one. It is activity, not
+  enumeration.
+- **`file.preview` on images inside a document.** Rendering a page with five
+  embedded images serves five attachments; that is one open, not five.
 - **`props.set` with `granted_traverse=[]`.** Routine sharing bookkeeping.
 
 ## How to investigate properly
@@ -125,9 +169,17 @@ Do **not** report these:
 
 Be honest about these rather than inferring past them:
 
-- **Reads are not logged.** Only mutations. You can see that someone was given
-  access; you cannot see that they opened the file.
-- **It starts 2026-08-25.** There is nothing before the audit log existed.
+- **Reads are logged only through the app, and only since 2026-08-29.** A
+  document joined in the editor, and an attachment the server served, leave a
+  line. Nothing else does: SSH, the mounted drive, `cat` in a web terminal, the
+  search index and the secrets viewer are all invisible. So an access event is
+  evidence that something *was* opened; the absence of one is not evidence that
+  it was not.
+- **No access event proves reading.** `file.download` means the server sent the
+  bytes with a save-me header. Whether a human looked, understood, or kept the
+  file is outside what any of this can see — say so rather than implying it.
+- **The mutation events start 2026-08-25, the access events 2026-08-29.** There
+  is nothing before the log existed, and no way to reconstruct it.
 - **Anything done as root, or directly on disk, bypasses it entirely** — an SSH
   user running `setfacl` by hand leaves no audit line. Check `journalctl` for
   `sudo` separately.
