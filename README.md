@@ -341,17 +341,41 @@ Events: `login`, `share.set`, `props.set`, `group.member`, `user.create`.
 Denials are recorded too — a refused attempt is the more interesting half when
 someone is probing.
 
+**Access audit — who opened what.** Three more events record permission being
+*used* rather than changed, on the same line format:
+
+```bash
+journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)' --since yesterday
+```
+
+```
+hub AUDIT document.open actor=bob result=ok path='company/HR/x.md'
+hub AUDIT file.download actor=bob result=ok path='company/HR/rates.xlsx' bytes=48211
+```
+
+`document.open` is a live editing session that was joined and accepted;
+`file.preview` and `file.download` are an attachment the server served inline or
+as an explicit download. They are written only *after* the kernel has already
+allowed the read, so a refusal can never look like one — and nothing else under
+`/api/*` is recorded, because a trail that logged tree polling and search would
+be a surveillance stream with the signal buried in it.
+
 Only root and members of `sudo`/`adm`/`systemd-journal` can read it; journald
 shows everyone else nothing but their own messages, so the people being audited
 cannot read the audit.
 
-**Know the limits before relying on it.** Reads are NOT logged — you can see
-that someone was granted access, never that they opened the file. Nor is every
-admin action: deleting a user, switching an account between full and viewer,
+**Know the limits before relying on it.** An access event is the server's word
+that it served the bytes — never proof that a person read, understood or kept
+the file, and never a measure of how someone spends their day. Reads outside the
+app (SSH, the mounted drive, the search index) are still invisible, so a missing
+event is not evidence that nothing was opened. Nor is every admin action
+recorded: deleting a user, switching an account between full and viewer,
 creating or deleting a group, and editing the artifact egress allow-list all
 happen without a line. Anything done as root or directly on disk bypasses it.
 Anyone with `sudo` can edit the journal, so it is evidence about users, not
-about administrators. And journald rotates, so old entries age out silently.
+about administrators. And journald rotates, so old entries age out silently —
+the mutation events start 2026-08-25, the access events 2026-08-29, and neither
+can reconstruct anything earlier.
 
 Agents investigating an incident should load the **`kb-audit`** skill, which
 covers the patterns worth chasing and — as importantly — the normal platform

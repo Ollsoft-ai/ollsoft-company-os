@@ -108,10 +108,10 @@ while `access(2)` kept reporting it writable. `company/` is a deliberate
 free-for-all; the subdirectory that is not — `company/.infrastructure/`, the
 maintenance agent's input — is protected directly by dropping group write.
 
-## Audit trail — who changed access
+## Audit trail — who changed access, and who opened what
 
-The hub records five events — logins, and the sharing and account changes that
-decide who can reach what — as one line each in journald:
+The hub records five **mutation** events — logins, and the sharing and account
+changes that decide who can reach what — as one line each in journald:
 
 ```bash
 journalctl -u kb-hub -g AUDIT --since yesterday
@@ -121,22 +121,56 @@ journalctl -u kb-hub -g AUDIT --since yesterday
 `user.create`. Readable only by root and `sudo`/`adm`/`systemd-journal`;
 journald shows every other account nothing but its own messages.
 
+### Access events — who opened what
+
+Three further events record access being *used*, not granted. They exist
+because the likeliest incident here is not an intruder but a colleague who
+already holds the permission, and until 2026-08-29 that left no trace at all.
+
+```bash
+journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)' --since yesterday
+```
+
+| Event | Means exactly | Does **not** mean |
+|---|---|---|
+| `document.open` | a collaborative session for that document was joined through `/ws/doc/*` and syncd accepted it | that anything was read, or that the tab stayed open |
+| `file.preview` | the server served the attachment inline (`Content-Disposition: inline`) | that the browser rendered it or a person looked |
+| `file.download` | the server served it with `Content-Disposition: attachment` — a download was *requested and served* | that the file reached the user's disk |
+
+Each line carries only the event, the authenticated actor, `result=ok`, the
+normalized repo-relative `path`, the byte count served (the two attachment
+events; a `document.open` has none), and — for a request that came through the
+Cloudflare tunnel — the same trusted `source` the `login` event records. Never content, headers, cookies, query strings, user agents, or
+a path the caller spelled but the server did not serve.
+
+They are emitted only *after* the downstream service has already applied the
+kernel's decision, so a 401, 403, 404 or a stale-lineage 409 can never appear as
+a successful read. Deliberately not recorded: tree listings, search, presence
+polling, `/api/vc/*`, autosaves, CRDT frames, and every other `/api/*` route.
+An audit trail that logged those would be a surveillance stream, and the signal
+would be unfindable inside it.
+
 What it does NOT cover, and should not be relied on for:
 
-- **Not every privileged action.** Only the five above. Deleting a user,
-  switching an account between full and viewer, creating or deleting a group,
-  rewriting the launcher list and editing `.claude/egress.json` all run in the
-  hub as root and write no AUDIT line — the raw hub log shows the
-  `POST /admin/...`, but not who sent it.
-- **Reads are not logged.** The trail shows that access was granted, never that
-  a file was opened. Content exfiltration by someone who legitimately had access
-  leaves no trace here.
+- **Not every privileged action.** Only the five mutation events above.
+  Deleting a user, switching an account between full and viewer, creating or
+  deleting a group, rewriting the launcher list and editing
+  `.claude/egress.json` all run in the hub as root and write no AUDIT line —
+  the raw hub log shows the `POST /admin/...`, but not who sent it.
+- **Access events prove a service call, not a reading.** A `file.download` is
+  the server's word that it sent the bytes. It is not proof of attention,
+  comprehension, or a completed client-side save — and its absence is not proof
+  nobody looked, since anyone with a shell reads `/srv/kb` directly.
+- **Reads outside those three paths are still invisible.** SSH, the mounted
+  drive, `cat`, the search index, and the secrets viewer (`GET /api/file`, the
+  only document read that never joins a live session) write no access line.
 - **Root bypasses it.** An administrator running `setfacl` over SSH writes no
   audit line, and anyone with `sudo` can edit the journal. This is evidence
   about users, not about administrators.
-- **It begins 2026-08-25.** There is nothing before that date.
-- **journald rotates.** Queries beyond the retention window return less, not an
-  error.
+- **It begins 2026-08-25**, and the three access events only on **2026-08-29**.
+  There is nothing before those dates; the feature cannot reconstruct history.
+- **journald rotates.** Retention is journald's, unchanged by this feature.
+  Queries beyond the retention window return less, not an error.
 
 Content history is a separate mechanism: `kb-history` reads the git trail of
 what documents said and who wrote them, gated per request against the kernel so

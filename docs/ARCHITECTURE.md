@@ -354,9 +354,20 @@ an incident. The hub logs five events to journald as
 deletion, the full↔viewer switch, group create/delete, the launcher list, the
 egress allow-list — write no AUDIT line.
 
+**Access audit** — who opened what. Three events on the same line format record
+access being *used*: `document.open` (a `/ws/doc/*` session syncd accepted),
+`file.preview` and `file.download` (`/api/attachment` served inline, or with
+`dl=1` as an explicit download). The hub is the only place that can emit them,
+because it is the only component that holds both the authenticated identity and
+the downstream service's answer — so an event exists only after the kernel has
+already allowed the read, and a refusal can never look like one. Nothing else
+under `/api/*` is recorded: tree, search, presence and CRDT traffic are the app
+breathing, and logging them would bury the signal.
+
 Readable only by root and `sudo`/`adm`/`systemd-journal` — journald shows every
 other account nothing but its own messages, so the audited cannot read the
-audit. Reads are not logged, and root-side changes bypass it entirely; see
+audit. Reads through SSH, the mounted drive or the secrets viewer are not
+logged, and root-side changes bypass it entirely; see
 [SECURITY.md](SECURITY.md) for the full limits.
 
 ## Data-flow example: toggling a checkbox in the To-dos view
