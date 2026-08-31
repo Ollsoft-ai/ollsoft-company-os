@@ -78,3 +78,51 @@ def test_top_level_and_traversal_guards():
     assert delete(k, "../etc/passwd").status_code == 400
     assert mkdir(k, "../outside").status_code == 400
     assert delete(k, doc("does_not_exist_xyz")).status_code == 404
+
+
+def _children(c, path):
+    """The tree rows directly inside `path`, in the order the API returns them."""
+    node = None
+    stack = list(c.get("/api/tree").json()["tree"])
+    while stack:
+        n = stack.pop()
+        if n["path"] == path:
+            node = n
+            break
+        stack.extend(n.get("children", []))
+    assert node is not None, f"{path} not in the tree"
+    return node["children"]
+
+
+def test_tree_orders_folders_by_name_and_files_newest_first():
+    """Folders stay alphabetical (they are navigation); files come back newest
+    first with an mtime the UI can print."""
+    j = cl("bob")
+    d = doc(f"fsops_sort_{int(time.time())}")
+    assert mkdir(j, d).status_code == 200
+    try:
+        # folders out of alphabetical order on purpose
+        for sub in ("zeta", "alpha", "mid"):
+            assert mkdir(j, f"{d}/{sub}").status_code == 200
+        # files written oldest -> newest, with names that sort the OTHER way,
+        # so name ordering and mtime ordering cannot be confused
+        for name in ("a_oldest.md", "b_middle.md", "c_newest.md"):
+            assert j.post("/api/artifact/write",
+                          json={"path": f"{d}/{name}", "content": name}).status_code == 200
+            time.sleep(1.1)   # one-second mtime resolution is the tie-break floor
+
+        kids = _children(j, d)
+        dirs = [n["name"] for n in kids if n.get("dir")]
+        files = [n["name"] for n in kids if not n.get("dir")]
+        assert [n.get("dir", False) for n in kids] == [True] * len(dirs) + [False] * len(files), \
+            "folders must still come before files"
+        assert dirs == ["alpha", "mid", "zeta"], "folders stay ordered by name"
+        assert files == ["c_newest.md", "b_middle.md", "a_oldest.md"], \
+            "files come back newest first"
+        mtimes = [n["mtime"] for n in kids if not n.get("dir")]
+        assert mtimes == sorted(mtimes, reverse=True)
+        assert all(isinstance(m, int) for m in mtimes), "the UI prints these"
+        assert not any("mtime" in n for n in kids if n.get("dir")), \
+            "folders carry no stamp — theirs tracks the listing, not the work"
+    finally:
+        delete(j, d)

@@ -109,6 +109,9 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   documents open as a tab when you click through.
 - **Kernel-enforced permissions**, surfaced through a web file tree, editor, and a
   real in-browser terminal (each running as your OS user).
+- **The tree puts recent work on top**: folders stay alphabetical so navigation
+  never moves, while the files inside each one are ordered newest-first and
+  carry a subtle last-modified stamp.
 - **Drop in what you already have**: drag files — or whole folders, subfolders and
   all — from your desktop onto any folder in the tree (or right-click it →
   *Upload folder*); everything lands with live per-file progress, then converts

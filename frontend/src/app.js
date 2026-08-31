@@ -2233,6 +2233,18 @@ async function collectDropped(dt) {
 let showHidden = false;
 try { showHidden = localStorage.getItem("kbShowHidden") === "1"; } catch (e) { /* private mode */ }
 
+// The last-modified stamp on a file row. Short enough to sit beside a name
+// without pushing it out — the exact timestamp is on hover. Folders have no
+// stamp: a folder's own mtime tracks its listing, not the work inside it.
+function fmtMtime(sec) {
+  const d = new Date(sec * 1000), now = new Date();
+  if (d.toDateString() === now.toDateString())
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toLocaleDateString([], d.getFullYear() === now.getFullYear()
+    ? { day: "numeric", month: "short" }
+    : { day: "numeric", month: "short", year: "2-digit" });
+}
+
 function renderNodes(nodes, parentWritable) {
   const frag = document.createDocumentFragment();
   for (const n of nodes) {
@@ -2256,6 +2268,12 @@ function renderNodes(nodes, parentWritable) {
       title: { solo: "Only you can open this",
                custom: "Shared with different people than this folder",
                open: "Readable more widely than this folder" }[n.aud] || "",
+    }) : null;
+    // when this file was last written — the tree already orders files by it,
+    // so the date is what makes that order legible
+    const when = !n.dir && n.mtime ? Object.assign(document.createElement("span"), {
+      className: "tmtime", textContent: fmtMtime(n.mtime),
+      title: "Last modified " + new Date(n.mtime * 1000).toLocaleString(),
     }) : null;
     // who has this open right now (filled by the presence poll)
     const pres = document.createElement("span");
@@ -2322,7 +2340,8 @@ function renderNodes(nodes, parentWritable) {
       setupDrop(row, n.path);
       frag.append(row, kids);
     } else {
-      row.append(icon, label, pres, actions, more, ...(aud ? [aud] : []));
+      row.append(icon, label, ...(when ? [when] : []), pres, actions, more,
+                 ...(aud ? [aud] : []));
       row.addEventListener("click", () => openEntry(n));
       frag.appendChild(row);
     }

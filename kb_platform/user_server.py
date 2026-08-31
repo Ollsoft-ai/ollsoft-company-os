@@ -78,7 +78,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 25
+BACKEND_V = 26
 
 
 def _name_key(name: str):
@@ -116,6 +116,27 @@ def _name_key(name: str):
     return (cat, parts, name)  # raw name last: stable, total order for `a` vs `A`
 
 
+def _entry_key(e):
+    """How one directory row sorts: folders first by name, files newest first.
+
+    Folders are navigation — their place has to stay put, so they keep the
+    explorer ordering above. Files are work, and the one you touched last is
+    the one you want, so they sort by mtime descending with the name only
+    breaking ties (two files written in the same second).
+    """
+    try:
+        is_dir = e.is_dir()
+    except OSError:
+        is_dir = False
+    if is_dir:
+        return (0, 0.0, _name_key(e.name))
+    try:
+        mtime = e.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return (1, -mtime, _name_key(e.name))
+
+
 def _aud_key(path: Path):
     """The readership of one path, or None when it cannot be read at all."""
     try:
@@ -146,8 +167,7 @@ async def tree(request: web.Request) -> web.Response:
         if depth > 12:
             return out
         try:
-            entries = sorted(os.scandir(d),
-                             key=lambda e: (not e.is_dir(), _name_key(e.name)))
+            entries = sorted(os.scandir(d), key=_entry_key)
         except OSError:
             return out
         for e in entries:
@@ -183,7 +203,12 @@ async def tree(request: web.Request) -> web.Response:
                     kind = "md"
                 else:
                     kind = "file"
+                try:
+                    mtime = int(e.stat().st_mtime)
+                except OSError:
+                    mtime = None
                 out.append({"name": e.name, "path": rel, "dir": False, "kind": kind,
+                            **({"mtime": mtime} if mtime is not None else {}),
                             **({"aud": flag} if flag else {}), "access": access})
         return out
 

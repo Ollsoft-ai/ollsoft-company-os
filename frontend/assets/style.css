@@ -262,6 +262,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .tree-item.artifact:hover .ticon, .tree-item.artifact.active .ticon { color: var(--accent); }
 .tlabel { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree-item.dir > .tlabel { font-weight: 500; color: var(--ink); }
+/* last-modified stamp: subtle, and out of the way the moment the row's own
+   verbs need the space */
+.tmtime { flex: 0 0 auto; margin-left: .2rem; font-size: .68rem; color: var(--muted);
+  opacity: .65; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tree-item:hover .tmtime, .tree-item.show-actions .tmtime { display: none; }
 /* who's in this doc, at a glance */
 .tpresence { display: inline-flex; align-items: center; flex: 0 0 auto; }
 .tp-avatar { width: 16px; height: 16px; border-radius: 50%; display: inline-flex;

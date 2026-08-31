@@ -67,7 +67,9 @@ there is no permission code here to get wrong.
 
 - `GET /api/whoami` — kernel-truth identity (`geteuid`), used to prove the model.
 - `GET /api/tree` — walks `/srv/kb`, returning only entries the user can access
-  (`os.access` as the user), with per-node `access:{read,write}`.
+  (`os.access` as the user), with per-node `access:{read,write}`. Folders come
+  first, ordered by name; files follow newest-first and carry an `mtime` (epoch
+  seconds) that the sidebar prints as a subtle last-modified stamp.
 - `GET/POST /api/file` — read / create a document (as the user).
 - `POST /api/fs/mkdir`, `POST /api/fs/delete` — create a folder / delete a file
   or folder (recursive), **as the user** — same authority as `mkdir`/`rm -r` in
