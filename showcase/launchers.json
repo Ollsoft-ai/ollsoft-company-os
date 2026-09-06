@@ -1,0 +1,9 @@
+{
+  "buttons": [
+    {"label": "Start here", "kind": "file", "target": "company/00 START HERE.md"},
+    {"label": "Cockpit", "kind": "file", "target": "company/dashboards/management-cockpit.html"},
+    {"label": "Pipeline", "kind": "file", "target": "company/sales/customer-pipeline.html"},
+    {"label": "Kanban", "kind": "file", "target": "company/dashboards/delivery-kanban.html"},
+    {"label": "Invoice", "kind": "file", "target": "company/finance/invoice-generator.html"}
+  ]
+}

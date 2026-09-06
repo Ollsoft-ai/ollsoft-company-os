@@ -1,0 +1,10 @@
+{
+  "updated": "2026-09-06",
+  "opportunities": [
+    {"id":"OP-1042","company":"Rheinwerk Maschinenbau GmbH","city":"Düsseldorf","value":148000,"owner":"Mina","stage":"qualified","next":"Requirements workshop · 10 Sep","risk":"medium","requirements":false,"security":false,"note":"Two production halls; EU data region requested."},
+    {"id":"OP-1038","company":"Elbe Verpackung GmbH","city":"Hamburg","value":86000,"owner":"Mina","stage":"requirements","next":"Confirm acceptance criteria · 8 Sep","risk":"low","requirements":true,"security":true,"note":"Expansion of an existing monitored line."},
+    {"id":"OP-1031","company":"Isar Präzisionstechnik GmbH","city":"München","value":214000,"owner":"Anna","stage":"proposal","next":"Commercial review · 12 Sep","risk":"high","requirements":true,"security":false,"note":"SSO feasibility remains an open commitment risk."},
+    {"id":"OP-1024","company":"Havel Komponenten AG","city":"Berlin","value":121000,"owner":"Mina","stage":"won","next":"Delivery handover · 9 Sep","risk":"low","requirements":true,"security":true,"note":"Signed order; project setup pending."},
+    {"id":"OP-1019","company":"Mainbogen Logistik GmbH","city":"Frankfurt","value":64000,"owner":"Mina","stage":"lost","next":"Loss review · 16 Sep","risk":"low","requirements":true,"security":true,"note":"Lost to incumbent; integration effort cited."}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "risks": [
+    {"id":"R-021","title":"Single-source aluminium enclosure","likelihood":4,"impact":4,"owner":"David","treatment":"Qualify a second supplier","state":"Treat"},
+    {"id":"R-024","title":"Customer SSO delays acceptance","likelihood":3,"impact":4,"owner":"Sara","treatment":"Confirm IdP during requirements review","state":"Treat"},
+    {"id":"R-027","title":"Q4 field installer capacity","likelihood":3,"impact":3,"owner":"Jonas","treatment":"Reserve approved partner capacity","state":"Monitor"},
+    {"id":"R-031","title":"Telemetry service interruption","likelihood":2,"impact":5,"owner":"Sara","treatment":"Quarterly restore and failover exercise","state":"Treat"},
+    {"id":"O-008","title":"Energy-report API premium module","likelihood":4,"impact":3,"owner":"Lukas","treatment":"Validate with three customers","state":"Exploit"}
+  ]
+}

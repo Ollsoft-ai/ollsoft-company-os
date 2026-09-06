@@ -153,6 +153,21 @@ Then verify the core promises:
   three are the kernel and the RLS policy, not application code.
 - The in-browser terminal runs `whoami` as the logged-in user.
 
+For a presentation-ready fictional company instead of the compact test fixture,
+seed the English-language German GmbH showcase:
+
+```bash
+sudo bash scripts/seed-showcase.sh --admin <your-username>
+# after pulling newer showcase content:
+sudo bash scripts/seed-showcase.sh --admin <your-username> --refresh
+```
+
+It installs ISO-aligned example processes, projects, interactive artifacts and a
+web-only `demo` account. Its deliberately memorable demo password is written to
+`/root/ollsoft-company-os-showcase.txt`; do not use that account or password on
+a non-demo installation. `--undo` removes only the showcase's named trees and a
+viewer account that the script itself created.
+
 ---
 
 ## Upgrading
