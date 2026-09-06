@@ -1,77 +1,99 @@
-# How Werkraum runs on Company OS
+# Company OS, in practice
 
-Werkraum Systems GmbH is a fictional Hamburg industrial-technology company. The
-workspace is written in English, while its commercial and governance examples
-reflect the way a German GmbH commonly operates.
+**Obsidian, but multiplayer, permissioned and built for agents — running on a
+Linux box your company controls.**
 
-Company OS is an **OS-native, AI-agent-native company knowledgebase**: think
-**Obsidian, but multiplayer, permissioned and built for agents**, running on a
-Linux box your company controls. It is designed for technical teams that want
-plain files instead of a locked data silo. Documents, project spaces, access
-groups, dashboards, workflows, scheduled jobs and agent skills are all
-customizable, while Linux permissions consistently govern the browser, terminal,
-network drive, search, SQL and AI agents.
+Company OS is a shared workspace for technical teams who want to shape their own
+tools. Write together, assign work where the decisions happen, build small apps
+beside the documents, and let Claude Code or Codex work with the same files.
+Linux accounts and permissions govern access across these interfaces.
 
-![Company OS workspace](_files/01-workspace.png)
+[Start the five-minute tour](00%20START%20HERE.md).
 
-## One trail of evidence
+![The Company OS workspace and guided tour](_files/01-workspace.png)
 
-A lead enters the [customer pipeline](sales/customer-pipeline.html). Before a
-proposal advances, the card records customer requirements, review evidence,
-information-security needs and commercial risk. When the opportunity is won,
-delivery work appears in the [Kanban](dashboards/delivery-kanban.html), decisions
-stay in the project folder, and tasks roll up into the live
-[management cockpit](dashboards/management-cockpit.html).
+## Why a team would use it
 
-![Customer pipeline](_files/02-pipeline.png)
+A customer promise is easy to lose between a CRM, a project board, a shared drive
+and meeting notes. Here the requirement, decision, task and internal tool can
+live together, with links that let a colleague or agent follow the work.
 
-## What people can do
+| Need | What to try here |
+|---|---|
+| Find the reasoning behind delivery work | Follow [Polaris](../projects/polaris-energy-gateway/README.md) from its requirements to its enclosure decision. |
+| Stop maintaining a second task list | Change a [Kanban](dashboards/delivery-kanban.html) card, then inspect [the Markdown](dashboards/kanban.md) and [Tasks](todos.html). |
+| Build a tool around your own process | Edit an opportunity in [Pipeline](sales/customer-pipeline.html), or generate a sample invoice PDF. |
+| Delegate useful work to an agent | Ask Claude to draft a delivery brief from existing evidence in your personal folder. |
+| Keep ordinary desktop tools | Mount the files over SFTP and open them in your usual editors. |
 
-- Write rich Markdown together while the underlying file remains ordinary text.
-- Search every file and heading they are permitted to see.
-- Put tasks in their natural context and aggregate them across the company.
-- Open interactive dashboards that query live data as the current viewer.
-- Keep restricted projects absent from the file tree, search and dashboards.
-- Review Git-backed document history and restore an earlier version.
-- Upload office documents and PDFs for searchable text extraction.
-- Use a real per-user terminal and scheduled jobs when their account allows it.
-- Run Claude Code or Codex inside the knowledgebase with Company OS context and skills.
-- Mount the permitted knowledgebase as a normal network drive over SFTP.
-- Create users, groups and artifact network policies from the admin panel.
+## One believable company story
 
-![Delivery board](_files/03-kanban.png)
+Werkraum Systems GmbH is a fictional Hamburg manufacturer of energy-monitoring
+gateways. All content is in English; the example businesses are German.
 
-## Management-system map
+Rheinwerk's **OP-1042 / PO-RW-8841** order is won at **€148,000**. The
+[requirements and handover record](sales/rheinwerk-handover.md) leads to
+[Project Polaris](../projects/polaris-energy-gateway/README.md), targeting
+acceptance on **30 October 2026**. A coating defect in batch B-441 threatens
+delivery: follow the decision, risk and corrective action to see the evidence.
+The invoice is a **€7,840 net sample milestone**, not the whole contract.
 
-| Operating area | Demonstrated reference | Evidence in this workspace |
-|---|---|---|
-| Quality process | ISO 9001:2015/Amd 1:2024 | QMS scope, process ownership, objectives and corrective actions |
-| Customer requirements | ISO 9001 clause 8.2 | Pipeline requirement capture, review gate and handover evidence |
-| Performance and improvement | ISO 9001 clauses 9–10 | Cockpit, audit programme, nonconformity and improvement register |
-| Information security | ISO/IEC 27001:2022 | ISMS scope, asset/risk ownership and treatment status |
-| Risk management | ISO 31000:2018 | Context, likelihood, impact, treatment, owner and review date |
-| Complaints | ISO 10002:2018 | Customer feedback and complaint workflow |
-| Audits | ISO 19011:2026 | Risk-based audit programme and findings follow-up |
-| German invoices | §14 UStG | Required-field checklist in the invoice generator; sample output only |
+![Customer pipeline with review and commitment stages](_files/02-pipeline.png)
 
-ISO 9001:2015 is still the published edition at the time of this demo and is in
-revision. This workspace should be updated when the succeeding edition is
-published. Using these structures does not establish conformity or certification.
+## What is connected today
 
-![Invoice generator](_files/04-invoice.png)
+- **Live:** Markdown edits merge across browsers and filesystem writers. Task
+  views and the cockpit update from the index. History records supported
+  document changes; each person's search follows their permitted files.
+- **Interactive examples:** the pipeline, risk view and invoice studio are
+  customizable HTML artifacts. Pipeline and invoice working state uses hidden
+  JSON files; it is separate from document history. Published evidence belongs
+  in Markdown and generated files belong in `_files/`.
+- **Explicit handovers:** winning a deal does not create a project, invoice or
+  email automatically. This demo links prepared records; you can build those
+  automations with scripts, agents and scheduled jobs.
+- **AI:** Claude is preinstalled for Peter and Krystof. Each user signs in with
+  their own AI account. An agent can access the files its Linux user can access;
+  self-hosting Company OS does not make a cloud AI provider run locally.
 
-## Browse the fictional company
+![The editable delivery Kanban](_files/03-kanban.png)
 
-- [Company handbook](handbook/company-handbook.md)
-- [Agentic Company OS onboarding](handbook/agentic-company-os.md)
-- [Network-drive onboarding](handbook/network-drive.md)
-- [Process map](quality/process-map.md)
-- [Quality objectives](quality/quality-objectives.md)
-- [Risk and opportunity register](quality/risk-register.md)
-- [Interactive risk field](quality/risk-heatmap.html)
-- [Internal audit programme](quality/internal-audit-programme.md)
-- [Customer requirements procedure](sales/customer-requirements.md)
-- [Project Polaris](../projects/polaris-energy-gateway/README.md)
+## Questions I would ask before adopting it
 
-Start with [the guided tour](00%20START%20HERE.md), then use the launcher bar to
-jump between the live artifacts.
+**Is this a complete ERP or accounting system?** It is a customizable knowledge
+and work platform. The CRM and invoice tools show what a team can build; invoice
+samples are not production accounting or structured e-invoices.
+
+**Who operates it?** Someone on your team owns a Linux VM: updates, accounts,
+access reviews, backups and restore checks. Company OS uses real Linux users,
+systemd and PostgreSQL. Start with one team and one process.
+
+**What can we customize?** Documents, project structure, permission groups,
+HTML artifacts, agent skills and scheduled jobs. The platform source is
+Git-versioned. Your workspace documents are ordinary files you can take with you.
+
+**Can everyone edit everything?** Shared company content is collaborative.
+Projects can be restricted by group, and personal workspaces are private.
+The `demo` account is web-only, not read-only. Peter is a full non-admin user.
+
+**What happens if two people edit?** Markdown has live collaborative editing.
+JSON tools detect stale saves and ask you to reload; simultaneous JSON writes
+are not transactional collaboration. Office files do not have live co-authoring.
+
+**Does this make us ISO certified?** No. The sample processes illustrate
+evidence, ownership, review and improvement. See the
+[management-system guide](quality/management-system-guide.md) for the references
+and the boundary between example evidence and certification.
+
+![Invoice preview with an editable sample milestone](_files/04-invoice.png)
+
+## Try a small pilot
+
+Choose a current project, import its documents, invite two colleagues with named
+accounts, and build one task or approval view. Check whether a newcomer can find
+the latest decision, its owner and its evidence without asking around.
+
+[Company handbook](handbook/company-handbook.md) ·
+[Agent onboarding](handbook/agentic-company-os.md) ·
+[Network drive](handbook/network-drive.md) ·
+[Quality and security evidence](quality/management-system-guide.md)

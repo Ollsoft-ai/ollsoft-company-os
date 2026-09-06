@@ -9,8 +9,8 @@
   "reference": "PO-RW-8841 · Project Polaris",
   "vatRate": 19,
   "items": [
-    {"description":"Energy gateway configuration and acceptance preparation","quantity":2,"unit":"day","price":1250},
-    {"description":"Industrial telemetry gateway WG-4 (demo item)","quantity":6,"unit":"unit","price":890}
+    {"description":"Pilot gateway configuration (5 September milestone)","quantity":2,"unit":"day","price":1250},
+    {"description":"Pilot telemetry gateway WG-4 (delivered 5 September)","quantity":6,"unit":"unit","price":890}
   ],
-  "note": "Thank you. This fictional sample must not be used as a tax document."
+  "note": "Sample partial billing milestone for the EUR 148,000 Polaris order; final acceptance is planned for 30 October. Fictional: do not pay or use for tax."
 }

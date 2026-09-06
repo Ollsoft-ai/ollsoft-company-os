@@ -4,6 +4,7 @@
     {"label": "Cockpit", "kind": "file", "target": "company/dashboards/management-cockpit.html"},
     {"label": "Pipeline", "kind": "file", "target": "company/sales/customer-pipeline.html"},
     {"label": "Kanban", "kind": "file", "target": "company/dashboards/delivery-kanban.html"},
+    {"label": "Tasks", "kind": "file", "target": "company/todos.html"},
     {"label": "Invoice", "kind": "file", "target": "company/finance/invoice-generator.html"},
     {"label": "Claude", "kind": "term", "target": "claude"}
   ]

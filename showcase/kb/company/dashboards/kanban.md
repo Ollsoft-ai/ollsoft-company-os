@@ -18,12 +18,14 @@ evidence attached to the work rather than in a separate reporting silo.
 
 - [ ] Prepare the Hall A installation kit @peter #polaris #delivery (due: 2026-09-24) (color: blue)
 - [ ] Run the customer acceptance rehearsal @krystof #polaris #customer (due: 2026-10-21) (color: teal)
+- [ ] Install and commission Hall A @peter #polaris #delivery (due: 2026-09-30) (color: blue)
+- [ ] Install and commission Hall B @peter #polaris #delivery (due: 2026-10-14) (color: blue)
 - [ ] Publish the operator quick guide @peter #polaris #customer (due: 2026-10-09) (color: teal)
 
 ## In progress
 
-- [ ] Approve the gateway enclosure sample @krystof #polaris #quality (due: 2026-09-18) (color: yellow)
-- [ ] Close the coating supplier action @peter #qms #quality (due: 2026-09-18) (color: orange)
+- [ ] Approve the gateway enclosure sample @krystof #polaris #quality #blocked (due: 2026-09-18) (color: yellow)
+- [ ] Close coating supplier action CA-2026-014 @peter #qms #quality (due: 2026-09-18) (color: orange)
 
 ## Verification
 

@@ -1,33 +1,42 @@
-# Welcome to Werkraum Systems GmbH
+# Welcome to Company OS
 
-> **Fictional company · live Company OS showcase · about 10 minutes**
+**Obsidian, but multiplayer, permissioned and built for agents — on your own Linux box.**
 
-Werkraum builds industrial energy-monitoring gateways in Hamburg. This workspace
-shows how one operating system connects strategy, customer requirements,
-delivery, quality evidence and finance without moving facts into separate silos.
+This is a working example for technical teams: documents, delivery work, customer
+commitments and small internal tools, together in one workspace you can customize.
 
-## Your guided tour
+## A five-minute tour
 
-- [ ] Open [the company guide](README.md) and scan the screenshots @demo #onboarding
-- [ ] Open **Cockpit** in the launcher bar and find the current delivery risk @demo #onboarding
-- [ ] Open **Pipeline** and move *Rheinwerk Maschinenbau* into `Requirements review` @demo #onboarding
-- [ ] Open **Kanban**, move one card, then inspect `dashboards/kanban.md` in the file tree @demo #onboarding
-- [ ] Open [Project Polaris](../projects/polaris-energy-gateway/README.md) and search for `gateway enclosure` @demo #onboarding
-- [ ] Open **Invoice**, change a line item, and preview a PDF from the print dialog @demo #onboarding
-- [ ] Return to `company/todos.html`: these checkboxes appear there automatically @demo #onboarding
-- [ ] Read [Work with an AI agent](handbook/agentic-company-os.md) and try one safe prompt from a named account @demo #onboarding
-- [ ] Read [Connect Company OS as a network drive](handbook/network-drive.md) and choose a drive letter or mount folder @demo #onboarding
+You are visiting **Werkraum Systems GmbH**, a fictional German industrial-technology
+company. The scenario starts on **6 September 2026**. Rheinwerk has placed a
+€148,000 order for energy monitoring in two production halls. Delivery is underway;
+an enclosure-quality issue needs attention before the next installation milestone.
 
-## The idea
+| Try this | What you should see |
+|---|---|
+| Open [Cockpit](dashboards/management-cockpit.html) | Real tasks from permitted documents, with blocked work first. |
+| Open [Project Polaris](../projects/polaris-energy-gateway/README.md) | The order, acceptance criteria, delivery plan and enclosure decision connect. |
+| Open [Kanban](dashboards/delivery-kanban.html), edit one card and save | The change appears in [kanban.md](dashboards/kanban.md) and then [Tasks](todos.html). These are views of the same task. |
+| Open [Pipeline](sales/customer-pipeline.html) and review Elbe Verpackung | Record requirements, security review and evidence, then advance to Proposal. Rheinwerk is already won. |
+| Open [Invoice](finance/invoice-generator.html), change a quantity and save a PDF | Totals recalculate; an actual PDF appears under `finance/_files/` for preview or download. |
 
-Company OS keeps normal files as the source of truth. Markdown remains readable
-from the web app, terminal, Git and ordinary editors. Interactive artifacts sit
-beside those files and operate with the permissions of the person viewing them.
+Changes are shared with other visitors and retained between visits. The operator
+can reset this fictional workspace; use sample information when trying it.
 
-The public `demo` login is intentionally web-only. Agentic CLI and network-drive
-steps require a named full account so every action has a real owner and the same
-Linux permissions apply in every interface.
+## Pick your next route
 
-The management-system examples are **ISO-aligned demonstrations, not a claim of
-certification**. The German invoice is a functional sample and not tax advice or
-a production e-invoice implementation.
+- **Business evaluator:** [What this replaces, what is live, and how to adopt it](README.md).
+- **Technical evaluator:** [Run Claude Code or Codex against the workspace](handbook/agentic-company-os.md).
+- **Desktop user:** [Connect it as a network drive](handbook/network-drive.md).
+- **Quality lead:** [Follow the management-system evidence](quality/management-system-guide.md).
+
+## Your account changes what you can do
+
+`demo` can browse and edit shared demo files, including these artifacts. It has
+no terminal or scheduled jobs. `peter` has a personal workspace, Polaris access,
+and Claude Code; `krystof` also has administration access. **Claude** appears in
+the top bar only for full accounts and requires the user's own Anthropic sign-in.
+
+Try the same Markdown document in two browser windows to see edits merge live.
+For permissions, compare Peter's project tree with the administrator's: the
+restricted example project is omitted from Peter's tree and search.

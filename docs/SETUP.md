@@ -165,13 +165,39 @@ seed the English-language German GmbH showcase:
 sudo bash scripts/seed-showcase.sh --admin <your-username>
 # after pulling newer showcase content:
 sudo bash scripts/seed-showcase.sh --admin <your-username> --refresh
+# optionally grant an EXISTING full demo user access to the public project:
+sudo bash scripts/seed-showcase.sh --admin <your-username> --member peter
 ```
 
 It installs ISO-aligned example processes, projects, interactive artifacts and a
 web-only `demo` account. Its deliberately memorable demo password is written to
 `/root/ollsoft-company-os-showcase.txt`; do not use that account or password on
 a non-demo installation. `--undo` removes only the showcase's named trees and a
-viewer account that the script itself created.
+web-only account that the script itself created. This account can edit shared
+content; web-only does not mean read-only. `--refresh` replaces seeded documents
+and artifact JSON with the scenario baseline, so do not use it to deploy only
+screenshots or preserve visitor edits. It does not remove unrelated files.
+
+The repeatable `--member` option adds existing users to `kb-users` and
+`proj-polaris`, not the confidential Helios project. Existing backend processes
+must be restarted for changed Linux group membership to take effect; use the
+administration interface for a live account, or stop its backend after checking
+that no terminal work is running. The seeder does not install AI CLIs or create
+full employee accounts.
+
+On a dedicated showcase host, an optional exact-root redirect in the HTTPS nginx
+server makes a fresh login open the tour instead of an empty workspace:
+
+```nginx
+location = / {
+    return 302 /company/00%20START%20HERE.md;
+}
+```
+
+Keep the existing authenticated proxy for other paths, `/login`, API and
+WebSockets. Validate with `nginx -t` before reloading. This is a demo-host choice,
+not a platform-wide change. See [showcase maintenance](../showcase/README.md)
+for scenario boundaries and checks.
 
 ---
 

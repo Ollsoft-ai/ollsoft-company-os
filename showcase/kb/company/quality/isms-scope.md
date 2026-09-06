@@ -17,6 +17,6 @@ control, while interfaces and responsibilities at that boundary remain in scope.
 Asset ownership, access decisions, supplier reviews, incidents, risk treatments,
 training and internal audits are retained with their owner and review date.
 
-- [ ] Review privileged access to the telemetry environment @demo #security #isms
-- [ ] Complete annual restore exercise @demo #security #continuity
-- [x] Assign owners to information assets @demo #security
+- [ ] Review privileged access to the telemetry environment @krystof #security #isms
+- [ ] Complete annual restore exercise @krystof #security #continuity
+- [x] Assign owners to information assets @krystof #security

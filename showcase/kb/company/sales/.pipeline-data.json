@@ -1,10 +1,93 @@
 {
   "updated": "2026-09-06",
   "opportunities": [
-    {"id":"OP-1042","company":"Rheinwerk Maschinenbau GmbH","city":"Düsseldorf","value":148000,"owner":"Mina","stage":"qualified","next":"Requirements workshop · 10 Sep","risk":"medium","requirements":false,"security":false,"note":"Two production halls; EU data region requested."},
-    {"id":"OP-1038","company":"Elbe Verpackung GmbH","city":"Hamburg","value":86000,"owner":"Mina","stage":"requirements","next":"Confirm acceptance criteria · 8 Sep","risk":"low","requirements":true,"security":true,"note":"Expansion of an existing monitored line."},
-    {"id":"OP-1031","company":"Isar Präzisionstechnik GmbH","city":"München","value":214000,"owner":"Anna","stage":"proposal","next":"Commercial review · 12 Sep","risk":"high","requirements":true,"security":false,"note":"SSO feasibility remains an open commitment risk."},
-    {"id":"OP-1024","company":"Havel Komponenten AG","city":"Berlin","value":121000,"owner":"Mina","stage":"won","next":"Delivery handover · 9 Sep","risk":"low","requirements":true,"security":true,"note":"Signed order; project setup pending."},
-    {"id":"OP-1019","company":"Mainbogen Logistik GmbH","city":"Frankfurt","value":64000,"owner":"Mina","stage":"lost","next":"Loss review · 16 Sep","risk":"low","requirements":true,"security":true,"note":"Lost to incumbent; integration effort cited."}
+    {
+      "id": "OP-1047",
+      "company": "Spreewerk Sensorik GmbH",
+      "city": "Berlin",
+      "value": 42000,
+      "owner": "Mina",
+      "stage": "qualified",
+      "next": "Discovery call · 11 Sep",
+      "risk": "low",
+      "requirements": false,
+      "security": false,
+      "note": "Wants a pilot on one line before multi-site rollout.",
+      "evidence": ""
+    },
+    {
+      "id": "OP-1042",
+      "company": "Rheinwerk Maschinenbau GmbH",
+      "city": "Düsseldorf",
+      "value": 148000,
+      "owner": "Mina",
+      "stage": "won",
+      "next": "Release enclosure sample · 18 Sep",
+      "risk": "medium",
+      "requirements": true,
+      "security": true,
+      "note": "PO-RW-8841 accepted 28 Aug. Polaris in delivery; acceptance 30 Oct.",
+      "evidence": "Accepted scope and handover: company/sales/rheinwerk-handover.md. Commercial review Mina; technical review Sara; 28 August 2026.",
+      "reviewedBy": "Mina / Sara (sample)",
+      "reviewedAt": "2026-08-28"
+    },
+    {
+      "id": "OP-1038",
+      "company": "Elbe Verpackung GmbH",
+      "city": "Hamburg",
+      "value": 86000,
+      "owner": "Mina",
+      "stage": "requirements",
+      "next": "Confirm acceptance criteria · 8 Sep",
+      "risk": "low",
+      "requirements": false,
+      "security": false,
+      "note": "Expansion of an existing monitored line. Try recording this review before proposal.",
+      "evidence": "Workshop pending: confirm channel count, EU hosting and acceptance criteria."
+    },
+    {
+      "id": "OP-1031",
+      "company": "Isar Präzisionstechnik GmbH",
+      "city": "München",
+      "value": 214000,
+      "owner": "Anna",
+      "stage": "requirements",
+      "next": "Commercial review · 12 Sep",
+      "risk": "high",
+      "requirements": true,
+      "security": false,
+      "note": "SSO feasibility remains an open commitment risk.",
+      "evidence": "Technical scope reviewed. SSO feasibility is unresolved; do not issue a proposal yet."
+    },
+    {
+      "id": "OP-1024",
+      "company": "Havel Komponenten AG",
+      "city": "Berlin",
+      "value": 121000,
+      "owner": "Mina",
+      "stage": "won",
+      "next": "Delivery handover · 9 Sep",
+      "risk": "low",
+      "requirements": true,
+      "security": true,
+      "note": "Signed order; project setup pending.",
+      "evidence": "Accepted order and requirements review recorded 1 September. Delivery handover scheduled for 9 September.",
+      "reviewedBy": "Mina (sample)",
+      "reviewedAt": "2026-09-01"
+    },
+    {
+      "id": "OP-1019",
+      "company": "Mainbogen Logistik GmbH",
+      "city": "Frankfurt",
+      "value": 64000,
+      "owner": "Mina",
+      "stage": "lost",
+      "next": "Loss review · 16 Sep",
+      "risk": "low",
+      "requirements": true,
+      "security": true,
+      "note": "Lost to incumbent; integration effort cited.",
+      "evidence": "Closed loss review: incumbent integration cost won the decision."
+    }
   ]
 }

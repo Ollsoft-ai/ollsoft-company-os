@@ -23,7 +23,7 @@ Send only the `.pub` line to your Company OS administrator. After it is
 registered, test your account:
 
 ```powershell
-ssh -p 2007 <your-user>@demo.companyos.ollsoft.org whoami
+ssh -p 2007 <your-user>@peter.companyos.ollsoft.org whoami
 ```
 
 Never send anyone the private `id_ed25519` file.

@@ -6,10 +6,12 @@ REPO=/srv/kb
 ADMIN=""
 REFRESH=0
 UNDO=0
+MEMBERS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO=${2:?missing value for --repo}; shift 2 ;;
     --admin) ADMIN=${2:?missing value for --admin}; shift 2 ;;
+    --member) MEMBERS+=("${2:?missing value for --member}"); shift 2 ;;
     --refresh) REFRESH=1; shift ;;
     --undo) UNDO=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -21,6 +23,9 @@ done
 [[ "$REPO" == /* && "$REPO" != / && -d "$REPO/company" ]] || {
   echo "invalid Company OS repo: $REPO" >&2; exit 1; }
 id "$ADMIN" >/dev/null 2>&1 || { echo "admin user not found: $ADMIN" >&2; exit 1; }
+for member in "${MEMBERS[@]}"; do
+  id "$member" >/dev/null 2>&1 || { echo "member not found: $member" >&2; exit 1; }
+done
 
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TEMPLATES="$SRC/showcase/kb"
@@ -90,6 +95,9 @@ fi
 groupadd -f "$PUBLIC_GROUP"
 groupadd -f "$PRIVATE_GROUP"
 usermod -aG kb-users,"$PUBLIC_GROUP","$PRIVATE_GROUP" "$ADMIN"
+for member in "${MEMBERS[@]}"; do
+  usermod -aG kb-users,"$PUBLIC_GROUP" "$member"
+done
 usermod -aG "$PUBLIC_GROUP","$PRIVATE_GROUP" kbindexer
 
 if ! id "$VIEWER" >/dev/null 2>&1; then

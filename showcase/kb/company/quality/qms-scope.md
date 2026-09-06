@@ -24,6 +24,6 @@ process. No requirement is declared non-applicable merely for convenience.
 
 ## Context actions
 
-- [ ] Reassess supply continuity for the gateway enclosure @demo #risk #qms
-- [ ] Review whether the 2026 ISO 9001 edition changes documented processes @demo #audit #qms
-- [ ] Add climate-related interested-party considerations to management review @demo #strategy #qms
+- [ ] Reassess supply continuity for the gateway enclosure @peter #risk #qms
+- [ ] Check ISO's published revision status and assess applicable changes @peter #audit #qms
+- [ ] Add climate-related interested-party considerations to management review @peter #strategy #qms

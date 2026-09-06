@@ -16,12 +16,17 @@ gates support ISO 9001 customer communication and requirements controls.
 
 ## Review evidence before proposal
 
-- [ ] Customer, site and intended use are unambiguous @demo #sales #quality
-- [ ] Technical and acceptance requirements are recorded @demo #sales #quality
-- [ ] Delivery capacity and external providers are confirmed @demo #sales
-- [ ] Security, privacy and data-residency needs are reviewed @demo #sales #security
-- [ ] Differences from earlier statements are resolved @demo #sales #quality
-- [ ] Risks, assumptions and approval are retained with the opportunity @demo #sales #risk
+- Customer, site and intended use are unambiguous #sales #quality
+- Technical and acceptance requirements are recorded #sales #quality
+- Delivery capacity and external providers are confirmed #sales
+- Security, privacy and data-residency needs are reviewed #sales #security
+- Differences from earlier statements are resolved #sales #quality
+- Risks, assumptions and approval are retained with the opportunity #sales #risk
+
+Use **Edit review** on a pipeline card to record the review, supporting evidence
+and next action. This example requires both requirements and security review,
+plus evidence notes, before Proposal or Won. It is an internal workflow guard,
+not an approval signature or a certification check.
 
 Customer complaints follow an accessible receipt, acknowledgement,
 investigation, response, closure and learning workflow aligned to ISO 10002:2018.
