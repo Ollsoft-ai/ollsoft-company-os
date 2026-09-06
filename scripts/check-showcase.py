@@ -96,7 +96,7 @@ def run():
         print('PASS invoice: invalid inputs, save, PDF parse/totals, stale edits, narrow layout')
 
         rows = [
-            ['company/dashboards/kanban.md', False, 'Inspect enclosure #blocked', ['blocked'], ['peter'], 3],
+            ['company/dashboards/kanban.md', False, 'Inspect enclosure @peter #blocked (color: blue) (due: 2026-09-18)', ['blocked'], ['peter'], 3],
             ['projects/polaris-energy-gateway/meeting-notes.md', True, 'Record decision', [], ['krystof'], 5],
             ['company/sales/customer-requirements.md', False, 'Template', [], [], 1],
         ]
@@ -105,6 +105,8 @@ def run():
         expect(f.locator('#done')).to_have_text('1')
         expect(f.locator('#blocked')).to_have_text('1')
         expect(f.locator('#sources')).to_have_text('2')
+        expect(f.locator('#work')).not_to_contain_text('(color:')
+        expect(f.locator('#work')).to_contain_text('due 2026-09-18')
         f.locator('#owner').select_option('krystof')
         expect(f.locator('#open')).to_have_text('0')
         expect(f.locator('#done')).to_have_text('1')

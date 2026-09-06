@@ -95,5 +95,9 @@ source documents, and save it in my private folder for review.
   account can change.
 - **Keep secrets in approved secret stores.** Never put credentials in Markdown,
   Git, artifacts or prompts.
+- **Approve the provider before sharing data.** Linux access is not permission
+  to send customer information to an external AI service. The Polaris example
+  requires EEA processing; check the provider, contract and data location before
+  using real customer records. This hosted demo contains fictional records.
 - **Respect evidence status.** Label drafts, preserve source links and never let
   an agent claim ISO certification or management approval.

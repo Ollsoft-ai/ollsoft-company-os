@@ -23,10 +23,12 @@ Send only the `.pub` line to your Company OS administrator. After it is
 registered, test your account:
 
 ```powershell
-ssh -p 2007 <your-user>@peter.companyos.ollsoft.org whoami
+ssh -p 2007 <your-user>@demo.companyos.ollsoft.org whoami
 ```
 
-Never send anyone the private `id_ed25519` file.
+Before accepting SSH's first-connection prompt, compare its host-key fingerprint
+with one supplied by your administrator. This records the trusted host in your
+`known_hosts` file. Never send anyone the private `id_ed25519` file.
 
 ### 2. Install the drive tools
 
@@ -48,10 +50,17 @@ host = demo.companyos.ollsoft.org
 port = 2007
 user = <your-user>
 key_file = C:\Users\<YOU>\.ssh\id_ed25519
+known_hosts_file = C:\Users\<YOU>\.ssh\known_hosts
 ```
 
-If the key has a passphrase, load it into an SSH agent and configure rclone to
-use the agent instead of putting the passphrase in this file. Test the remote:
+Do not omit `known_hosts_file`: rclone does not validate the server's host key
+by default. See its [host-key validation guide](https://rclone.org/sftp/#host-key-validation).
+
+If the key has a passphrase, load it into your running SSH agent with
+`ssh-add $env:USERPROFILE\.ssh\id_ed25519` and add `key_use_agent = true` to this
+configuration. If no agent is running, ask your administrator to enable your
+Windows OpenSSH Authentication Agent. Do not store the passphrase in this file.
+Test the remote:
 
 ```powershell
 rclone lsd companyos:/srv/kb
