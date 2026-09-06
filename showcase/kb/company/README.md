@@ -4,6 +4,14 @@ Werkraum Systems GmbH is a fictional Hamburg industrial-technology company. The
 workspace is written in English, while its commercial and governance examples
 reflect the way a German GmbH commonly operates.
 
+Company OS is an **OS-native, AI-agent-native company knowledgebase**: think
+**Obsidian, but multiplayer, permissioned and built for agents**, running on a
+Linux box your company controls. It is designed for technical teams that want
+plain files instead of a locked data silo. Documents, project spaces, access
+groups, dashboards, workflows, scheduled jobs and agent skills are all
+customizable, while Linux permissions consistently govern the browser, terminal,
+network drive, search, SQL and AI agents.
+
 ![Company OS workspace](media/01-workspace.png)
 
 ## One trail of evidence
@@ -27,6 +35,8 @@ stay in the project folder, and tasks roll up into the live
 - Review Git-backed document history and restore an earlier version.
 - Upload office documents and PDFs for searchable text extraction.
 - Use a real per-user terminal and scheduled jobs when their account allows it.
+- Run Claude Code or Codex inside the knowledgebase with Company OS context and skills.
+- Mount the permitted knowledgebase as a normal network drive over SFTP.
 - Create users, groups and artifact network policies from the admin panel.
 
 ![Delivery board](media/03-kanban.png)
@@ -53,6 +63,8 @@ published. Using these structures does not establish conformity or certification
 ## Browse the fictional company
 
 - [Company handbook](handbook/company-handbook.md)
+- [Agentic Company OS onboarding](handbook/agentic-company-os.md)
+- [Network-drive onboarding](handbook/network-drive.md)
 - [Process map](quality/process-map.md)
 - [Quality objectives](quality/quality-objectives.md)
 - [Risk and opportunity register](quality/risk-register.md)

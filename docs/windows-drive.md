@@ -38,6 +38,10 @@ Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
 ssh -p <port> <you>@<your-box> whoami
 ```
 
+A web-only showcase viewer deliberately has no shell and cannot mount a drive.
+Use a named full Company OS account; its Linux permissions become the drive's
+permissions.
+
 **1. Install WinFsp and rclone:**
 
 ```powershell

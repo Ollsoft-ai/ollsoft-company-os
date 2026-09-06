@@ -18,3 +18,7 @@ a plain install does not.
 The agent skills in `company-skills/` are installed alongside these, at
 `<repo>/.claude/skills/`. Those *are* refreshed on every install, since they
 document the platform and should track the code.
+
+The installer also creates `<repo>/AGENTS.md` as a protected symlink to
+`.claude/CLAUDE.md`, so Codex and Claude Code receive the same maintained
+instructions without a second copy drifting.

@@ -68,6 +68,8 @@ See **[docs/remote-access.md](docs/remote-access.md)** before exposing it to a
 network — it needs a TLS front door and an identity layer. To work on the
 knowledgebase from Explorer — open and save Office files as if it were a
 network share — see **[docs/windows-drive.md](docs/windows-drive.md)**.
+To work with the knowledgebase through Claude Code or Codex, see
+**[docs/agent-cli.md](docs/agent-cli.md)**.
 
 ### Options
 
@@ -143,8 +145,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 - **Admin UI** (admin group only): create and remove users, create groups, assign
   membership — full provisioning of the OS account, home, private dir, Postgres
   role and personal schema.
-- **AI agents** run as each user, with company **skills** in the repo teaching them
-  the platform.
+- **AI agents** run as each user, with shared context and company **skills** in
+  the repo teaching Claude Code and Codex how to use the platform.
 
 ---
 
@@ -218,7 +220,7 @@ ollsoft-company-os/
 ├── defaults/               shipped into <repo>/.claude/ and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · monitoring · dictation · remote-access · converted-documents · windows-drive
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
 ```
 
 **Created on the box by the installer** (not in this repo):

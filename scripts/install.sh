@@ -208,6 +208,12 @@ for f in CLAUDE.md egress.json launchers.json; do
   # never clobber a live system's edits
   [ -e "$REPO/.claude/$f" ] || install -m 0644 -o root -g kb-users "$SRC/defaults/$f" "$REPO/.claude/$f"
 done
+# Codex discovers AGENTS.md from the working directory upward. Keep one source
+# of truth by pointing it at the same governed context Claude Code reads.
+if [[ ! -e "$REPO/AGENTS.md" && ! -L "$REPO/AGENTS.md" ]]; then
+  ln -s .claude/CLAUDE.md "$REPO/AGENTS.md"
+  chown -h root:kb-users "$REPO/AGENTS.md"
+fi
 # The To-dos aggregator is a platform default, not demo content: the docs
 # present it as a shipped feature, so install it if the operator has not
 # replaced it with their own.

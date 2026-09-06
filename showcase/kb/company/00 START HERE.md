@@ -15,12 +15,18 @@ delivery, quality evidence and finance without moving facts into separate silos.
 - [ ] Open [Project Polaris](../projects/polaris-energy-gateway/README.md) and search for `gateway enclosure` @demo #onboarding
 - [ ] Open **Invoice**, change a line item, and preview a PDF from the print dialog @demo #onboarding
 - [ ] Return to `company/todos.html`: these checkboxes appear there automatically @demo #onboarding
+- [ ] Read [Work with an AI agent](handbook/agentic-company-os.md) and try one safe prompt from a named account @demo #onboarding
+- [ ] Read [Connect Company OS as a network drive](handbook/network-drive.md) and choose a drive letter or mount folder @demo #onboarding
 
 ## The idea
 
 Company OS keeps normal files as the source of truth. Markdown remains readable
 from the web app, terminal, Git and ordinary editors. Interactive artifacts sit
 beside those files and operate with the permissions of the person viewing them.
+
+The public `demo` login is intentionally web-only. Agentic CLI and network-drive
+steps require a named full account so every action has a real owner and the same
+Linux permissions apply in every interface.
 
 The management-system examples are **ISO-aligned demonstrations, not a claim of
 certification**. The German invoice is a functional sample and not tax advice or

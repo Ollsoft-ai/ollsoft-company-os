@@ -77,6 +77,7 @@ file after your first login.
 ├── .git             0700 root                     history — root-only, always
 ├── .gitignore       0644 root:kb-users            .md, .html and .claude/*.json only
 ├── .claude/         0755 root:kb-users            agent context, skills, egress rules
+├── AGENTS.md        -> .claude/CLAUDE.md           Codex discovers the same context
 ├── company/         2775 root:kb-users + default ACL   everyone reads and writes
 ├── projects/        3775 root:kb-users, sticky    restricted folders go here
 └── users/           3775 root:kb-users, sticky    one 0700 <name>:<name> dir per person
@@ -152,6 +153,10 @@ Then verify the core promises:
   on it returns 403, and `SELECT * FROM kb.blocks` returns none of its rows. All
   three are the kernel and the RLS policy, not application code.
 - The in-browser terminal runs `whoami` as the logged-in user.
+- From that terminal, start Claude Code or Codex in `/srv/kb`. Claude reads
+  `.claude/CLAUDE.md`; Codex follows the root `AGENTS.md` symlink to the same
+  context. Both can use the platform skills in `.claude/skills/`; see
+  [agent-cli.md](agent-cli.md) for installation, first prompts and guardrails.
 
 For a presentation-ready fictional company instead of the compact test fixture,
 seed the English-language German GmbH showcase:
