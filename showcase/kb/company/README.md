@@ -18,13 +18,11 @@ A customer promise is easy to lose between a CRM, a project board, a shared driv
 and meeting notes. Here the requirement, decision, task and internal tool can
 live together, with links that let a colleague or agent follow the work.
 
-| Need | What to try here |
-|---|---|
-| Find the reasoning behind delivery work | Follow [Polaris](../projects/polaris-energy-gateway/README.md) from its requirements to its enclosure decision. |
-| Stop maintaining a second task list | Change a [Kanban](dashboards/delivery-kanban.html) card, then inspect [the Markdown](dashboards/kanban.md) and [Tasks](todos.html). |
-| Build a tool around your own process | Edit an opportunity in [Pipeline](sales/customer-pipeline.html), or generate a sample invoice PDF. |
-| Delegate useful work to an agent | Ask Claude to draft a delivery brief from existing evidence in your personal folder. |
-| Keep ordinary desktop tools | Mount the files over SFTP and open them in your usual editors. |
+- **Find the reasoning behind delivery work:** follow [Polaris](../projects/polaris-energy-gateway/README.md) from its requirements to its enclosure decision.
+- **Stop maintaining a second task list:** change a [Kanban](dashboards/delivery-kanban.html) card, then inspect [the Markdown](dashboards/kanban.md) and [Tasks](todos.html).
+- **Build a tool around your process:** edit an opportunity in [Pipeline](sales/customer-pipeline.html), or generate a sample invoice PDF.
+- **Delegate useful work to an agent:** ask Claude to draft a delivery brief from existing evidence in your personal folder.
+- **Keep ordinary desktop tools:** mount the files over SFTP and open them in your usual editors.
 
 ## One believable company story
 

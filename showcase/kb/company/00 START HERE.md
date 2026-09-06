@@ -12,13 +12,11 @@ company. The scenario starts on **6 September 2026**. Rheinwerk has placed a
 €148,000 order for energy monitoring in two production halls. Delivery is underway;
 an enclosure-quality issue needs attention before the next installation milestone.
 
-| Try this | What you should see |
-|---|---|
-| Open [Cockpit](dashboards/management-cockpit.html) | Real tasks from permitted documents, with blocked work first. |
-| Open [Project Polaris](../projects/polaris-energy-gateway/README.md) | The order, acceptance criteria, delivery plan and enclosure decision connect. |
-| Open [Kanban](dashboards/delivery-kanban.html), edit one card and save | The change appears in [kanban.md](dashboards/kanban.md) and then [Tasks](todos.html). These are views of the same task. |
-| Open [Pipeline](sales/customer-pipeline.html) and review Elbe Verpackung | Record requirements, security review and evidence, then advance to Proposal. Rheinwerk is already won. |
-| Open [Invoice](finance/invoice-generator.html), change a quantity and save a PDF | Totals recalculate; an actual PDF appears under `finance/_files/` for preview or download. |
+1. **Find the problem.** Open [Cockpit](dashboards/management-cockpit.html): real tasks from permitted documents, with blocked work first.
+2. **Follow the context.** Open [Project Polaris](../projects/polaris-energy-gateway/README.md): the order, acceptance criteria, delivery plan and enclosure decision connect.
+3. **Change real work.** In [Kanban](dashboards/delivery-kanban.html), edit a card and save. The change appears in [kanban.md](dashboards/kanban.md) and then [Tasks](todos.html): views of the same task.
+4. **Review before committing.** In [Pipeline](sales/customer-pipeline.html), review Elbe Verpackung. Record requirements, security review and evidence, then advance to Proposal. Rheinwerk is already won.
+5. **Make a useful output.** In [Invoice](finance/invoice-generator.html), change a quantity and create a PDF. Totals recalculate; the PDF appears under `finance/_files/` for preview or download.
 
 Changes are shared with other visitors and retained between visits. The operator
 can reset this fictional workspace; use sample information when trying it.

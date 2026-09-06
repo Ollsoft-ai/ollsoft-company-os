@@ -18,13 +18,11 @@ The customer expects a conforming enclosure. Batch B-441 failed inspection.
 
 ## Reference map
 
-| Reference used in this example | Where to look |
-|---|---|
-| ISO 9001:2015 with Amendment 1:2024; customer requirements and improvement | [QMS scope](qms-scope.md), [process map](process-map.md), [objectives](quality-objectives.md), [customer review](../sales/customer-requirements.md) |
-| ISO/IEC 27001:2022; information security management | [ISMS scope](isms-scope.md) and [risk register](risk-register.md) |
-| ISO 31000:2018; risk management guidance | [Risk treatments and owners](risk-register.md) |
-| ISO 10002:2018; complaint handling guidance | [Complaints register](../sales/complaints-register.md) |
-| ISO 19011:2026; management-system audit guidance | [Internal audit programme](internal-audit-programme.md) |
+- **ISO 9001:2015 with Amendment 1:2024 — customer requirements and improvement:** [QMS scope](qms-scope.md), [process map](process-map.md), [objectives](quality-objectives.md), [customer review](../sales/customer-requirements.md).
+- **ISO/IEC 27001:2022 — information security management:** [ISMS scope](isms-scope.md) and [risk register](risk-register.md).
+- **ISO 31000:2018 — risk management guidance:** [Risk treatments and owners](risk-register.md).
+- **ISO 10002:2018 — complaint handling guidance:** [Complaints register](../sales/complaints-register.md).
+- **ISO 19011:2026 — management-system audit guidance:** [Internal audit programme](internal-audit-programme.md).
 
 ISO 9001 does not prescribe a sales funnel. The demo's commercial stages implement
 Werkraum's own review procedure. A checkbox records an assertion; its evidence
