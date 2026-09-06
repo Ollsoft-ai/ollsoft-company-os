@@ -1,7 +1,694 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-:root{color-scheme:dark;--base:#0d1626;--ink:#e9effa;--muted:#8ca1c1;--panel:#111f34;--line:#29405e;--blue:#4d9dff;--amber:#e5ae58;--red:#f2809c;--green:#2fce98}*{box-sizing:border-box}body{margin:0;background:var(--base);color:var(--ink);font:14px/1.4 "IBM Plex Sans","Segoe UI",sans-serif}header{padding:26px 30px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:end}h1{font-size:30px;letter-spacing:-.04em;margin:0}header p{color:var(--muted);margin:5px 0 0}.pulse{color:var(--green)}#board{display:grid;grid-template-columns:repeat(4,minmax(245px,1fr));gap:18px;padding:24px 28px;overflow:auto}.col{min-height:590px}.head{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:2px solid var(--line);margin-bottom:12px}.head strong{font-size:16px}.count{font-variant-numeric:tabular-nums;color:var(--muted)}.count.over{color:var(--red)}.card{position:relative;background:var(--panel);border:1px solid #263c58;padding:15px 15px 13px;margin-bottom:11px;cursor:grab}.card:before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:3px;background:var(--blue)}.card[data-class=quality]:before{background:var(--amber)}.card[data-class=security]:before{background:var(--red)}.card[data-class=customer]:before{background:var(--green)}.id{font-size:11px;color:var(--muted)}.title{font-weight:700;font-size:15px;margin:4px 0 13px}.foot{display:flex;justify-content:space-between;color:var(--muted);font-size:12px}.project{color:var(--blue);margin-top:8px;font-size:12px}.actions{display:flex;justify-content:space-between;margin-top:12px}.actions button{border:1px solid var(--line);background:transparent;color:var(--muted);padding:3px 9px;cursor:pointer}.actions button:focus,.card:focus{outline:2px solid var(--blue);outline-offset:2px}.toast{position:fixed;right:20px;bottom:20px;background:#17304e;border:1px solid var(--blue);padding:10px 14px;display:none}.bad{color:var(--red)}@media(max-width:800px){#board{grid-template-columns:repeat(4,270px)}header{align-items:start;flex-direction:column;gap:10px}}
-</style></head><body><header><div><h1>Delivery control board</h1><p>Pull work through verification. WIP limits make overloaded stages visible.</p></div><div class="pulse">● live file-backed board</div></header><main id="board">Loading…</main><div id="toast" class="toast"></div><script>
-let seq=0,pending={};addEventListener('message',e=>{let m=e.data||{};if(m.type==='kb-result'&&pending[m.id]){pending[m.id](m);delete pending[m.id]}});const send=m=>new Promise(r=>{let id=++seq;pending[id]=r;parent.postMessage({id,...m},'*')});const PATH='company/dashboards/.delivery-board.json';const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let data;
-function card(c,idx){return `<article class="card" draggable="true" tabindex="0" data-id="${esc(c.id)}" data-class="${esc(c.class)}"><div class="id">${esc(c.id)}</div><div class="title">${esc(c.title)}</div><div class="foot"><span>${esc(c.owner)}</span><span>${esc(c.due)}</span></div><div class="project">${esc(c.project)}</div><div class="actions"><button data-id="${esc(c.id)}" data-d="-1" ${idx===0?'disabled':''}>←</button><button data-id="${esc(c.id)}" data-d="1" ${idx===data.columns.length-1?'disabled':''}>→</button></div></article>`}
-function render(){let b=document.getElementById('board');b.innerHTML=data.columns.map((col,i)=>{let cards=data.cards.filter(c=>c.column===col.id),over=cards.length>col.limit;return `<section class="col" data-col="${col.id}"><div class="head"><strong>${esc(col.label)}</strong><span class="count ${over?'over':''}">${cards.length} / ${col.limit===99?'∞':col.limit}</span></div>${cards.map(c=>card(c,i)).join('')}</section>`}).join('');b.querySelectorAll('.card').forEach(el=>{el.ondragstart=e=>e.dataTransfer.setData('text/plain',el.dataset.id);el.onkeydown=e=>{if(e.key==='ArrowLeft')move(el.dataset.id,-1);if(e.key==='ArrowRight')move(el.dataset.id,1)}});b.querySelectorAll('.col').forEach(el=>{el.ondragover=e=>e.preventDefault();el.ondrop=e=>{e.preventDefault();setCol(e.dataTransfer.getData('text/plain'),el.dataset.col)}});b.querySelectorAll('button[data-d]').forEach(x=>x.onclick=()=>move(x.dataset.id,Number(x.dataset.d)))}function move(id,d){let c=data.cards.find(x=>x.id===id),i=data.columns.findIndex(x=>x.id===c.column),n=Math.max(0,Math.min(data.columns.length-1,i+d));setCol(id,data.columns[n].id)}async function setCol(id,col){let c=data.cards.find(x=>x.id===id);if(!c||c.column===col)return;c.column=col;render();let r=await send({type:'kb-write',path:PATH,content:JSON.stringify(data,null,2)+'\n'});toast(r.error||'Board saved.',!!r.error)}function toast(t,bad){let e=document.getElementById('toast');e.textContent=t;e.className='toast'+(bad?' bad':'');e.style.display='block';setTimeout(()=>e.style.display='none',2200)}send({type:'kb-read',path:PATH}).then(r=>{try{data=JSON.parse(r.content);render()}catch(e){document.getElementById('board').innerHTML='<span class="bad">Could not load board data.</span>'}});
-</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #16161e; color: #e8e8f2;
+    display: flex; flex-direction: column; }
+  header { padding: .8rem 1.1rem .5rem; flex: none; }
+  h1 { font-size: 1.15rem; margin: 0; display: inline-block; cursor: text; border-radius: 6px;
+    padding: .1rem .3rem; margin-left: -.3rem; }
+  h1:hover { background: #23232f; }
+  input.title-edit { font-size: 1.15rem; font-weight: 700; background: #23232f; color: #e8e8f2;
+    border: 1px solid #6a54e6; border-radius: 6px; padding: .1rem .3rem; margin-left: -.3rem; width: 24rem; max-width: 80vw; }
+  .sub { color: #9a9ab2; font-size: .78rem; margin-top: .15rem; }
+  .sub b { color: #b7acff; font-family: ui-monospace, monospace; font-weight: 500; }
+  .sub .status { margin-left: .6rem; color: #6d6d84; }
+  .sub .status.ok { color: #7ee0b0; }
+  .sub .status.err { color: #ff9db0; }
+  #board { flex: 1; display: flex; gap: .8rem; align-items: flex-start; overflow-x: auto;
+    padding: .4rem 1.1rem 1rem; }
+  .col { flex: 0 0 262px; width: 262px; background: #1c1c26; border: 1px solid #2a2a36;
+    border-radius: 12px; padding: .55rem .55rem .45rem; max-height: 100%; display: flex; flex-direction: column; }
+  .col-head { display: flex; align-items: center; gap: .4rem; padding: 0 .2rem .45rem; }
+  .col-title { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #cfcfe0; cursor: text; border-radius: 4px; padding: .05rem .25rem; margin-left: -.25rem; min-width: 2rem; }
+  .col-title:hover { background: #262633; }
+  input.col-edit { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    background: #262633; color: #e8e8f2; border: 1px solid #6a54e6; border-radius: 4px; padding: .05rem .25rem; width: 9rem; }
+  .col-count { font-size: .7rem; color: #8a8aa0; background: #262633; border-radius: 8px; padding: .05rem .45rem; }
+  .col-del { margin-left: auto; background: none; border: 0; color: #6d6d84; cursor: pointer;
+    font-size: .85rem; border-radius: 4px; padding: .1rem .3rem; visibility: hidden; }
+  .col:hover .col-del { visibility: visible; }
+  .col-del:hover { background: #3a1f28; color: #ff9db0; }
+  .col-del.arm { visibility: visible; background: #3a1f28; color: #ff9db0; font-size: .68rem; }
+  .cards { overflow-y: auto; min-height: 8px; display: flex; flex-direction: column; gap: .45rem; padding: .1rem .1rem; }
+  .card { background: #23232f; border: 1px solid #30303d; border-radius: 9px; padding: .5rem .6rem .45rem .7rem;
+    cursor: grab; position: relative; font-size: .85rem; line-height: 1.35;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .card:hover { border-color: #44445a; }
+  .card.dragging { opacity: .35; }
+  .card.ghost { position: fixed; z-index: 30; pointer-events: none; opacity: .95; margin: 0;
+    box-shadow: 0 10px 28px #000c; transform: rotate(2deg); border-color: #6a54e6; }
+  .card .bar { position: absolute; left: 0; top: 7px; bottom: 7px; width: 4px; border-radius: 3px; }
+  .card .body a, .card .body { word-wrap: break-word; }
+  .card .body.done { text-decoration: line-through; color: #6d6d84; }
+  .card .meta { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin-top: .35rem; }
+  .card .meta:empty { display: none; }
+  .chip { font-size: .68rem; border-radius: 6px; padding: .08rem .4rem; background: #2c2c3a; color: #9a9ab2; }
+  .chip.due { font-family: ui-monospace, monospace; }
+  .chip.due.overdue { background: #47202a; color: #ff9db0; font-weight: 600; }
+  .chip.due.soon { background: #3d3222; color: #ffce7a; }
+  .avatar { width: 20px; height: 20px; border-radius: 50%; font-size: .58rem; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center; color: #16161e; }
+  .mention { color: #7ee0b0; font-weight: 600; }
+  .mention.me { background: #3ecf8e2a; border-radius: 4px; padding: 0 .15rem; }
+  .tag { color: #e0a34a; }
+  .card .done-toggle { position: absolute; right: .4rem; top: .4rem; width: 15px; height: 15px;
+    opacity: 0; cursor: pointer; }
+  .card:hover .done-toggle, .card .done-toggle:checked { opacity: 1; }
+  @media (hover: none) {
+    .card .done-toggle { opacity: 1; }
+    .col-del { visibility: visible; }
+  }
+  .drop-ind { height: 3px; border-radius: 2px; background: #6a54e6; margin: -2px 2px; }
+  .composer { padding-top: .45rem; }
+  .composer button.open { width: 100%; text-align: left; background: none; border: 0; color: #8a8aa0;
+    font-size: .8rem; padding: .3rem .35rem; border-radius: 7px; cursor: pointer; }
+  .composer button.open:hover { background: #262633; color: #cfcfe0; }
+  .composer textarea { width: 100%; background: #23232f; color: #e8e8f2; border: 1px solid #6a54e6;
+    border-radius: 8px; font: inherit; font-size: .84rem; padding: .45rem .55rem; resize: none; }
+  .composer .row { display: flex; gap: .4rem; margin-top: .3rem; }
+  button.btn { background: #6a54e6; border: 0; color: #fff; border-radius: 7px; padding: .32rem .7rem;
+    font-size: .8rem; font-weight: 600; cursor: pointer; }
+  button.ghost { background: #2c2c3a; color: #cfcfe0; }
+  button.danger { background: #7a2735; color: #ffd7de; }
+  .addcol { flex: 0 0 220px; }
+  .addcol button.open { width: 100%; text-align: left; background: #1c1c2688; border: 1px dashed #34343f;
+    color: #8a8aa0; font-size: .82rem; padding: .55rem .7rem; border-radius: 12px; cursor: pointer; }
+  .addcol button.open:hover { color: #cfcfe0; border-color: #6a54e6; }
+  .addcol input { width: 100%; background: #23232f; color: #e8e8f2; border: 1px solid #6a54e6;
+    border-radius: 8px; font-size: .84rem; padding: .5rem .6rem; }
+  footer { flex: none; padding: .45rem 1.1rem .6rem; color: #6d6d84; font-size: .72rem;
+    display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; border-top: 1px solid #23232f; }
+  footer code { color: #9a9ab2; font-family: ui-monospace, monospace; }
+  footer button { background: none; border: 1px solid #34343f; color: #9a9ab2; border-radius: 6px;
+    font-size: .7rem; padding: .12rem .5rem; cursor: pointer; }
+  footer button:hover { color: #e8e8f2; border-color: #6a54e6; }
+  /* editor overlay */
+  #overlay { position: fixed; inset: 0; background: #000a; display: none; align-items: center;
+    justify-content: center; z-index: 10; }
+  #overlay.show { display: flex; }
+  .editor { background: #1c1c26; border: 1px solid #34343f; border-radius: 14px; width: 420px;
+    max-width: 92vw; padding: 1rem 1.1rem; }
+  .editor h3 { margin: 0 0 .7rem; font-size: .9rem; color: #cfcfe0; }
+  .editor label { display: block; font-size: .7rem; text-transform: uppercase; letter-spacing: .07em;
+    color: #8a8aa0; margin: .65rem 0 .25rem; }
+  .editor textarea, .editor input[type=date] { width: 100%; background: #23232f; color: #e8e8f2;
+    border: 1px solid #34343f; border-radius: 8px; font: inherit; font-size: .86rem; padding: .45rem .55rem; }
+  .editor textarea:focus, .editor input:focus { border-color: #6a54e6; outline: none; }
+  .hint { font-size: .68rem; color: #6d6d84; margin-top: .2rem; }
+  .swatches { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .swatch { width: 26px; height: 26px; border-radius: 8px; cursor: pointer; border: 2px solid transparent; }
+  .swatch.none { background: #23232f; color: #6d6d84; font-size: .8rem; display: flex; align-items: center; justify-content: center; }
+  .swatch.sel { border-color: #fff; }
+  .people { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .person { font-size: .74rem; border-radius: 14px; padding: .18rem .6rem; background: #23232f;
+    color: #9a9ab2; cursor: pointer; border: 1px solid transparent; }
+  .person.on { background: #3ecf8e22; color: #7ee0b0; border-color: #3ecf8e55; }
+  .ed-actions { display: flex; gap: .5rem; margin-top: 1rem; }
+  .ed-actions .spacer { flex: 1; }
+  /* setup + error screens */
+  .center { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .panel { background: #1c1c26; border: 1px solid #34343f; border-radius: 14px; padding: 1.4rem 1.6rem;
+    max-width: 460px; text-align: center; }
+  .panel p { color: #9a9ab2; font-size: .85rem; line-height: 1.5; }
+  #toast { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: #23232f;
+    border: 1px solid #34343f; color: #e8e8f2; padding: .4rem .9rem; border-radius: 8px; font-size: .8rem;
+    display: none; z-index: 20; }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="board-title">Kanban</h1>
+    <div class="sub">
+      <span id="where">locating…</span>
+      <span class="status" id="status"></span>
+    </div>
+  </header>
+  <div id="main" class="center"><div class="panel"><p>loading…</p></div></div>
+
+  <div id="overlay">
+    <div class="editor">
+      <h3>Edit card</h3>
+      <label>Text <span style="text-transform:none;letter-spacing:0">— @name assigns, #tag labels</span></label>
+      <textarea id="ed-body" rows="3"></textarea>
+      <label>Assignees</label>
+      <div class="people" id="ed-people"></div>
+      <label>Deadline</label>
+      <input type="date" id="ed-due">
+      <label>Color</label>
+      <div class="swatches" id="ed-colors"></div>
+      <div class="ed-actions">
+        <button class="btn danger" id="ed-del">Delete</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="ed-cancel">Cancel</button>
+        <button class="btn" id="ed-save">Save</button>
+      </div>
+    </div>
+  </div>
+  <div id="toast"></div>
+
+<script>
+  // ---------- bridge SDK ----------
+  let _id = 0; const _pending = {};
+  window.addEventListener("message", (ev) => {
+    const m = ev.data || {};
+    if (m.type === "kb-result" && _pending[m.id]) { _pending[m.id](m); delete _pending[m.id]; }
+  });
+  const _send = (msg) => new Promise((res) => {
+    const id = ++_id; _pending[id] = res; parent.postMessage({ id, ...msg }, "*"); });
+  const kbQuery = (sql, params = []) => _send({ type: "kb-query", sql, params });
+  const kbRead  = (path)          => _send({ type: "kb-read", path });
+  const kbWrite = (path, content) => _send({ type: "kb-write", path, content });
+  const kbClipboard = (text)      => _send({ type: "kb-clipboard", text });
+
+  // ---------- board format (shared convention — keep in sync with kanban-overview) ----------
+  // kanban.md: "# Title", "## Column" headings, one card per "- [ ]" line.
+  // Inline card metadata: @user, #tag, (due: YYYY-MM-DD), (color: name).
+  const TASK_RE = /^\s*[-*]\s+\[([ xX])\]\s*(.*?)\s*$/;
+  const HEAD_RE = /^(#{1,6})\s+(.*?)\s*$/;
+  const DUE_RE = /\s*\((?:due|deadline):\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\s*\)/i;
+  const COLOR_RE = /\s*\(colou?r:\s*([a-z]+)\s*\)/i;
+  const MENTION_RE = /(?:^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g;
+  const DONE_COL_RE = /^(done|finished|complete|completed|shipped|hotovo)\b/i;
+  const PALETTE = { red: "#e5484d", orange: "#f76b15", yellow: "#f0b429", green: "#46a758",
+    teal: "#12a594", blue: "#4c8dff", purple: "#9d6ee8", pink: "#d6409f", gray: "#8d8d8d" };
+
+  function parseCardLine(line) {
+    const m = TASK_RE.exec(line);
+    let body = m[2], due = null, color = null;
+    body = body.replace(DUE_RE, (_, d) => { due = d; return " "; });
+    body = body.replace(COLOR_RE, (_, c) => { if (PALETTE[c.toLowerCase()]) color = c.toLowerCase(); return " "; });
+    body = body.replace(/\s+/g, " ").trim();
+    return { checked: m[1].toLowerCase() === "x", body, due, color };
+  }
+  function cardToLine(c) {
+    let s = "- [" + (c.checked ? "x" : " ") + "] " + c.body.replace(/\s+/g, " ").trim();
+    if (c.due) s += " (due: " + c.due + ")";
+    if (c.color) s += " (color: " + c.color + ")";
+    return s;
+  }
+  function assigneesOf(body) {
+    const out = []; let m; MENTION_RE.lastIndex = 0;
+    while ((m = MENTION_RE.exec(body))) if (!out.includes(m[1])) out.push(m[1]);
+    return out;
+  }
+
+  function parseBoard(raw) {
+    const board = { title: null, preamble: [], columns: [] };
+    let col = null;
+    for (const line of raw.split("\n")) {
+      const s = line.trim();
+      if (!s) { if (col === null && board.preamble.length) board.preamble.push(""); continue; }
+      if (TASK_RE.test(line)) {
+        if (!col) { col = { title: "Cards", noHeading: true, items: [] }; board.columns.push(col); }
+        col.items.push({ kind: "card", card: parseCardLine(line) });
+      } else if (HEAD_RE.test(s)) {
+        const h = HEAD_RE.exec(s);
+        if (board.title === null && !col && h[1].length === 1) { board.title = h[2]; }
+        else { col = { title: h[2], items: [] }; board.columns.push(col); }
+      } else {
+        if (col) col.items.push({ kind: "raw", text: line });
+        else board.preamble.push(line);
+      }
+    }
+    while (board.preamble.length && board.preamble[board.preamble.length - 1] === "") board.preamble.pop();
+    if (board.title === null) board.title = "Kanban";
+    return board;
+  }
+  function serializeBoard(board) {
+    const out = ["# " + board.title, ""];
+    for (const l of board.preamble) out.push(l);
+    if (board.preamble.length) out.push("");
+    for (const col of board.columns) {
+      if (!col.noHeading) { out.push("## " + col.title, ""); }
+      for (const it of col.items) out.push(it.kind === "card" ? cardToLine(it.card) : it.text);
+      out.push("");
+    }
+    return out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "") + "\n";
+  }
+  const cardsOf = (col) => col.items
+    .map((it, itemIdx) => ({ it, itemIdx }))
+    .filter((x) => x.it.kind === "card");
+
+  // ---------- state ----------
+  const state = { dir: null, mdPath: null, raw: null, board: null, me: "", users: [],
+    editing: null, drag: null, composing: null, dirty: false };
+  const $ = (id) => document.getElementById(id);
+  function esc(s) { return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  function decorate(text) {
+    return esc(text)
+      .replace(/@([A-Za-z0-9_][A-Za-z0-9_-]*)/g,
+        (m, u) => `<span class="mention${u === state.me ? " me" : ""}">@${u}</span>`)
+      .replace(/(^|\s)#([A-Za-z0-9_][A-Za-z0-9_-]*)/g, (m, sp, t) => `${sp}<span class="tag">#${t}</span>`);
+  }
+  function hue(name) { let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) % 360; return h; }
+  function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block";
+    clearTimeout(t._t); t._t = setTimeout(() => { t.style.display = "none"; }, 2600); }
+  function setStatus(msg, cls) { const s = $("status"); s.textContent = msg; s.className = "status " + (cls || ""); }
+
+  function todayStr() { const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function dueInfo(due) {
+    if (!due) return null;
+    const t = todayStr();
+    const days = Math.round((new Date(due + "T12:00") - new Date(t + "T12:00")) / 864e5);
+    const label = new Date(due + "T12:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (days < 0) return { cls: "overdue", label: label + " · " + (-days) + "d late" };
+    if (days === 0) return { cls: "soon", label: "today" };
+    if (days <= 2) return { cls: "soon", label: label };
+    return { cls: "", label: label };
+  }
+
+  // ---------- persistence ----------
+  async function save() {
+    const text = serializeBoard(state.board);
+    state.raw = text;
+    const r = await kbWrite(state.mdPath, text);
+    if (r.error || !r.ok) { setStatus("save failed: " + (r.error || "?"), "err"); toast("Save failed — " + (r.error || "unknown error")); }
+    else setStatus("saved " + new Date().toLocaleTimeString(), "ok");
+  }
+  async function reload(applyIfChanged) {
+    const r = await kbRead(state.mdPath);
+    if (r.error) return false;
+    if (!applyIfChanged || r.content !== state.raw) {
+      state.raw = r.content;
+      state.board = parseBoard(r.content);
+      render();
+    }
+    return true;
+  }
+
+  // ---------- rendering ----------
+  function render() {
+    const b = state.board;
+    $("board-title").textContent = b.title;
+    const main = $("main");
+    main.className = ""; main.id = "main"; main.innerHTML = "";
+    const boardEl = document.createElement("div"); boardEl.id = "board";
+    b.columns.forEach((col, ci) => boardEl.appendChild(renderColumn(col, ci)));
+    boardEl.appendChild(renderAddColumn());
+    main.appendChild(boardEl);
+  }
+
+  function renderColumn(col, ci) {
+    const el = document.createElement("div"); el.className = "col";
+    const head = document.createElement("div"); head.className = "col-head";
+    const title = document.createElement("span"); title.className = "col-title";
+    title.textContent = col.title;
+    title.title = "click to rename";
+    title.onclick = () => inlineEdit(title, col.title, "col-edit", (v) => { if (v) { col.title = v; save(); } render(); });
+    const cards = cardsOf(col);
+    const count = document.createElement("span"); count.className = "col-count";
+    count.textContent = cards.filter((x) => !x.it.card.checked).length + "/" + cards.length;
+    head.append(title, count);
+    if (!col.noHeading) {
+      const del = document.createElement("button"); del.className = "col-del"; del.textContent = "✕";
+      del.title = "delete column (must be empty)";
+      del.onclick = () => {
+        if (cardsOf(col).length) { toast("Move or delete this column's cards first"); return; }
+        if (!del.classList.contains("arm")) { del.classList.add("arm"); del.textContent = "delete?"; return; }
+        state.board.columns.splice(ci, 1); save(); render();
+      };
+      head.appendChild(del);
+    }
+    el.appendChild(head);
+
+    const list = document.createElement("div"); list.className = "cards";
+    list.dataset.ci = ci;
+    cards.forEach((x, cardIdx) => list.appendChild(renderCard(x.it.card, ci, cardIdx)));
+    wireDropZone(list, ci);
+    el.appendChild(list);
+    el.appendChild(renderComposer(col, ci));
+    return el;
+  }
+
+  function renderCard(card, ci, cardIdx) {
+    const el = document.createElement("div"); el.className = "card"; el.draggable = true;
+    el.dataset.ci = ci; el.dataset.idx = cardIdx;
+    if (card.color) {
+      const bar = document.createElement("div"); bar.className = "bar";
+      bar.style.background = PALETTE[card.color]; el.appendChild(bar);
+      el.style.background = "color-mix(in srgb, " + PALETTE[card.color] + " 7%, #23232f)";
+    }
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.className = "done-toggle";
+    cb.checked = card.checked; cb.title = "done";
+    cb.onclick = (e) => { e.stopPropagation(); card.checked = cb.checked; save(); render(); };
+    el.appendChild(cb);
+    const body = document.createElement("div"); body.className = "body" + (card.checked ? " done" : "");
+    body.innerHTML = decorate(card.body);
+    el.appendChild(body);
+    const meta = document.createElement("div"); meta.className = "meta";
+    const di = dueInfo(card.due);
+    if (di) { const d = document.createElement("span"); d.className = "chip due " + (card.checked ? "" : di.cls);
+      d.textContent = "⏰ " + di.label; meta.appendChild(d); }
+    for (const u of assigneesOf(card.body)) {
+      const a = document.createElement("span"); a.className = "avatar"; a.title = u;
+      a.style.background = "hsl(" + hue(u) + " 55% 62%)";
+      a.textContent = u.slice(0, 2).toUpperCase(); meta.appendChild(a);
+    }
+    el.appendChild(meta);
+    el.onclick = () => openEditor(ci, cardIdx);
+    el.addEventListener("dragstart", (e) => {
+      state.drag = { ci, cardIdx }; el.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", "card");
+    });
+    el.addEventListener("dragend", () => { state.drag = null; el.classList.remove("dragging");
+      document.querySelectorAll(".drop-ind").forEach((n) => n.remove()); });
+    wireTouchDrag(el, ci, cardIdx);
+    return el;
+  }
+
+  function dropIndexFor(list, y) {
+    const els = [...list.querySelectorAll(".card:not(.dragging)")];
+    for (let i = 0; i < els.length; i++) {
+      const r = els[i].getBoundingClientRect();
+      if (y < r.top + r.height / 2) return i;
+    }
+    return els.length;
+  }
+  function showIndicator(list, y) {
+    document.querySelectorAll(".drop-ind").forEach((n) => n.remove());
+    const idx = dropIndexFor(list, y);
+    const ind = document.createElement("div"); ind.className = "drop-ind";
+    const cardEls = [...list.querySelectorAll(".card:not(.dragging)")];
+    if (idx >= cardEls.length) list.appendChild(ind);
+    else list.insertBefore(ind, cardEls[idx]);
+  }
+  function wireDropZone(list, ci) {
+    list.addEventListener("dragover", (e) => {
+      if (!state.drag) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      showIndicator(list, e.clientY);
+    });
+    list.addEventListener("drop", (e) => {
+      if (!state.drag) return;
+      e.preventDefault();
+      const toIdx = dropIndexFor(list, e.clientY);
+      moveCard(state.drag.ci, state.drag.cardIdx, ci, toIdx);
+      state.drag = null;
+      save(); render();
+    });
+  }
+  function moveCard(fromCi, fromIdx, toCi, toIdx) {
+    const from = state.board.columns[fromCi], to = state.board.columns[toCi];
+    const fromCards = cardsOf(from);
+    const src = fromCards[fromIdx]; if (!src) return;
+    from.items.splice(src.itemIdx, 1);
+    const toCards = cardsOf(to); // recomputed after removal — correct for same-column moves
+    const insertAt = toIdx >= toCards.length ? to.items.length : toCards[toIdx].itemIdx;
+    to.items.splice(insertAt, 0, src.it);
+    if (DONE_COL_RE.test(to.title)) src.it.card.checked = true;
+    else if (fromCi !== toCi && DONE_COL_RE.test(from.title)) src.it.card.checked = false;
+  }
+
+  // ---------- touch drag (HTML5 DnD does not exist on mobile) ----------
+  // Long-press (~300ms) picks the card up; a quick swipe still scrolls normally.
+  let touch = null; // { ghost, x, y, offX, offY, scroller }
+  function listAt(x, y) {
+    const el = document.elementFromPoint(x, y);
+    const col = el && el.closest ? el.closest(".col") : null;
+    return col ? col.querySelector(".cards") : null;
+  }
+  function autoScrollTick() {
+    if (!touch) return;
+    const board = $("board"); if (!board) return;
+    const M = 56, S = 14;
+    if (touch.x < M) board.scrollLeft -= S;
+    else if (touch.x > innerWidth - M) board.scrollLeft += S;
+    const list = listAt(touch.x, touch.y);
+    if (list) {
+      const r = list.getBoundingClientRect();
+      if (touch.y < r.top + 40) list.scrollTop -= S;
+      else if (touch.y > r.bottom - 40) list.scrollTop += S;
+    }
+  }
+  function wireTouchDrag(el, ci, cardIdx) {
+    let timer = null, startX = 0, startY = 0;
+    const pickUp = (t) => {
+      state.drag = { ci, cardIdx };
+      const r = el.getBoundingClientRect();
+      const g = el.cloneNode(true);
+      g.classList.add("ghost");
+      g.style.width = r.width + "px";
+      g.style.left = r.left + "px"; g.style.top = r.top + "px";
+      document.body.appendChild(g);
+      el.classList.add("dragging");
+      touch = { ghost: g, x: t.clientX, y: t.clientY,
+        offX: t.clientX - r.left, offY: t.clientY - r.top,
+        scroller: setInterval(autoScrollTick, 60) };
+      if (navigator.vibrate) navigator.vibrate(25);
+    };
+    el.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0]; startX = t.clientX; startY = t.clientY;
+      clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; pickUp(t); }, 300);
+    }, { passive: true });
+    el.addEventListener("touchmove", (e) => {
+      const t = e.touches[0];
+      if (!touch) { // not picked up yet: a real swipe cancels the long-press and scrolls
+        if (timer && Math.hypot(t.clientX - startX, t.clientY - startY) > 12) {
+          clearTimeout(timer); timer = null;
+        }
+        return;
+      }
+      e.preventDefault();
+      touch.x = t.clientX; touch.y = t.clientY;
+      touch.ghost.style.left = (t.clientX - touch.offX) + "px";
+      touch.ghost.style.top = (t.clientY - touch.offY) + "px";
+      const list = listAt(t.clientX, t.clientY);
+      if (list) showIndicator(list, t.clientY);
+    }, { passive: false });
+    const finish = (e, commit) => {
+      clearTimeout(timer); timer = null;
+      if (!touch) return; // plain tap: the synthetic click opens the editor
+      e.preventDefault(); // drag happened: suppress the synthetic click
+      clearInterval(touch.scroller);
+      touch.ghost.remove();
+      document.querySelectorAll(".drop-ind").forEach((n) => n.remove());
+      const list = commit ? listAt(touch.x, touch.y) : null;
+      const d = state.drag, y = touch.y;
+      const toIdx = list ? dropIndexFor(list, y) : 0; // while el still has .dragging
+      el.classList.remove("dragging");
+      state.drag = null; touch = null;
+      if (list && d) {
+        moveCard(d.ci, d.cardIdx, +list.dataset.ci, toIdx);
+        save();
+      }
+      render();
+    };
+    el.addEventListener("touchend", (e) => finish(e, true), { passive: false });
+    el.addEventListener("touchcancel", (e) => finish(e, false));
+    el.addEventListener("contextmenu", (e) => { if (touch || timer) e.preventDefault(); });
+  }
+
+  function renderComposer(col, ci) {
+    const wrap = document.createElement("div"); wrap.className = "composer";
+    const open = document.createElement("button"); open.className = "open"; open.textContent = "+ Add card";
+    open.onclick = () => {
+      wrap.innerHTML = "";
+      const ta = document.createElement("textarea"); ta.rows = 2;
+      ta.placeholder = "Card text… (@name, #tag)";
+      const row = document.createElement("div"); row.className = "row";
+      const add = document.createElement("button"); add.className = "btn"; add.textContent = "Add";
+      const cancel = document.createElement("button"); cancel.className = "btn ghost"; cancel.textContent = "✕";
+      const commit = () => {
+        const v = ta.value.replace(/\s+/g, " ").trim();
+        if (v) { col.items.push({ kind: "card", card: { checked: DONE_COL_RE.test(col.title), body: v, due: null, color: null } });
+          save(); }
+        state.composing = null; render();
+      };
+      add.onclick = commit;
+      cancel.onclick = () => { state.composing = null; render(); };
+      ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
+        if (e.key === "Escape") { state.composing = null; render(); } };
+      row.append(add, cancel); wrap.append(ta, row); ta.focus();
+      state.composing = ci;
+    };
+    wrap.appendChild(open);
+    if (state.composing === ci) open.click();
+    return wrap;
+  }
+
+  function renderAddColumn() {
+    const wrap = document.createElement("div"); wrap.className = "addcol";
+    const open = document.createElement("button"); open.className = "open"; open.textContent = "+ Add column";
+    open.onclick = () => {
+      wrap.innerHTML = "";
+      const inp = document.createElement("input"); inp.placeholder = "Column name… (Enter)";
+      inp.onkeydown = (e) => {
+        if (e.key === "Enter") { const v = inp.value.trim();
+          if (v) { state.board.columns.push({ title: v, items: [] }); save(); } render(); }
+        if (e.key === "Escape") render();
+      };
+      inp.onblur = () => render();
+      wrap.appendChild(inp); inp.focus();
+    };
+    wrap.appendChild(open);
+    return wrap;
+  }
+
+  function inlineEdit(span, current, cls, done) {
+    const inp = document.createElement("input"); inp.className = cls; inp.value = current;
+    span.replaceWith(inp); inp.focus(); inp.select();
+    let fired = false;
+    const finish = (commit) => { if (fired) return; fired = true; done(commit ? inp.value.trim() : null); };
+    inp.onkeydown = (e) => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
+    inp.onblur = () => finish(true);
+  }
+
+  // ---------- card editor ----------
+  function openEditor(ci, cardIdx) {
+    const x = cardsOf(state.board.columns[ci])[cardIdx];
+    if (!x) return;
+    state.editing = { ci, cardIdx, card: x.it.card, color: x.it.card.color, delArmed: false };
+    $("ed-body").value = x.it.card.body;
+    $("ed-due").value = x.it.card.due || "";
+    const del = $("ed-del"); del.textContent = "Delete"; del.className = "btn danger";
+    renderEditorPeople(); renderEditorColors();
+    $("overlay").classList.add("show");
+    $("ed-body").focus();
+  }
+  function renderEditorPeople() {
+    const host = $("ed-people"); host.innerHTML = "";
+    const current = assigneesOf($("ed-body").value);
+    const names = [...new Set([state.me, ...state.users, ...current])].filter(Boolean);
+    for (const u of names) {
+      const b = document.createElement("span");
+      b.className = "person" + (current.includes(u) ? " on" : "");
+      b.textContent = "@" + u + (u === state.me ? " (me)" : "");
+      b.onclick = () => {
+        const ta = $("ed-body");
+        const has = assigneesOf(ta.value).includes(u);
+        if (has) ta.value = ta.value.replace(new RegExp("(^|\\s)@" + u + "(?![A-Za-z0-9_-])", "g"), " ").replace(/\s+/g, " ").trim();
+        else ta.value = (ta.value.trim() + " @" + u).trim();
+        renderEditorPeople();
+      };
+      host.appendChild(b);
+    }
+  }
+  function renderEditorColors() {
+    const host = $("ed-colors"); host.innerHTML = "";
+    const none = document.createElement("div"); none.className = "swatch none" + (state.editing.color ? "" : " sel");
+    none.textContent = "∅"; none.title = "no color";
+    none.onclick = () => { state.editing.color = null; renderEditorColors(); };
+    host.appendChild(none);
+    for (const [name, hex] of Object.entries(PALETTE)) {
+      const s = document.createElement("div");
+      s.className = "swatch" + (state.editing.color === name ? " sel" : "");
+      s.style.background = hex; s.title = name;
+      s.onclick = () => { state.editing.color = name; renderEditorColors(); };
+      host.appendChild(s);
+    }
+  }
+  $("ed-body").addEventListener("input", renderEditorPeople);
+  $("ed-cancel").onclick = () => { state.editing = null; $("overlay").classList.remove("show"); };
+  $("overlay").onclick = (e) => { if (e.target === $("overlay")) $("ed-cancel").onclick(); };
+  $("ed-save").onclick = () => {
+    const e = state.editing; if (!e) return;
+    e.card.body = $("ed-body").value.replace(/\s+/g, " ").trim() || e.card.body;
+    e.card.due = $("ed-due").value || null;
+    e.card.color = e.color;
+    state.editing = null; $("overlay").classList.remove("show");
+    save(); render();
+  };
+  $("ed-del").onclick = () => {
+    const e = state.editing; if (!e) return;
+    if (!e.delArmed) { e.delArmed = true; $("ed-del").textContent = "Really delete?"; return; }
+    const col = state.board.columns[e.ci];
+    const x = cardsOf(col)[e.cardIdx];
+    if (x) col.items.splice(x.itemIdx, 1);
+    state.editing = null; $("overlay").classList.remove("show");
+    save(); render();
+  };
+
+  // ---------- setup / init ----------
+  function boardTemplate(folderName) {
+    return [
+      "# " + folderName + " board", "",
+      "<!-- KANBAN BOARD - machine-readable, edited by kanban.html in this folder.",
+      "  Format (also for AI agents editing this file directly):",
+      "  * every \"## Heading\" is a column, left-to-right in file order.",
+      "  * every \"- [ ] ...\" checkbox line under a heading is one card; \"- [x]\" = done.",
+      "  * optional inline card metadata, anywhere in the line:",
+      "      \"@username\"          assignee (platform login; indexed by the KB)",
+      "      \"#tagname\"           label (indexed by the KB)",
+      "      (due: YYYY-MM-DD)    deadline",
+      "      (color: red|orange|yellow|green|teal|blue|purple|pink|gray)",
+      "  * keep one card per line; keep this comment. -->", "",
+      "## To do", "",
+      "- [ ] Example card - drag me, click me, or edit kanban.md directly (color: blue)", "",
+      "## In progress", "",
+      "## Done", "",
+    ].join("\n");
+  }
+  function showPanel(html) { const m = $("main"); m.className = "center"; m.innerHTML = '<div class="panel">' + html + "</div>"; }
+
+  function titleEditor() {
+    const h = $("board-title");
+    h.title = "click to rename board";
+    h.onclick = () => {
+      if (!state.board) return;
+      inlineEdit(h, state.board.title, "title-edit", (v) => {
+        const h2 = document.createElement("h1"); h2.id = "board-title";
+        document.querySelector("header input.title-edit")?.replaceWith(h2);
+        if (v) { state.board.title = v; save(); }
+        render(); titleEditor();
+      });
+    };
+  }
+
+  async function init() {
+    const selfPath = new URLSearchParams(location.search).get("path") || "";
+    if (!selfPath.includes("/")) {
+      showPanel("<p>Could not determine this artifact's folder. Open it from the knowledgebase app (and not from the repo root).</p>");
+      return;
+    }
+    state.dir = selfPath.slice(0, selfPath.lastIndexOf("/"));
+    state.mdPath = state.dir + "/kanban.md";
+    $("where").innerHTML = "board of <b>" + esc(state.dir) + "/</b> · data: <b>kanban.md</b>";
+
+    kbQuery("SELECT current_user").then((r) => { if (r.rows?.[0]) state.me = r.rows[0][0]; });
+    kbQuery("SELECT rolname FROM pg_roles WHERE rolcanlogin AND rolname NOT IN ('postgres','kbindexer') ORDER BY 1")
+      .then((r) => { if (r.rows) state.users = r.rows.map((x) => x[0]); });
+
+    const ok = await reload(false);
+    if (!ok) {
+      const folderName = state.dir.split("/").pop();
+      showPanel("<p>No <b>kanban.md</b> in <b>" + esc(state.dir) + "/</b> yet.</p>" +
+        '<p><button class="btn" id="create">Create board</button></p>' +
+        "<p style='font-size:.75rem'>Creates a markdown file next to this artifact — the board's single source of truth, editable by people and AI agents alike.</p>");
+      $("create").onclick = async () => {
+        const r = await kbWrite(state.mdPath, boardTemplate(folderName));
+        if (r.error || !r.ok) { toast("Could not create: " + (r.error || "?")); return; }
+        await reload(false);
+      };
+    }
+    titleEditor();
+    setInterval(() => {
+      if (document.hidden || state.editing || state.drag || state.composing !== null) return;
+      if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+      if (state.raw !== null) reload(true);
+    }, 5000);
+  }
+
+  // footer
+  document.addEventListener("DOMContentLoaded", () => {
+    const f = document.createElement("footer");
+    f.innerHTML = '<span>🗂 data lives in <code id="f-path">kanban.md</code> — plain markdown; ' +
+      "AI agents &amp; humans can edit it directly</span>" +
+      '<button id="f-copy">copy data path</button><button id="f-md">copy board as markdown</button>';
+    document.body.appendChild(f);
+    $("f-copy").onclick = () => kbClipboard("/srv/kb/" + state.mdPath);
+    $("f-md").onclick = () => { if (state.raw) kbClipboard(state.raw); };
+    init().then(() => { if (state.mdPath) $("f-path").textContent = state.mdPath; });
+  });
+</script>
+</body>
+</html>

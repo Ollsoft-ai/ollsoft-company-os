@@ -1,0 +1,34 @@
+# Delivery control board
+
+<!-- KANBAN BOARD - machine-readable, edited by delivery-kanban.html in this folder.
+  Format (also for AI agents editing this file directly):
+  * every "## Heading" is a column, left-to-right in file order.
+  * every "- [ ] ..." checkbox line under a heading is one card; "- [x]" = done.
+  * optional inline card metadata, anywhere in the line:
+      "@username"          assignee (platform login; indexed by Company OS)
+      "#tagname"           label (indexed by Company OS)
+      (due: YYYY-MM-DD)    deadline
+      (color: red|orange|yellow|green|teal|blue|purple|pink|gray)
+  * keep one card per line; keep this comment. -->
+
+Pull work through verification. Keep delivery, quality, customer and security
+evidence attached to the work rather than in a separate reporting silo.
+
+## Ready
+
+- [ ] Prepare the Hall A installation kit @peter #polaris #delivery (due: 2026-09-24) (color: blue)
+- [ ] Run the customer acceptance rehearsal @krystof #polaris #customer (due: 2026-10-21) (color: teal)
+- [ ] Publish the operator quick guide @peter #polaris #customer (due: 2026-10-09) (color: teal)
+
+## In progress
+
+- [ ] Approve the gateway enclosure sample @krystof #polaris #quality (due: 2026-09-18) (color: yellow)
+- [ ] Close the coating supplier action @peter #qms #quality (due: 2026-09-18) (color: orange)
+
+## Verification
+
+- [ ] Verify the telemetry-retention control @krystof #polaris #security (due: 2026-09-12) (color: red)
+
+## Done
+
+- [x] Release gateway firmware 2.4 @peter #platform #product (color: green)

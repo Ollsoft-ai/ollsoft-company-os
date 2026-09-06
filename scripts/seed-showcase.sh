@@ -74,6 +74,7 @@ fi
 if [[ $REFRESH -eq 1 ]]; then
   for legacy in \
     "$REPO/company/dashboards/delivery-board.json" \
+    "$REPO/company/dashboards/.delivery-board.json" \
     "$REPO/company/finance/invoice-data.json" \
     "$REPO/company/quality/risk-data.json" \
     "$REPO/company/sales/pipeline-data.json"; do

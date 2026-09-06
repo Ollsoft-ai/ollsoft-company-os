@@ -11,7 +11,7 @@ delivery, quality evidence and finance without moving facts into separate silos.
 - [ ] Open [the company guide](README.md) and scan the screenshots @demo #onboarding
 - [ ] Open **Cockpit** in the launcher bar and find the current delivery risk @demo #onboarding
 - [ ] Open **Pipeline** and move *Rheinwerk Maschinenbau* into `Requirements review` @demo #onboarding
-- [ ] Open **Kanban**, move one card, then inspect its source data in the file tree @demo #onboarding
+- [ ] Open **Kanban**, move one card, then inspect `dashboards/kanban.md` in the file tree @demo #onboarding
 - [ ] Open [Project Polaris](../projects/polaris-energy-gateway/README.md) and search for `gateway enclosure` @demo #onboarding
 - [ ] Open **Invoice**, change a line item, and preview a PDF from the print dialog @demo #onboarding
 - [ ] Return to `company/todos.html`: these checkboxes appear there automatically @demo #onboarding
