@@ -26,6 +26,10 @@ Never run an AI client as `root`. Its effective access should match yours.
 
 Choose either client. These commands install into your user environment.
 
+On this hosted showcase, Claude Code is already installed for the named demo
+accounts. Click **Claude** in the launcher bar and complete your own Anthropic
+sign-in. Use the installation command below on a new Company OS deployment.
+
 ### OpenAI Codex CLI
 
 ```bash
