@@ -62,6 +62,11 @@ One account, named by `--admin`. It is added to `kb-users` and to the admin grou
 (`sudo` by default, `--admin-group` to change). If the account already exists it
 is adopted, and its password is left alone.
 
+Cloud images often provide an existing admin account that is SSH-key-only and
+password-locked. Check an adopted account with `passwd -S <user>`; if its status
+is `L` or `NP`, set a password with `sudo passwd <user>` so PAM can authenticate
+the Company OS web login. This does not enable SSH password authentication.
+
 The generated password is written to `/root/ollsoft-company-os-admin.txt` — delete that
 file after your first login.
 

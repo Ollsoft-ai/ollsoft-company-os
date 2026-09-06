@@ -46,12 +46,17 @@ sudo bash scripts/install.sh --admin <your-username>
 That single command installs system packages, creates the `kb-users` group and
 the `kbindexer` service account, builds the frontend, lays out `/srv/kb` with the
 right modes and ACLs, creates the Postgres cluster objects and RLS schema, writes
-`/etc/kb/kb.env`, and enables the three systemd services. It is idempotent — re-run
+`/etc/kb/kb.env`, and enables the four systemd services. It is idempotent — re-run
 it to upgrade.
 
 It creates exactly one account: yours. A generated password is written to
 `/root/ollsoft-company-os-admin.txt` (delete it after your first login), or pass your own
 with `--admin-pass`.
+
+If `--admin` adopts an existing key-only cloud account, check it with
+`passwd -S <your-username>`. A status of `L` or `NP` means PAM cannot use it for
+the Company OS web login; set a separate login password with
+`sudo passwd <your-username>`. This does not enable SSH password authentication.
 
 Then open **http://127.0.0.1:8300**. It binds to localhost only. From your laptop:
 
