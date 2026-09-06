@@ -68,6 +68,24 @@ if [[ ! -f "$STATE/installed" ]]; then
   install -o root -g root -m 600 "$REPO/.claude/launchers.json" "$STATE/launchers.before.json"
 fi
 
+# v1 placed artifact state and screenshots in ordinary visible paths. Remove
+# only those exact legacy paths on refresh; their replacements follow Company
+# OS conventions below (`.state.json` and `_files/`).
+if [[ $REFRESH -eq 1 ]]; then
+  for legacy in \
+    "$REPO/company/dashboards/delivery-board.json" \
+    "$REPO/company/finance/invoice-data.json" \
+    "$REPO/company/quality/risk-data.json" \
+    "$REPO/company/sales/pipeline-data.json"; do
+    [[ "$legacy" == "$REPO/company/"* ]] || exit 1
+    rm -f -- "$legacy"
+  done
+  if [[ -d "$REPO/company/media" ]]; then
+    [[ "$REPO/company/media" == "$REPO/company/"* ]] || exit 1
+    rm -rf -- "$REPO/company/media"
+  fi
+fi
+
 groupadd -f "$PUBLIC_GROUP"
 groupadd -f "$PRIVATE_GROUP"
 usermod -aG kb-users,"$PUBLIC_GROUP","$PRIVATE_GROUP" "$ADMIN"

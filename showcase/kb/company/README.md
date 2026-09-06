@@ -12,7 +12,7 @@ groups, dashboards, workflows, scheduled jobs and agent skills are all
 customizable, while Linux permissions consistently govern the browser, terminal,
 network drive, search, SQL and AI agents.
 
-![Company OS workspace](media/01-workspace.png)
+![Company OS workspace](_files/01-workspace.png)
 
 ## One trail of evidence
 
@@ -23,7 +23,7 @@ delivery work appears in the [Kanban](dashboards/delivery-kanban.html), decision
 stay in the project folder, and tasks roll up into the live
 [management cockpit](dashboards/management-cockpit.html).
 
-![Customer pipeline](media/02-pipeline.png)
+![Customer pipeline](_files/02-pipeline.png)
 
 ## What people can do
 
@@ -39,7 +39,7 @@ stay in the project folder, and tasks roll up into the live
 - Mount the permitted knowledgebase as a normal network drive over SFTP.
 - Create users, groups and artifact network policies from the admin panel.
 
-![Delivery board](media/03-kanban.png)
+![Delivery board](_files/03-kanban.png)
 
 ## Management-system map
 
@@ -58,7 +58,7 @@ ISO 9001:2015 is still the published edition at the time of this demo and is in
 revision. This workspace should be updated when the succeeding edition is
 published. Using these structures does not establish conformity or certification.
 
-![Invoice generator](media/04-invoice.png)
+![Invoice generator](_files/04-invoice.png)
 
 ## Browse the fictional company
 

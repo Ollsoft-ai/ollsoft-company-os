@@ -65,6 +65,18 @@ A path in another folder (e.g. `users/<someone>/notes.md`) returns
 
 Writing a `.md` file that someone is live-editing is safe: the change flows through the sync daemon and merges into their session, just like any external edit. To append to a file rather than replace it, `kbRead` it, concatenate, then `kbWrite` the result.
 
+## File naming convention
+
+- Keep the user-facing `.html` artifact at its normal visible path.
+- Dot-prefix non-document implementation state next to it, for example
+  `pipeline.html` + `.pipeline-data.json`. Dot-files stay out of normal tree and
+  quick-open navigation.
+- Put screenshots, uploads and other attachment binaries in the nearest
+  `_files/` folder and link them relatively from Markdown.
+- If data is meaningful company evidence that people should read, search and
+  review in history, store it as a normal visible `.md` document instead of
+  hiding it as implementation state.
+
 # Sandbox rules (important)
 
 The iframe blocks all external resources. **Everything must be inline**: no `<script src>`, no external CSS, no web fonts, no remote images. Write your CSS in a `<style>` tag and your JS in `<script>`. Use system fonts. To auto-refresh, `setInterval(render, 2000)`.
