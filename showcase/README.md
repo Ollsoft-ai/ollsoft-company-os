@@ -35,9 +35,10 @@ matching seeded files and JSON, but keeps unrelated files. For screenshots or an
 isolated correction, install only the changed files with the existing ownership
 and permissions. Account/group changes need fresh backend process credentials.
 
-The hosted demo uses nginx Basic Auth and normal HTTPS reverse proxying; no
-Cloudflare Tunnel is needed. Keep passwords and SSH keys outside this repository.
-The optional root-to-tour nginx redirect is documented in `docs/SETUP.md`.
+The hosted demo is public at the nginx layer and uses normal HTTPS reverse
+proxying; visitors still use the Company OS login. No Cloudflare Tunnel is
+needed. Keep passwords and SSH keys outside this repository. The optional
+root-to-tour nginx redirect is documented in `docs/SETUP.md`.
 
 ## Before calling it ready
 

@@ -194,8 +194,9 @@ location = / {
 }
 ```
 
-Keep the existing authenticated proxy for other paths, `/login`, API and
-WebSockets. Validate with `nginx -t` before reloading. This is a demo-host choice,
+Keep the normal proxy for other paths, `/login`, API and WebSockets. The hosted
+showcase is public at the nginx layer; Company OS still presents its own OS-user
+sign-in. Validate with `nginx -t` before reloading. This is a demo-host choice,
 not a platform-wide change. See [showcase maintenance](../showcase/README.md)
 for scenario boundaries and checks.
 
