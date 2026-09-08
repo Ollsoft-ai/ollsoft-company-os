@@ -281,6 +281,18 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   dropped on a folder still moves the file. A **Source** toggle (persisted in
   `localStorage`) drops to raw markdown with line numbers. GFM task/strikethrough/
   table nodes come from `@lezer/markdown` extensions.
+- **Spaces in link targets.** CommonMark refuses a bare space in a link
+  destination, so `[q3](_files/q3 final.xlsx)` is not a link at all — it renders
+  as literal text and cannot be clicked. Both halves are handled: an upload now
+  percent-encodes the target per segment (`uploadAndInsert`, matching `relLink`)
+  and strips brackets out of the label, and a `SpacedLink` inline parser
+  (`markdown({extensions: [...]})`) parses the raw-space form anyway, so links
+  already written into documents keep working. It only claims what the built-in
+  parser refuses — a destination with whitespace, no angle brackets, no quoted
+  title — and emits the same `LinkMark`/`URL` children, so the live-preview layer
+  needs no special case. Destinations are read from the syntax tree via
+  `linkTarget()` (which also unwraps the `<…>` form), never by regex over the
+  source: a regex stops at the space and yields a truncated path.
 - **Editor tabs**: every opened document/artifact is a tab; each keeps its own
   live mount (CodeMirror + Yjs provider, or sandboxed iframe) in a hidden
   container, so switching is instant and **background artifacts keep running**

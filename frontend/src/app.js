@@ -455,6 +455,53 @@ const tableField = StateField.define({
   ],
 });
 
+// CommonMark says a link destination containing a space has to be wrapped in
+// angle brackets, so "[report](_files/q3 final.xlsx)" is not a link at all —
+// it stays literal text, unrendered and unclickable. Dropping a file whose
+// name has a space used to write exactly that, and those links are sitting in
+// documents already, so parse the form anyway: with the whole "[…](…)" on one
+// line and no parentheses inside the destination, it is unambiguous.
+//
+// Registered BEFORE the built-in Link parser, but it only claims a match the
+// built-in parser would refuse: the destination has to contain whitespace, and
+// the two forms where a space is already legal — an angle-bracketed
+// destination, and a destination followed by a quoted title — are handed back.
+const SPACED_LINK = /^(!?)\[([^\[\]\n]*)\]\(([^()\n]*[ \t][^()\n]*)\)/;
+const HAS_TITLE = /\s(["']).*\1\s*$/;
+
+const spacedLinks = {
+  parseInline: [{
+    name: "SpacedLink",
+    before: "Link",
+    parse(cx, next, pos) {
+      if (next !== 91 /* [ */ && next !== 33 /* ! */) return -1;
+      const m = SPACED_LINK.exec(cx.text.slice(pos - cx.offset));
+      if (!m || m[3].startsWith("<") || HAS_TITLE.test(m[3])) return -1;
+      const bang = m[1].length;               // 1 when this is an ![embed]
+      const open = pos + bang;                // the "["
+      const close = open + 1 + m[2].length;   // the "]"
+      const url = close + 2;                  // past "]("
+      const end = pos + m[0].length;
+      // Same child shape the built-in parser emits — LinkMark "[", "]", "(",
+      // URL, ")" — so the live-preview layer needs no special case.
+      return cx.addElement(cx.elt(bang ? "Image" : "Link", pos, end, [
+        cx.elt("LinkMark", pos, open + 1),
+        cx.elt("LinkMark", close, close + 1),
+        cx.elt("LinkMark", close + 1, url),
+        cx.elt("URL", url, url + m[3].length),
+        cx.elt("LinkMark", end - 1, end),
+      ]));
+    },
+  }],
+};
+
+// The destination a URL node points at. The angle-bracket form — "[x](<a b.md>)",
+// the way CommonMark says to write a target with a space — parses with the
+// brackets INSIDE the URL node, and "<a b.md>" is not a path anything can open.
+function linkTarget(state, urlN) {
+  return state.sliceDoc(urlN.from, urlN.to).replace(/^<|>$/g, "").trim();
+}
+
 // A link target that leaves this app: a real scheme (https:, mailto:, …), a
 // pure #fragment, or one of our own raw-file endpoints. Everything else names
 // something in the knowledgebase.
@@ -528,7 +575,7 @@ function livePreview(dir) {
             const marks = node.getChildren("LinkMark");
             const urlN = node.getChild("URL");
             if (marks.length >= 2 && urlN && !touches(n.from, n.to)) {
-              const url = state.sliceDoc(urlN.from, urlN.to);
+              const url = linkTarget(state, urlN);
               hide(n.from, marks[0].to);
               hide(marks[1].from, n.to);
               const secretLink = !/^(https?:|data:)/.test(url) &&
@@ -540,12 +587,21 @@ function livePreview(dir) {
             }
           } else if (name === "Image") {
             // rendered even when the cursor is on it: clicking a picture must
-            // never swap it for raw markdown and re-flow the page
-            const m = state.sliceDoc(n.from, n.to)
-              .match(/^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?[^)]*\)$/);
-            if (m) {
-              replace(n.from, n.to,
-                      new MediaWidget(resolveMediaUrl(dir, m[2]), m[1], mediaKind(m[2])));
+            // never swap it for raw markdown and re-flow the page.
+            // Read from the syntax tree, not a regex over the source: a
+            // destination with a space in it ("_files/site plan.png") reads
+            // back whole here, where a regex stops at the space and embeds a
+            // truncated path.
+            const node = n.node;
+            const marks = node.getChildren("LinkMark");
+            const urlN = node.getChild("URL");
+            if (marks.length >= 2 && urlN) {
+              const alt = state.sliceDoc(marks[0].to, marks[1].from);
+              const url = linkTarget(state, urlN);
+              if (url) {
+                replace(n.from, n.to,
+                        new MediaWidget(resolveMediaUrl(dir, url), alt, mediaKind(url)));
+              }
             }
           } else if (name === "Table") {
             return false;   // handled by tableField (a block decoration, below)
@@ -622,7 +678,7 @@ function livePreview(dir) {
       if (n.name === "Link") {
         const u = n.getChild("URL");
         if (!u) return false;
-        const url = view.state.sliceDoc(u.from, u.to);
+        const url = linkTarget(view.state, u);
         if (isExternalUrl(url)) {
           if (url.startsWith("#")) return true;   // an in-page anchor goes nowhere
           window.open(url, "_blank");
@@ -758,7 +814,12 @@ async function uploadAndInsert(view, tab, files, pos) {
     if (r.status === 413) { kbToast(name + " is larger than the server's upload limit", "err"); continue; }
     const j = await r.json().catch(() => ({}));
     if (!j.ok) { kbToast(j.error || "upload failed", "err"); continue; }
-    let snippet = (isImg ? "!" : "") + "[" + alt + "](" + j.link + ")";
+    // The server hands back the raw path ("_files/q3 final (v2).xlsx"). Encode
+    // it per segment — same as relLink — so a name with a space or a bracket
+    // produces a link markdown can actually parse, and strip brackets out of
+    // the label so they can't close the link text early.
+    const url = j.link.split("/").map(encodeURIComponent).join("/");
+    let snippet = (isImg ? "!" : "") + "[" + alt.replace(/[[\]]/g, "") + "](" + url + ")";
     let at = Math.min(pos, view.state.doc.length);
     // An image reads best as its own block: if we're mid-line, break before it,
     // and always leave a blank line after so following text isn't swallowed.
@@ -3017,7 +3078,7 @@ async function mountDoc(t) {
     autocompletion({ override: [mentionSource], icons: false }),
     // GFM task lists + strikethrough + tables, so the tree exposes TaskMarker /
     // Strikethrough / Table nodes the live-preview layer decorates.
-    markdown({ extensions: [TaskList, Strikethrough, Table] }),
+    markdown({ extensions: [TaskList, Strikethrough, Table, spacedLinks] }),
     syntaxHighlighting(mdHighlight),
     yCollab(ytext, provider.awareness, { undoManager }),
     EditorView.lineWrapping,

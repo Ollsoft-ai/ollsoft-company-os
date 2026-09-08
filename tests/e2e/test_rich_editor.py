@@ -370,6 +370,58 @@ def test_fenced_code_block_renders_with_copy_button(browser):
         ctx.close()
 
 
+def test_spaces_in_a_dropped_filename_still_make_a_link(browser):
+    """A dropped file whose name has spaces. Two halves:
+
+    the link WRITTEN must be percent-encoded (CommonMark refuses a bare space
+    in a destination, so "[x](_files/a b.xlsx)" is not a link at all — it sat
+    in documents as plain unclickable text), and the raw-space form already
+    written into existing documents must still render and open, because those
+    links are not going to re-encode themselves.
+    """
+    stamp = int(time.time())
+    doc = kbdoc(f"rich_space_{stamp}.md")
+    name = f"tender eval {stamp} with comments.xlsx"
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, doc)
+        set_source(page, "attached:\n")
+        move_cursor(page, len(source(page)))
+        src = page.evaluate("""async (name) => {
+          const dt=new DataTransfer();
+          dt.items.add(new File(['x'],name,{type:'application/vnd.ms-excel'}));
+          const box=document.querySelector('.cm-content').getBoundingClientRect();
+          const ev=new DragEvent('drop',{bubbles:true,cancelable:true,
+            clientX:box.left+20,clientY:box.top+8});
+          Object.defineProperty(ev,'dataTransfer',{value:dt});
+          document.querySelector('.cm-content').dispatchEvent(ev);
+          await new Promise(r=>setTimeout(r,1500));
+          return window.__kbview.state.doc.toString();
+        }""", name)
+        encoded = name.replace(" ", "%20")
+        assert f"[{name}](_files/{encoded})" in src, src
+        move_cursor(page, len(source(page)))
+        page.wait_for_timeout(300)
+        assert page.locator(".cm-md-link").count() == 1, "encoded link must render"
+        assert page.locator(".cm-md-link").inner_text() == name
+
+        # the legacy form: raw spaces, exactly what used to be written
+        set_source(page, f"see [{name}](_files/{name}) here\n")
+        move_cursor(page, len(source(page)))
+        page.wait_for_timeout(300)
+        assert page.locator(".cm-md-link").count() == 1, "raw-space link must render"
+        assert page.locator(".cm-md-link").get_attribute("data-url") == f"_files/{name}"
+        # and it resolves to the file that was actually uploaded
+        page.dblclick(".cm-md-link")
+        page.wait_for_timeout(500)
+        assert api("alice").get("/api/attachment",
+                                params={"path": kbdoc(f"_files/{name}")}).status_code == 200
+    finally:
+        cleanup([doc, kbdoc(f"_files/{name}")])
+        ctx.close()
+
+
 def test_internal_md_link_opens_a_tab_not_a_download(browser):
     """Following a link to another note must OPEN it. Every internal link used
     to go to /api/attachment, so a phone offered to download the markdown
