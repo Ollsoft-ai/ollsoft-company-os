@@ -501,7 +501,7 @@ if [ ! -d "$REPO/$AREA/_secrets" ]; then
   echo "  $AREA/_secrets/"
 fi
 
-for a in randoms iotest scopetest xsstest; do
+for a in randoms iotest scopetest xsstest fstest; do
   if [ ! -e "$REPO/$AREA/dashboards/$a.html" ]; then
     install -m 664 -o "$A_ALICE" -g kb-users "$SRC/defaults/artifacts/$a.html" \
             "$REPO/$AREA/dashboards/$a.html"

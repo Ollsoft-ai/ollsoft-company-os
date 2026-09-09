@@ -202,6 +202,9 @@ each executed **as the viewer**:
 | `kb-read`     | `/api/artifact/read`  | read a file as the viewer — **scoped to the artifact's own folder** |
 | `kb-read-bytes` | `/api/attachment`   | the file's **bytes** as a Blob (video/image/PDF next to it), same folder scope, 512 MB cap. blob: is a local handle — bytes display without becoming sendable |
 | `kb-write`    | `/api/artifact/write` | write a file as the viewer — **scoped to the artifact's own folder** |
+| `kb-list`     | `/api/artifact/list`  | list a folder at/under its own (name, size, mtime, per-entry read/write), depth-limited — same folder scope |
+| `kb-mkdir`    | `/api/artifact/mkdir` | create a subfolder (missing parents included, each inheriting its parent's audience) — same folder scope |
+| `kb-delete`   | `/api/artifact/delete`| delete a file or subfolder as the viewer — same folder scope, and never the artifact's own folder or the artifact itself; a non-empty folder needs `recursive` |
 | `kb-toggle`   | `/api/tasks/toggle`   | flip a checkbox — only on a genuinely indexed task line |
 | `kb-fetch`    | `/egress` (hub)       | HTTPS to an **allowlisted domain only**, per artifact, with `secret:` refs injected server-side so the artifact never holds the credential |
 | `kb-upload`   | `/api/upload`         | binary into the artifact's own `_files/`, as the viewer |
@@ -212,7 +215,13 @@ The default **To-dos** view (`company/todos.html`) and the demo dashboards are
 themselves artifacts — the platform dogfoods its own runtime. Artifacts are
 *author-trusted, viewer-scoped*: contained against the system and other users, but
 an artifact you open runs code with your authority (like a shared spreadsheet
-macro), which is why `kb-read`/`kb-write` are folder-scoped.
+macro), which is why the file actions are folder-scoped.
+
+The folder scope is checked by the host page for every file action (against the
+tab the message came from, not the focused one). `kb-list`/`kb-mkdir`/`kb-delete`
+send the artifact's path along and the backend checks it **again**: those verbs
+create and destroy, so their containment must not rest on one caller remembering
+to check.
 
 ## 7. Sharing & the permission UI
 
@@ -297,7 +306,7 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   live mount (CodeMirror + Yjs provider, or sandboxed iframe) in a hidden
   container, so switching is instant and **background artifacts keep running**
   (their bridge messages are routed by `ev.source` to the tab they came from, and
-  kb-read/kb-write stays scoped to *that* artifact's folder, not the focused one).
+  the file actions stay scoped to *that* artifact's folder, not the focused one).
 - **Editor panes (split view)**: the tab strip and editor host are per **pane**;
   dragging a tab onto another pane moves it, onto a pane's left/right edge splits
   a new column off. `tabs` stays the one flat list (a tab's `paneId` says which

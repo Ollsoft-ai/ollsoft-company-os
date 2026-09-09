@@ -1,11 +1,11 @@
 ---
 name: kb-artifacts
-description: Use when the user wants an interactive view, dashboard, chart, or small app that renders live data inside the knowledgebase web app. Explains how to build a self-contained HTML artifact, query the database and read/write files through the sandbox bridge (all running as the viewer), and share it safely.
+description: Use when the user wants an interactive view, dashboard, chart, or small app that renders live data inside the knowledgebase web app. Explains how to build a self-contained HTML artifact, query the database and read/write/list/create/delete files and folders through the sandbox bridge (all running as the viewer), and share it safely.
 ---
 
 # Building an artifact
 
-An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, read a neighbouring file's raw bytes (`kb-read-bytes`, for showing a video/image/PDF; 512 MB cap), toggle a task, upload, save-as through a prompt the *user* answers, copy to clipboard, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
+An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, list a folder, make a subfolder, delete a file or subfolder, read a neighbouring file's raw bytes (`kb-read-bytes`, for showing a video/image/PDF; 512 MB cap), toggle a task, upload, save-as through a prompt the *user* answers, copy to clipboard, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
 
 Create one by writing an `.html` file, e.g. `company/dashboards/mychart.html` (shared) or `users/<you>/scratch.html` (private).
 
@@ -13,7 +13,7 @@ Create one by writing an `.html` file, e.g. `company/dashboards/mychart.html` (s
 
 The artifact never connects to a database or the filesystem directly. It posts a message to the host page, which performs the action **with the viewer's own identity and permissions** — the same as that person running `psql` or writing a file in their terminal. So the same artifact does, for each viewer, exactly what that viewer is allowed to do, and nothing more. You never write authorization logic in the artifact; the platform enforces it.
 
-Drop this SDK into every artifact — it gives you `kbQuery`, `kbRead`, and `kbWrite`:
+Drop this SDK into every artifact — it gives you `kbQuery`, `kbRead`, `kbWrite`, and the folder tools `kbList`, `kbMkdir`, `kbDelete`:
 
 ```html
 <script>
@@ -30,6 +30,12 @@ Drop this SDK into every artifact — it gives you `kbQuery`, `kbRead`, and `kbW
   const kbRead  = (path)          => _send({ type: "kb-read", path });
   // write a file as the viewer (kernel-enforced) -> { ok, bytes, error? }
   const kbWrite = (path, content) => _send({ type: "kb-write", path, content });
+  // list a folder -> { ok, entries: [{name, path, dir, size, mtime, read, write}], truncated }
+  const kbList  = (path, depth = 1) => _send({ type: "kb-list", path, depth });
+  // create a subfolder (missing parents included) -> { ok, path, error? }
+  const kbMkdir = (path)          => _send({ type: "kb-mkdir", path });
+  // delete a file or subfolder -> { ok, deleted, was_dir, error? }
+  const kbDelete= (path, recursive = false) => _send({ type: "kb-delete", path, recursive });
 </script>
 ```
 
@@ -47,7 +53,7 @@ await kbQuery("UPDATE u_alice.readings SET value=%s WHERE id=%s", [42, 7]);
 
 `kbRead`/`kbWrite` operate on repo-relative paths **as the viewer**, so they can only touch files that viewer's OS user can read/write — the kernel enforces it. Reads return the file's text; writes overwrite the whole file in place (its owner/group are preserved) and the parent folder must already exist.
 
-**Scope:** for safety, `kbRead`/`kbWrite` are limited to the artifact's **own folder** (the directory the `.html` lives in) and its subfolders — an artifact in `company/dashboards/` can read/write `company/dashboards/*` but not files elsewhere. Put an artifact's data files alongside it. (This stops a shared artifact from reading a viewer's private files in other folders.)
+**Scope:** for safety, every file action (`kbRead`/`kbWrite`/`kbList`/`kbMkdir`/`kbDelete`) is limited to the artifact's **own folder** (the directory the `.html` lives in) and its subfolders — an artifact in `company/dashboards/` can read/write `company/dashboards/*` but not files elsewhere. Put an artifact's data files alongside it. (This stops a shared artifact from reading a viewer's private files in other folders.)
 
 Use paths **inside the artifact's own folder** — e.g. an artifact at
 `company/dashboards/report.html` reads/writes `company/dashboards/…`:
@@ -62,6 +68,41 @@ if (res.error) { /* not writable, or outside this folder */ } else { /* saved re
 
 A path in another folder (e.g. `users/<someone>/notes.md`) returns
 `{ error: "path outside this artifact's folder" }` — put the data you need next to the artifact.
+
+## Listing, creating and deleting
+
+The same folder scope covers the whole file surface, so an artifact can manage its
+own little tree — an inbox folder, a set of generated reports, per-run subfolders —
+without ever touching anything else.
+
+```js
+const dir = "company/dashboards";                 // this artifact's own folder
+const l = await kbList(dir);                      // depth 1: direct children
+for (const e of l.entries) console.log(e.dir ? e.name + "/" : `${e.name} (${e.size}b)`);
+
+await kbList(dir, 3);            // recurse 3 levels (max 10, 2000 entries -> truncated:true)
+await kbMkdir(dir + "/reports/2026-09");          // both levels created if missing
+await kbWrite(dir + "/reports/2026-09/summary.md", "# September\n");  // write CREATES the file
+await kbDelete(dir + "/reports/2026-09/summary.md");                   // one file
+await kbDelete(dir + "/reports/2026-09", true);   // a folder with contents needs recursive
+```
+
+Each entry from `kbList` carries `read`/`write` for **this viewer**, so a UI can grey
+out what that person cannot open or change instead of letting them click into an
+error. Dot-files are listed (that is where artifact state lives by convention).
+
+Rules worth knowing before you design around them:
+
+- Everything is still bounded by the viewer's own permissions — a delete is exactly
+  what `rm` in *their* terminal could do, and returns `{ error: "permission denied" }`
+  when it could not.
+- `kbWrite` creates a file that doesn't exist yet; the **parent folder must already
+  exist**, so `kbMkdir` first when you're writing into a new subfolder.
+- A folder with anything in it is only deleted when you pass `recursive: true`.
+- An artifact may not delete **its own folder** or **itself** — both come back as an
+  error whatever the permissions say.
+- Anything outside the artifact's own folder returns
+  `{ error: "path outside this artifact's folder" }`, for all five actions.
 
 Writing a `.md` file that someone is live-editing is safe: the change flows through the sync daemon and merges into their session, just like any external edit. To append to a file rather than replace it, `kbRead` it, concatenate, then `kbWrite` the result.
 
@@ -146,4 +187,4 @@ blue-accented — the live example is `company/cron-demo/pulse.html`.
 
 # Trust note
 
-Every bridge action runs as the viewer, so an artifact can do anything the *viewer* could do in a terminal — including **reading and writing that viewer's files** — and nothing more. The sandbox + allowlisted-only egress + per-viewer identity protect every viewer's session, other users' data, and anything outside the viewer's own permissions. They do **not** protect a viewer from a hostile artifact author acting *within* the viewer's own authority (e.g. overwriting a file the viewer can write). Now that artifacts can write files, treat opening one like running a shared script: only open artifacts from people you'd trust with your own access.
+Every bridge action runs as the viewer, so an artifact can do anything the *viewer* could do in a terminal — including **reading and writing that viewer's files** — and nothing more. The sandbox + allowlisted-only egress + per-viewer identity protect every viewer's session, other users' data, and anything outside the viewer's own permissions. They do **not** protect a viewer from a hostile artifact author acting *within* the viewer's own authority (e.g. overwriting or deleting a file the viewer can write, inside that artifact's folder). Now that artifacts can write, create and delete files, treat opening one like running a shared script: only open artifacts from people you'd trust with your own access.

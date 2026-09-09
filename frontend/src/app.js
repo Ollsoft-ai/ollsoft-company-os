@@ -3325,6 +3325,47 @@ window.addEventListener("message", async (ev) => {
           body: JSON.stringify({ path: msg.path, content: msg.content }),
         });
         result = await r.json();
+        // a write can also CREATE, so a new file shows up in the tree at once
+        if (result.ok && !(_lastTreePaths && _lastTreePaths.has(result.path))) loadTree(true);
+      }
+    } else if (msg.type === "kb-list") {
+      // List a folder at or under the artifact's own — the same folder scope as
+      // kb-read, so an artifact can browse its own tree and nothing else.
+      if (!inArtifactScope(tab, msg.path)) {
+        result = { error: "path outside this artifact's folder" };
+      } else {
+        const r = await fetch("/api/artifact/list", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ artifact: tab.path, path: msg.path, depth: msg.depth || 1 }),
+        });
+        result = await r.json();
+      }
+    } else if (msg.type === "kb-mkdir") {
+      // Create a subfolder AS the viewer, inside the artifact's own folder.
+      if (!inArtifactScope(tab, msg.path)) {
+        result = { error: "path outside this artifact's folder" };
+      } else {
+        const r = await fetch("/api/artifact/mkdir", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ artifact: tab.path, path: msg.path }),
+        });
+        result = await r.json();
+        if (result.ok) loadTree(true);
+      }
+    } else if (msg.type === "kb-delete") {
+      // Delete a file or folder AS the viewer, inside the artifact's own folder.
+      // The backend refuses the folder itself and the artifact's own file, and
+      // wants an explicit `recursive` before it takes a non-empty subtree.
+      if (!inArtifactScope(tab, msg.path)) {
+        result = { error: "path outside this artifact's folder" };
+      } else {
+        const r = await fetch("/api/artifact/delete", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ artifact: tab.path, path: msg.path,
+                                 recursive: !!msg.recursive }),
+        });
+        result = await r.json();
+        if (result.ok) loadTree(true);
       }
     } else if (msg.type === "kb-fetch") {
       // Network for artifacts — via the hub's egress proxy only. The hub

@@ -139,7 +139,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 - **To-dos**: `- [ ] task @assignee #tag` checkboxes aggregated across everything
   you can see, filterable, with write-back to the source file.
 - **Sandboxed artifacts**: agent-written HTML dashboards that query the database
-  and read/write files *as the viewer*, contained by an opaque-origin iframe + CSP.
+  and read, write, list, create and delete files in their own folder *as the
+  viewer*, contained by an opaque-origin iframe + CSP.
 - **File sharing**: per-file and per-folder ACLs via a permissions UI, including
   automatic traverse-grants so a share actually reaches the file.
 - **Admin UI** (admin group only): create and remove users, create groups, assign

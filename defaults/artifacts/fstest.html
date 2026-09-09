@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8">
+<pre id="out">running…</pre>
+<script>
+  // Exercises the folder tools end to end: make a subfolder, write a file into
+  // it, list it back, then delete the subtree. Everything stays inside this
+  // artifact's own folder, which is namespaced on a test run — so the folder is
+  // derived from this frame's own URL, never hard-coded.
+  let _id=0,_p={};
+  onmessage=e=>{const m=e.data||{};if(m.type==="kb-result"&&_p[m.id]){_p[m.id](m);delete _p[m.id];}};
+  const _send=(msg)=>new Promise(r=>{const id=++_id;_p[id]=r;parent.postMessage({id,...msg},"*");});
+  const kbWrite =(path,content)=>_send({type:"kb-write",path,content});
+  const kbList  =(path,depth=1)=>_send({type:"kb-list",path,depth});
+  const kbMkdir =(path)        =>_send({type:"kb-mkdir",path});
+  const kbDelete=(path,recursive=false)=>_send({type:"kb-delete",path,recursive});
+  (async()=>{
+    const me=new URLSearchParams(location.search).get("path")||"";
+    const dir=me.slice(0,me.lastIndexOf("/"));
+    const sub=dir+"/fs_probe", file=sub+"/note.md";
+    const mk=await kbMkdir(sub);
+    await kbWrite(file,"# fs probe\nvalue=FS_PROOF_7\n");
+    const deep=await kbList(dir,2);
+    const seen=(deep.entries||[]).some(e=>e.path===file&&!e.dir&&e.size>0);
+    const guard=await kbDelete(dir);                 // own folder: must be refused
+    const gone=await kbDelete(sub,true);
+    const after=await kbList(dir,2);
+    const left=(after.entries||[]).some(e=>e.path===sub);
+    document.getElementById("out").textContent=
+      "mkdir_ok="+(!!mk.ok)+" listed="+seen+" guard="+(guard.error?"refused":"ALLOWED")+
+      " delete_ok="+(!!gone.ok)+" gone="+(!left);
+  })();
+</script>

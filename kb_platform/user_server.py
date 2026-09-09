@@ -78,7 +78,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 26
+BACKEND_V = 27
 
 
 def _name_key(name: str):
@@ -1067,6 +1067,190 @@ async def artifact_write(request: web.Request) -> web.Response:
                              "bytes": len(content.encode())})
 
 
+# ---- artifact folder tools (list / mkdir / delete), all AS the viewer -------
+# An artifact can already read and write files in its own folder; these three
+# give it the rest of a file manager — see what is there, make a subfolder,
+# remove something — with the same authority and the same containment.
+#
+# One entry cap and one depth cap for kb-list: enough for a real folder tree,
+# small enough that a runaway recursion can't build a multi-megabyte response.
+ARTIFACT_LIST_MAX = 2000
+ARTIFACT_LIST_MAX_DEPTH = 10
+
+
+def _artifact_scope(data: dict):
+    """Resolve (target, artifact folder, artifact file) for a scoped artifact FS
+    action, refusing any target outside the artifact's own directory tree.
+
+    The host page checks this too, before it ever calls us. It is repeated here
+    because these verbs CREATE and DELETE: the containment that matters most is
+    the one destructive actions sit behind, so it must not depend on a single
+    caller remembering to check. Returns a web.Response on refusal."""
+    art = common.resolve_repo_path(str(data.get("artifact", "")))
+    if art is None or not str(art).endswith(".html"):
+        return web.json_response({"error": "bad artifact path"}, status=400)
+    root = common.REPO_ROOT.resolve()
+    base = art.parent
+    if base == root:
+        return web.json_response(
+            {"error": "an artifact at the repo root has no folder to work in"}, status=403)
+    p = common.resolve_repo_path(str(data.get("path", "")))
+    if p is None:
+        return web.json_response({"error": "bad path"}, status=400)
+    if p != base and base not in p.parents:
+        return web.json_response({"error": "path outside this artifact's folder"}, status=403)
+    return p, base, art
+
+
+async def artifact_list(request: web.Request) -> web.Response:
+    """List a folder at or under the artifact's own, AS THIS USER. Directories
+    the viewer cannot open are skipped exactly as they are in the tree — an
+    artifact sees the folder the way its viewer's terminal would.
+
+    Dot-files are included: an artifact's own state (`.pipeline-data.json`) is
+    dot-prefixed by convention, so hiding them would hide the very files an
+    artifact keeps."""
+    data = await request.json()
+    scoped = _artifact_scope(data)
+    if isinstance(scoped, web.Response):
+        return scoped
+    p, _base, _art = scoped
+    try:
+        depth = int(data.get("depth", 1))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "depth must be a number"}, status=400)
+    depth = max(1, min(depth, ARTIFACT_LIST_MAX_DEPTH))
+    root = common.REPO_ROOT.resolve()
+    if common.is_secret_path(str(p.relative_to(root))):
+        return web.json_response({"error": "secrets are not listable"}, status=403)
+    entries: list[dict] = []
+    truncated = False
+
+    def walk(d: Path, level: int) -> None:
+        nonlocal truncated
+        try:
+            rows = sorted(os.scandir(d), key=_entry_key)
+        except OSError:
+            return
+        for e in rows:
+            # `_secrets/` is skipped whole: the platform keeps secrets out of
+            # everywhere content can escape a permission check, and an artifact
+            # never needs to enumerate them — kb-fetch injects `secret:` refs
+            # server-side precisely so the artifact never handles a credential.
+            if e.name in (".git", "_secrets") or e.name.endswith(".kbtmp"):
+                continue
+            if len(entries) >= ARTIFACT_LIST_MAX:
+                truncated = True
+                return
+            q = Path(e.path)
+            try:
+                is_dir = e.is_dir(follow_symlinks=False)
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            row = {"name": e.name, "path": str(q.relative_to(root)), "dir": is_dir,
+                   "mtime": int(st.st_mtime),
+                   "read": os.access(q, os.R_OK), "write": os.access(q, os.W_OK)}
+            if not is_dir:
+                row["size"] = st.st_size
+            entries.append(row)
+            if is_dir and level < depth and os.access(q, os.R_OK | os.X_OK):
+                walk(q, level + 1)
+
+    try:
+        if not p.is_dir():
+            return web.json_response({"error": "not a folder"}, status=400)
+        os.scandir(p).close()          # surface "you can't open this" as a 403
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    walk(p, 1)
+    return web.json_response({"ok": True, "path": str(p.relative_to(root)),
+                              "entries": entries, "truncated": truncated})
+
+
+async def artifact_mkdir(request: web.Request) -> web.Response:
+    """Create a subfolder under the artifact's own folder, AS THIS USER. Missing
+    intermediate folders are created too — one level at a time, so each inherits
+    the audience of the folder it lands in (a single os.makedirs would give the
+    intermediate ones the process umask instead)."""
+    data = await request.json()
+    scoped = _artifact_scope(data)
+    if isinstance(scoped, web.Response):
+        return scoped
+    p, base, _art = scoped
+    root = common.REPO_ROOT.resolve()
+    try:
+        if os.path.lexists(p):
+            return web.json_response({"error": "already exists"}, status=409)
+        missing = []
+        q = p
+        while q != base and not os.path.lexists(q):
+            missing.append(q)
+            q = q.parent
+        for d in reversed(missing):
+            common.mkdir_with_mode(d)
+    except PermissionError:
+        return web.json_response({"error": "no write access to the parent folder"}, status=403)
+    except FileExistsError:
+        return web.json_response({"error": "already exists"}, status=409)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"ok": True, "path": str(p.relative_to(root))})
+
+
+async def artifact_delete(request: web.Request) -> web.Response:
+    """Delete a file or folder under the artifact's own folder, AS THIS USER —
+    exactly what `rm` in the viewer's terminal could do, no more.
+
+    Two things are refused whatever the permissions say: the artifact's own
+    folder (its whole world, and deleting it would take neighbouring artifacts
+    with it) and the artifact's own file, so an open page cannot delete itself
+    out from under the person reading it. A non-empty folder needs an explicit
+    `recursive`, so one wrong path can't quietly take a subtree with it."""
+    data = await request.json()
+    scoped = _artifact_scope(data)
+    if isinstance(scoped, web.Response):
+        return scoped
+    p, base, art = scoped
+    root = common.REPO_ROOT.resolve()
+    if p == base:
+        return web.json_response({"error": "an artifact cannot delete its own folder"}, status=400)
+    if p == art:
+        return web.json_response({"error": "an artifact cannot delete itself"}, status=400)
+    rel = str(p.relative_to(root))
+    try:
+        st = os.lstat(p)   # can't even see it? a blocked ancestor is a 403, not a 404
+    except PermissionError:
+        return web.json_response({"error": "permission denied"}, status=403)
+    except FileNotFoundError:
+        return web.json_response({"error": "not found"}, status=404)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    is_dir = stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode)
+    if is_dir and not data.get("recursive"):
+        try:
+            empty = not any(os.scandir(p))
+        except OSError:
+            empty = False
+        if not empty:
+            return web.json_response(
+                {"error": "folder is not empty — pass recursive: true to delete it"}, status=400)
+    touched = _versioned_under(p, rel)   # collect BEFORE they're gone
+    try:
+        if is_dir:
+            shutil.rmtree(p)
+        else:
+            os.unlink(p)
+    except PermissionError:
+        return web.json_response({"error": "permission denied"}, status=403)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    common.write_attrib_hint("delete", *touched)
+    return web.json_response({"ok": True, "deleted": rel, "was_dir": is_dir})
+
+
 # ---- cron (the user's own crontab; runs AS them, so no privilege to get wrong) ----
 # A paused job is kept in the crontab, prefixed with this marker comment.
 CRON_PAUSED = "#kb:paused "
@@ -1616,6 +1800,9 @@ def make_app() -> web.Application:
     app.router.add_get("/api/artifact/raw", artifact_raw)
     app.router.add_post("/api/artifact/read", artifact_read)
     app.router.add_post("/api/artifact/write", artifact_write)
+    app.router.add_post("/api/artifact/list", artifact_list)
+    app.router.add_post("/api/artifact/mkdir", artifact_mkdir)
+    app.router.add_post("/api/artifact/delete", artifact_delete)
     app.router.add_post("/api/fs/move-preview", fs_move_preview)
     app.router.add_get("/api/principals", principals)
     app.router.add_get("/api/launchers", launchers_get)

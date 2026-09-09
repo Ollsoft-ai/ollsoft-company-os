@@ -68,7 +68,7 @@ ARTIFACT = """<!doctype html><meta charset="utf-8">
   })();
   // reaching OUTSIDE this artifact's folder must be refused by the host
   (async () => {
-    const r = await kbReadBytes(doc("overview.md"));
+    const r = await kbReadBytes("__OUTSIDE__");
     document.getElementById("scope").textContent =
       r.error ? "REFUSED:" + r.error : "LEAKED:" + (r.size || 0);
   })();
@@ -96,7 +96,9 @@ def folder():
         up = c.post(f"/api/upload?dir={rel}", files={"file": ("clip.mp4", fh, "video/mp4")})
     assert up.status_code == 200, up.text
     clip = f"{rel}/_files/clip.mp4"
-    html = ARTIFACT.replace("__CLIP__", clip)
+    # both placeholders are substituted in PYTHON: ARTIFACT is JS, so a bare
+    # doc("overview.md") in there is an undefined function, not this run's path
+    html = ARTIFACT.replace("__CLIP__", clip).replace("__OUTSIDE__", doc("overview.md"))
     # .html is born via the hub's newfile (inherits the folder's owner/group)
     assert c.post("/fs/newfile", json={"path": f"{rel}/player.html"}).status_code in (200, 409)
     w = c.post("/api/artifact/write", json={"path": f"{rel}/player.html", "content": html})

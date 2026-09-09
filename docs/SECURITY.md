@@ -11,7 +11,7 @@ Read this before exposing the platform beyond a trusted single box.
 | A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component |
 | An artifact can't touch the app or exfiltrate | **opaque-origin iframe + CSP** | `sandbox="allow-scripts"` (no same-origin) + `connect-src 'none'` — the artifact itself never reaches the network |
 | An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.claude/egress.json` (root:kb-users 0644 — an admin, or anyone granted write on that file, may change it). Requests are proxied by the hub, so the artifact never holds the credential |
-| An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write` limited to the artifact's own directory |
+| An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write`/`kb-list`/`kb-mkdir`/`kb-delete` limited to the artifact's own directory — the destructive ones re-checked server-side |
 | An uploaded file can't run script on the app's origin | **CSP + `nosniff` on `/api/attachment`** | `script-src 'none'`, so a planted SVG previews but never executes; a `.html` is classified as an artifact and served sandboxed by `/api/artifact/raw` instead |
 | A session cookie can't be forged | **HMAC-SHA256** with a root-only key | `/etc/kb/session.key`, 12h TTL |
 | A read-only viewer can't mutate a doc | **`kb-syncd` drops their CRDT writes** | they still see content + live updates |
@@ -66,7 +66,7 @@ regression tests. The themes and remediations:
 | RLS ignored ancestor-dir traversal → world-readable file inside a `0700` dir leaked via search (**high**) | `kb.can_read` and daemon `fs_can` now require traverse on every ancestor |
 | RLS blind to POSIX ACL mask → over-shared a locked file to its whole group (**high**) | indexer de-masks group bits + records named ACL grants; RLS honors them |
 | `can_read` was an arbitrary-user oracle (**low**) | single-arg, uses `session_user` |
-| Artifact `kb-read`/`kb-write` confused-deputy exfiltration (**high**) | bridge scoped to the artifact's own folder |
+| Artifact file-action confused-deputy exfiltration or destruction (**high**) | bridge scoped to the artifact's own folder; `kb-mkdir`/`kb-delete` scoped again in the backend, and an artifact may delete neither its own folder nor itself |
 | `kb-toggle` could flip any checkbox-looking line in any writable file (**low**) | requires `.md` + a genuinely indexed task line (RLS-scoped) |
 | Indexer recorded a symlink's metadata over its target's; startup-crash DoS (**medium/low**) | indexer skips symlinks; guarded `rel()` |
 | Orphaned ACLs survive user deletion + uid recycling (**low**) | delete strips the user's ACL grants recursively |
