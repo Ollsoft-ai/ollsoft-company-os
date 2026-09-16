@@ -63,6 +63,7 @@ regression tests. The themes and remediations:
 |--------------------|-----|
 | Backend-socket squatting → cross-user account takeover (**critical**) | per-user `0700` socket dirs; hub verifies socket `st_uid==target`; `/run/kb/users` is `0755`, not world-writable |
 | `fs_upload` / `syncd` / `fs_props` symlink → arbitrary **root** write (**critical/high**) | `opendir_beneath` + `O_NOFOLLOW` + fd-based `fchown`/`setxattr`; random `O_EXCL` temp in the daemon |
+| A chunked upload's spool sits in a folder the uploader can also write, for as long as the upload runs | the spool is opened **once** (`_open_inheriting`, `O_NOFOLLOW` under a verified dir fd) and every chunk is `pwrite`n to that **fd**, never re-opened by name; the inode is re-verified against the fd immediately before the publishing rename, the session id is unguessable and bound to its owner (another account appending or finishing gets 404), and write access to the folder is re-checked at finish because a session can outlive the share that authorised it |
 | RLS ignored ancestor-dir traversal → world-readable file inside a `0700` dir leaked via search (**high**) | `kb.can_read` and daemon `fs_can` now require traverse on every ancestor |
 | RLS blind to POSIX ACL mask → over-shared a locked file to its whole group (**high**) | indexer de-masks group bits + records named ACL grants; RLS honors them |
 | `can_read` was an arbitrary-user oracle (**low**) | single-arg, uses `session_user` |

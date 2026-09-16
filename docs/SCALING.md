@@ -51,7 +51,12 @@ guessed; re-measure before trusting them at a different scale.
 9. **Large-body buffering:** hub `proxy_http` and `fs_upload` buffer entire
    request/response bodies in RAM (`client_max_size` is 2 GiB). A few big
    attachment downloads = transient hub RSS spikes. Fix shape: stream.
-   **Open.**
+   **Uploads fixed 2026-09-16** — `/fs/upload/*` and `/api/upload/*` stream each
+   chunk straight to disk with `pwrite` and never hold more than 256 KB, so an
+   upload of any size costs no RSS at either tier (and the UI uses them for
+   every upload). The single-shot `fs_upload`/`upload` routes still buffer, as
+   does `proxy_http` — but nothing large goes through them any more: a proxied
+   chunk is 8 MiB. **Downloads still buffer: open.**
 10. **syncd never evicts rooms** (`auto_clean_rooms=False`): every doc ever
     opened stays in RAM and its full text is materialized 4×/s by the flush
     loop, forever. Flipping the flag needs care (flush-before-evict), so it

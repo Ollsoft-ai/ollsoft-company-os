@@ -85,6 +85,9 @@ there is no permission code here to get wrong.
 - `POST /api/upload`, `GET /api/attachment` — attachments in a `_files/` sibling.
   Attachments are served with `script-src 'none'` + `nosniff`, so an uploaded SVG
   previews without executing.
+- `POST /api/upload/{begin,chunk,finish,abort}` — the same attachment, **in
+  chunks** (see *Uploads of any size* below). The single-shot route above stays
+  for scripts and the artifact `kb-upload` bridge.
 - `GET /pty` — a **real login shell** in a PTY (`pty.fork` + the account's own
   login shell, `-l`), starting in `/srv/kb` (the knowledgebase root), bridged to
   xterm.js in the browser. A viewer account (nologin shell) gets 403. Shells are
@@ -253,6 +256,25 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   where you can write the parent). Deleting a file/folder retires any tabs
   showing it. The context menu (right-click, or `⋯` on touch) adds the rest,
   including **Upload folder**.
+- **Uploads of any size** (`/fs/upload/*` on the hub, `/api/upload/*` on the
+  backend, protocol in `kb_platform/uploads.py`): the browser slices the file
+  and sends it a chunk at a time (8 MiB), each chunk carrying its byte offset.
+  This is what removed the "larger than the server's upload limit" wall: that
+  ceiling was never the platform's — `client_max_size` is 2 GiB — it was the
+  edge in front of it, where Cloudflare refuses a request body over 100 MB. No
+  single request is big now, so no hop has an opinion about the file's size, and
+  the only limit left is free disk, which `begin` checks up front and reports as
+  a real sentence. The bytes stream to a spool file **in the destination folder**
+  (`.kbup-<rand>.kbtmp` — born with that folder's owner/mode/ACL, and invisible
+  to the tree, indexer, kb-convert and syncd, which all skip `.kbtmp`) and the
+  finish call renames it into place: one atomic syscall, no second write, and a
+  half-arrived file is never visible under its real name. Offsets make a retry
+  free (`pwrite` puts a re-sent chunk exactly where it was), so a dropped
+  connection costs one chunk; the client retries with backoff and resumes from
+  the offset the server reports. Progress is what the user sees: a **ghost row**
+  in the target folder for tree uploads, and for a drop or paste inside a
+  document the **upload tray** (bottom-right, one live bar and percentage per
+  file, each with a ✕ that aborts the session server-side too).
 - **Folder uploads**: a whole tree can come in two ways — dropped from the
   desktop onto a tree row, or picked via *Upload folder*. Neither is a new
   endpoint: the client turns the tree into paths relative to the target
@@ -282,8 +304,9 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   `- [ ]`→`- [x]` in the source, same path as the todos artifact). A per-doc
   toolbar (H1-3, bold/italic/strike/code, lists, task, quote, link, media, hr;
   Ctrl+B/I) and **drag-drop + screenshot-paste** insert media at the drop point —
-  the bytes upload to a `_files/` sibling (as the user) and render inline; images
-  land on their own block, other files as links. Dragging a row *out of the tree*
+  the bytes upload to a `_files/` sibling (as the user, chunked, reporting in the
+  upload tray) and render inline; images land on their own block, other files as
+  links. Dragging a row *out of the tree*
   into the text instead inserts a **link to that existing file** (`relLink` writes
   it relative to the document, which is what `resolveMediaUrl` needs to render an
   embed) — media embeds, anything else becomes a clickable link; the same drag

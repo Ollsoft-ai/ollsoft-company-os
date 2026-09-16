@@ -29,7 +29,7 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
-from . import common
+from . import common, uploads
 
 try:
     import psycopg
@@ -545,6 +545,142 @@ async def upload(request: web.Request) -> web.Response:
     link = f"_files/{filename}"
     return web.json_response({"ok": True, "link": link, "size": size,
                              "path": str(target.relative_to(common.REPO_ROOT))})
+
+
+# ---- chunked uploads --------------------------------------------------------
+# The editor's drops and pastes come through here, one chunk per request, so a
+# 4 GB video is no different from a screenshot as far as any hop between the
+# browser and this process is concerned. `upload` above is unchanged and still
+# serves small single-shot posts (scripts, the artifact `kb-upload` bridge).
+# Everything runs as the user, so the kernel is still the whole permission
+# story — see uploads.py for the protocol.
+_UPLOADS = uploads.Sessions()
+
+
+def _upload_dest(rel_dir: str, into_files: bool) -> tuple[Path | None, web.Response | None]:
+    """The folder the bytes land in: `<dir>/_files` for an attachment (created
+    on demand, with the audience of the folder it sits in), `<dir>` itself when
+    the caller asked for the folder directly."""
+    d = common.resolve_repo_path(rel_dir)
+    if d is None or not d.is_dir():
+        return None, web.json_response({"error": "bad dir"}, status=400)
+    if not into_files:
+        return d, None
+    files_dir = d / "_files"
+    try:
+        if not files_dir.exists():
+            common.mkdir_with_mode(files_dir)
+    except FileExistsError:
+        pass
+    except PermissionError:
+        return None, web.json_response({"error": "forbidden"}, status=403)
+    except OSError as e:
+        return None, web.json_response({"error": str(e)}, status=400)
+    return files_dir, None
+
+
+def _upload_result(sess: uploads.Session) -> dict:
+    """Same shape the single-shot `/api/upload` answers with, so the editor's
+    insert path does not care which one ran. `link` is relative to the DOCUMENT
+    (`_files/photo.jpg`), which is what goes into the markdown."""
+    out = {"ok": True, "size": sess.size,
+           "path": str(Path(sess.dir_rel) / sess.name)}
+    if Path(sess.dir_rel).name == "_files":
+        out["link"] = f"_files/{sess.name}"
+    return out
+
+
+async def upload_begin(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except ValueError:
+        return web.json_response({"error": "bad request"}, status=400)
+    into_files = data.get("files", True)
+    d, err = _upload_dest(str(data.get("dir", "company")), bool(into_files))
+    if err:
+        return err
+    name = uploads.safe_name(str(data.get("name", "")))
+    if not name:
+        return web.json_response({"error": "bad file name"}, status=400)
+    try:
+        size = int(data.get("size", -1))
+    except (TypeError, ValueError):
+        size = -1
+    if size < 0:
+        return web.json_response({"error": "bad size"}, status=400)
+    msg = uploads.space_error(d, size)
+    if msg:
+        return web.json_response({"error": msg}, status=507)
+    _UPLOADS.sweep()
+    if _UPLOADS.full():
+        return web.json_response({"error": "too many uploads in flight"}, status=503)
+    uploads.sweep_orphans(d)
+    spool = d / uploads.spool_name()
+    try:
+        # Born with the audience of the folder, because the last step is a
+        # rename inside that same folder — the inode we open here is the file
+        # the user ends up with.
+        fd = common.open_with_mode(spool, exclusive=True)
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    sess = _UPLOADS.add(user=None, dir_rel=str(d.relative_to(common.REPO_ROOT.resolve())),
+                        name=name, spool=spool, size=size, fd=fd)
+    out = uploads.begin_payload(sess)
+    out["files"] = bool(into_files)
+    return web.json_response(out)
+
+
+async def upload_chunk(request: web.Request) -> web.Response:
+    sess = _UPLOADS.get(request.query.get("id", ""), None)
+    if sess is None:
+        return web.json_response({"error": "unknown upload"}, status=404)
+    try:
+        offset = int(request.query.get("offset", "0"))
+    except ValueError:
+        return web.json_response({"error": "bad offset"}, status=400)
+    return await uploads.receive(request, sess, offset)
+
+
+async def upload_finish(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except ValueError:
+        return web.json_response({"error": "bad request"}, status=400)
+    sid = str(data.get("id", ""))
+    sess = _UPLOADS.get(sid, None)
+    if sess is None:
+        return web.json_response({"error": "unknown upload"}, status=404)
+    err = uploads.complete_error(sess)
+    if err:
+        return err
+    target = common.REPO_ROOT / sess.dir_rel / sess.name
+    try:
+        # Rename, not copy: the bytes are already on the right filesystem, so
+        # publishing a 4 GB file costs one atomic syscall and no second write.
+        # Like `mv` in the user's own terminal, this replaces the destination
+        # inode — so an overwritten attachment is reborn with this user's
+        # ownership and the folder's audience, which is what the folder's write
+        # permission already allowed them to do by hand.
+        os.replace(sess.spool, target)
+    except OSError as e:
+        _UPLOADS.drop(sid)
+        return web.json_response({"error": str(e)}, status=400)
+    _UPLOADS.drop(sid, unlink=False)    # the spool IS the file now
+    return web.json_response(_upload_result(sess))
+
+
+async def upload_abort(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except ValueError:
+        data = {}
+    sid = str(data.get("id", ""))
+    if _UPLOADS.get(sid, None) is None:
+        return web.json_response({"error": "unknown upload"}, status=404)
+    _UPLOADS.drop(sid)
+    return web.json_response({"ok": True})
 
 
 def _content_disposition(filename: str, download: bool) -> str:
@@ -1792,6 +1928,10 @@ def make_app() -> web.Application:
     app.router.add_post("/api/fs/rename", fs_rename)
     app.router.add_post("/api/fs/copy", fs_copy)
     app.router.add_post("/api/upload", upload)
+    app.router.add_post("/api/upload/begin", upload_begin)
+    app.router.add_post("/api/upload/chunk", upload_chunk)
+    app.router.add_post("/api/upload/finish", upload_finish)
+    app.router.add_post("/api/upload/abort", upload_abort)
     app.router.add_get("/api/attachment", attachment)
     app.router.add_get("/api/tasks", tasks)
     app.router.add_post("/api/tasks/toggle", toggle_task)

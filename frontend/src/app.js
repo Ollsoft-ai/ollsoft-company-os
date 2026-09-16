@@ -790,6 +790,17 @@ async function mentionSource(context) {
 }
 
 // ---- media drops & screenshot pastes (both modes) --------------------------
+// The one-request attachment post, for a backend that has not restarted into
+// the chunked endpoints yet.
+async function uploadAttachmentSingleShot(dir, file, name) {
+  const fd = new FormData();
+  fd.append("file", file, name);
+  const r = await fetch("/api/upload?dir=" + encodeURIComponent(dir),
+                        { method: "POST", body: fd });
+  if (r.status === 413) return { error: name + " is larger than this server's single-request limit" };
+  return await r.json().catch(() => ({ error: "upload failed" }));
+}
+
 async function uploadAndInsert(view, tab, files, pos) {
   if (view.state.readOnly) { kbToast("This document is read-only", "err"); return; }
   for (const f of files) {
@@ -807,13 +818,24 @@ async function uploadAndInsert(view, tab, files, pos) {
              (f.type === "image/jpeg" ? ".jpg" : ".png");
       alt = "screenshot";
     }
-    const fd = new FormData();
-    fd.append("file", f, name);
-    const r = await fetch("/api/upload?dir=" + encodeURIComponent(dirName(tab.path) || "company"),
-      { method: "POST", body: fd });
-    if (r.status === 413) { kbToast(name + " is larger than the server's upload limit", "err"); continue; }
-    const j = await r.json().catch(() => ({}));
-    if (!j.ok) { kbToast(j.error || "upload failed", "err"); continue; }
+    // Dropping a 2 GB video into a document used to look like nothing at all
+    // happening for several minutes. It reports in the tray now — live
+    // percentage, and a ✕ that really does stop it.
+    const dir = dirName(tab.path) || "company";
+    const reg = {};
+    const tid = trayAdd(name, () => { reg.cancelled = true; if (reg.xhr) reg.xhr.abort(); });
+    let j;
+    try {
+      j = await uploadChunked("/api/upload", dir, f, name,
+                              (pct) => trayProgress(tid, pct), { reg, files: true });
+      if (j === null) j = await uploadAttachmentSingleShot(dir, f, name);
+    } finally {
+      trayDone(tid);
+    }
+    if (!j || !j.ok) {
+      if (!(j && j.aborted)) kbToast((j && j.error) || "upload failed", "err");
+      continue;
+    }
     // The server hands back the raw path ("_files/q3 final (v2).xlsx"). Encode
     // it per segment — same as relLink — so a name with a space or a bracket
     // produces a link markdown can actually parse, and strip brackets out of
@@ -1564,13 +1586,94 @@ const kbPrompt = (message, value, o) =>
   kbDialog({ title: o && o.title, message, ok: o && o.ok,
              input: { value, placeholder: o && o.placeholder } });
 
-function kbToast(msg, kind) {
+function toastHost() {
   let host = document.getElementById("toasts");
   if (!host) {
     host = document.createElement("div");
     host.id = "toasts";
     document.body.appendChild(host);
   }
+  return host;
+}
+
+// ---- the upload tray -------------------------------------------------------
+// An upload into the TREE haunts the folder it is landing in (a ghost row with
+// a live percentage). An upload started from inside a DOCUMENT — a dropped
+// video, a pasted screenshot — has no row to haunt, and for a big file that
+// meant a long silence in which nothing on screen said anything was happening.
+// It reports here instead: one live bar per file, in the corner, cancellable.
+const _tray = new Map();     // id -> {name, pct, cancel}
+let _traySeq = 0;
+
+function trayHost() {
+  let host = document.getElementById("uptray");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "uptray";
+    host.setAttribute("data-testid", "upload-tray");
+    // inside the toast column, so the two never fight over the same corner
+    toastHost().prepend(host);
+  }
+  return host;
+}
+
+function trayRender() {
+  const host = trayHost();
+  host.textContent = "";
+  for (const [id, u] of _tray) {
+    const row = document.createElement("div");
+    row.className = "uprow";
+    row.dataset.upload = String(id);
+    row.style.setProperty("--pct", (u.pct || 0) + "%");
+    const spin = document.createElement("span");
+    spin.className = "upspin";
+    const name = document.createElement("span");
+    name.className = "upname";
+    name.textContent = u.name;
+    const pct = document.createElement("span");
+    pct.className = "upct";
+    pct.textContent = u.pct == null ? "waiting…" : u.pct + "%";
+    row.append(spin, name, pct);
+    if (u.cancel) {
+      const x = document.createElement("button");
+      x.className = "upcancel";
+      x.title = "Cancel this upload";
+      x.setAttribute("aria-label", "Cancel upload of " + u.name);
+      x.textContent = "✕";
+      x.onclick = () => u.cancel();
+      row.appendChild(x);
+    }
+    host.appendChild(row);
+  }
+  host.classList.toggle("on", _tray.size > 0);
+}
+
+function trayAdd(name, cancel) {
+  const id = ++_traySeq;
+  _tray.set(id, { name, pct: null, cancel });
+  trayRender();
+  return id;
+}
+
+// the hot path: touch the two nodes that change, never the whole tray
+function trayProgress(id, pct) {
+  const u = _tray.get(id);
+  if (!u) return;
+  u.pct = pct;
+  const row = trayHost().querySelector('.uprow[data-upload="' + id + '"]');
+  if (!row) return trayRender();
+  row.style.setProperty("--pct", pct + "%");
+  const el = row.querySelector(".upct");
+  if (el) el.textContent = pct + "%";
+}
+
+function trayDone(id) {
+  _tray.delete(id);
+  trayRender();
+}
+
+function kbToast(msg, kind) {
+  const host = toastHost();
   const t = document.createElement("div");
   t.className = "toast" + (kind ? " " + kind : "");
   t.setAttribute("data-testid", "toast");
@@ -2089,26 +2192,116 @@ function updateGhostRow(id, pct) {
   }
 }
 
-// fetch() can't report request-body progress — XHR is still the only way
-function uploadWithProgress(folder, file, onPct) {
+// ---- the wire ---------------------------------------------------------------
+// fetch() can't report request-body progress — XHR is still the only way, and
+// progress is the whole point here.
+function xhrPost(url, body, opts = {}) {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/fs/upload?dir=" + encodeURIComponent(folder));
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onPct(Math.round((100 * e.loaded) / e.total));
+    xhr.open("POST", url);
+    if (opts.json) xhr.setRequestHeader("content-type", "application/json");
+    if (opts.onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) opts.onProgress(e.loaded, e.total);
+      };
+    }
+    const parsed = () => {
+      try { return JSON.parse(xhr.responseText) || {}; } catch (e) { return {}; }
     };
-    const done = () => resolve({
-      status: xhr.status,
-      error: (() => {
-        try { return JSON.parse(xhr.responseText).error; } catch (e) { return null; }
-      })(),
-    });
-    xhr.onload = done;
-    xhr.onerror = () => resolve({ status: 0, error: "network error" });
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    xhr.send(fd);
+    xhr.onload = () => resolve({ status: xhr.status, json: parsed() });
+    xhr.onerror = () => resolve({ status: 0, json: {}, network: true });
+    xhr.ontimeout = () => resolve({ status: 0, json: {}, network: true });
+    xhr.onabort = () => resolve({ status: 0, json: {}, aborted: true });
+    if (opts.reg) opts.reg.xhr = xhr;
+    if (opts.reg && opts.reg.cancelled) return resolve({ status: 0, json: {}, aborted: true });
+    xhr.send(body);
   });
+}
+
+// ---- chunked uploads --------------------------------------------------------
+// One POST cannot carry a big file: the tunnel in front of this box rejects a
+// request body over 100 MB, which is what "larger than the server's upload
+// limit" always was — a limit no server here had set. So the file is sliced and
+// sent a chunk at a time. Every chunk carries its byte offset, which makes a
+// retry harmless (the server pwrites it to the same place), so a dropped
+// connection costs one chunk instead of the upload.
+//
+// `base` is "/fs/upload" (into a folder, via the hub) or "/api/upload" (an
+// attachment in the document's _files/, as the user). Resolves to the finish
+// payload on success, or {error} — and returns null if the server has no
+// chunked endpoints at all, which is the caller's cue to post it in one piece.
+const UPLOAD_CHUNK_TRIES = 5;
+
+async function uploadChunked(base, dir, file, name, onPct, opts = {}) {
+  const reg = opts.reg || {};
+  const begin = await xhrPost(base + "/begin", JSON.stringify(
+    { dir, name, size: file.size, files: opts.files !== false }), { json: true, reg });
+  if (begin.status === 404) return null;          // server predates chunking
+  if (begin.status < 200 || begin.status >= 300 || !begin.json.id) {
+    return { error: begin.json.error || (begin.aborted ? "cancelled" : "upload could not start"),
+             status: begin.status, aborted: begin.aborted };
+  }
+  const id = begin.json.id;
+  const abort = () => xhrPost(base + "/abort", JSON.stringify({ id }), { json: true });
+  const size = Math.max(1, file.size);            // an empty file is still 100% done
+  const chunk = Math.min(Math.max(begin.json.chunk_size || 8 << 20, 1 << 18),
+                         begin.json.max_chunk || 32 << 20);
+  let offset = begin.json.offset || 0;
+  let tries = 0;
+  while (offset < file.size) {
+    const end = Math.min(offset + chunk, file.size);
+    const at = offset;
+    const r = await xhrPost(
+      base + "/chunk?id=" + encodeURIComponent(id) + "&offset=" + at,
+      file.slice(at, end),
+      { reg, onProgress: (loaded) => onPct(Math.min(99, Math.floor((100 * (at + loaded)) / size))) });
+    if (r.status >= 200 && r.status < 300) {
+      offset = typeof r.json.offset === "number" ? r.json.offset : end;
+      tries = 0;
+      onPct(Math.min(99, Math.floor((100 * offset) / size)));
+      continue;
+    }
+    if (r.aborted) { abort(); return { error: "cancelled", aborted: true }; }
+    // 409 means the server and we disagree about how far we got — it wins.
+    const resumable = (r.network || r.status >= 500 || r.status === 409) &&
+                      r.status !== 507;
+    if (typeof r.json.offset === "number") offset = Math.min(r.json.offset, file.size);
+    if (!resumable || ++tries >= UPLOAD_CHUNK_TRIES) {
+      abort();
+      return { error: r.json.error || (r.network ? "the connection dropped" : "upload failed"),
+               status: r.status };
+    }
+    await new Promise((res) => setTimeout(res, 400 * tries));   // back off, then resume
+  }
+  const fin = await xhrPost(base + "/finish", JSON.stringify({ id }), { json: true, reg });
+  if (fin.status < 200 || fin.status >= 300 || !fin.json.ok) {
+    abort();
+    return { error: fin.json.error || (fin.aborted ? "cancelled" : "upload failed"),
+             status: fin.status, aborted: fin.aborted };
+  }
+  onPct(100);
+  return fin.json;
+}
+
+// The legacy single-shot post, kept as the fallback for a server that has not
+// been redeployed yet (the browser reloads its bundle well before every
+// backend on the box has restarted).
+function uploadSingleShot(folder, file, onPct, reg) {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  return xhrPost("/fs/upload?dir=" + encodeURIComponent(folder), fd, {
+    reg,
+    onProgress: (loaded, total) => onPct(Math.round((100 * loaded) / total)),
+  }).then((r) => ({ status: r.status, error: r.json.error || (r.network ? "network error" : null) }));
+}
+
+// Upload one file INTO A FOLDER (the tree's path), reporting 0–100.
+async function uploadWithProgress(folder, file, onPct) {
+  const r = await uploadChunked("/fs/upload", folder, file, file.name, onPct,
+                                { files: false });
+  if (r === null) return uploadSingleShot(folder, file, onPct);
+  return r.error ? { status: r.status || 0, error: r.error, aborted: r.aborted }
+                 : { status: 200, error: null };
 }
 
 // ---- folder uploads --------------------------------------------------------
@@ -2187,7 +2380,9 @@ async function uploadMany(folder, files, extraDirs = []) {
       const r = await uploadWithProgress(sub ? folder + "/" + sub : folder, f,
                                          (pct) => updateGhostRow(id, pct));
       if (r.status >= 200 && r.status < 300) ok++;
-      else if (r.status === 413) kbToast(rel + " is larger than the server's upload limit", "err");
+      else if (r.aborted) { /* the user pressed ✕ — they know */ }
+      else if (r.status === 413) kbToast(rel + " was refused in one piece — reload the "
+                                         + "page to upload it in chunks", "err");
       else kbToast(r.error || "could not upload " + rel, "err");
       m.delete(id);
     }

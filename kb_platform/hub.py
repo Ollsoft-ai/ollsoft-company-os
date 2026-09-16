@@ -34,7 +34,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import WSMsgType, web
 
-from . import common, pam_auth
+from . import common, pam_auth, uploads
 
 PLATFORM_ROOT = Path(os.environ.get("KB_PLATFORM_ROOT", "/opt/kb-platform"))
 STATIC_DIR = PLATFORM_ROOT / "frontend" / "static"
@@ -1183,6 +1183,7 @@ class Hub:
         self._stt_key = self._load_stt_key()
         self._stt_used: dict[str, tuple[str, int]] = {}   # user -> (utc day, bytes)
         self._throttle = LoginThrottle()
+        self._uploads = uploads.Sessions()               # chunked uploads in flight
 
     # --- identity -----------------------------------------------------------
     def current_user(self, request: web.Request) -> str | None:
@@ -1518,12 +1519,31 @@ class Hub:
     def _create_inheriting(self, rel: str, data: bytes | None, exclusive: bool = False,
                            owner: tuple[int, int] | None = None,
                            force_mode: int | None = None) -> str:
+        """Create a file with its parent's audience and write `data` to it.
+        Thin wrapper over `_open_inheriting` — see there for the symlink and
+        mode rules. Returns the owner's name."""
+        own, fd = self._open_inheriting(rel, exclusive, owner, force_mode)
+        try:
+            if data:
+                os.write(fd, data)
+        finally:
+            os.close(fd)
+        return own
+
+    def _open_inheriting(self, rel: str, exclusive: bool = False,
+                         owner: tuple[int, int] | None = None,
+                         force_mode: int | None = None) -> tuple[str, int]:
         """Create a file (owned by its PARENT's owner/group; needs root) WITHOUT
         following any symlink in the path — the parent dir is reached via
         openat/O_NOFOLLOW and the file is opened O_NOFOLLOW under that dir fd, so
-        a symlink planted by a user cannot redirect this root write. Returns owner.
+        a symlink planted by a user cannot redirect this root write. Returns the
+        owner's name and an OPEN WRITE FD, which the caller must close.
         `owner`/`force_mode` override inheritance — used for `_secrets/` files,
-        which must be born private (creator-owned, 0600), never group-open."""
+        which must be born private (creator-owned, 0600), never group-open.
+
+        The fd is the point for a chunked upload: it is opened once, under a
+        verified dir fd, and every later append goes to that inode no matter
+        what happens to the name in a folder the uploader can also write."""
         parent_rel = os.path.dirname(rel)
         name = os.path.basename(rel)
         if not name or "/" in name or name in (".", ".."):
@@ -1556,19 +1576,18 @@ class Hub:
             else:
                 fd = os.open(name, flags, mode, dir_fd=pfd)
             try:
-                if data:
-                    os.write(fd, data)
                 os.fchown(fd, *own)
                 if not inherit_acl:
                     os.fchmod(fd, mode)   # the create mode was cut by our umask
-            finally:
+            except OSError:
                 os.close(fd)
+                raise
         finally:
             os.close(pfd)
         try:
-            return pwd.getpwuid(own[0]).pw_name
+            return pwd.getpwuid(own[0]).pw_name, fd
         except KeyError:
-            return str(own[0])
+            return str(own[0]), fd
 
     async def fs_newfile(self, request: web.Request) -> web.Response:
         user = self.current_user(request)
@@ -1635,6 +1654,140 @@ class Hub:
         except OSError as e:
             return web.json_response({"error": str(e)}, status=500)
         return web.json_response({"ok": True, "path": rel_clean, "owner": owner})
+
+    # ---- chunked uploads ---------------------------------------------------
+    # The single-shot `fs_upload` above still serves scripts and small posts,
+    # but the UI no longer uses it: a browser slices the file and drives the
+    # three calls below, so no request is ever bigger than one chunk. See
+    # uploads.py for why (the edge, not this platform, is what capped uploads).
+
+    def _upload_dir(self, user: str, rel_dir: str):
+        """Resolve + authorise an upload target for this user. Returns the
+        directory, or an error response."""
+        d = common.resolve_repo_path(rel_dir)
+        if d is None or not d.is_dir():
+            return None, web.json_response({"error": "bad folder"}, status=400)
+        uid, gids = _uid_gids(user)
+        if not _fs_can(d, uid, gids, need_write=True):
+            return None, web.json_response({"error": "no write access to folder"},
+                                           status=403)
+        return d, None
+
+    async def fs_upload_begin(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        try:
+            data = await request.json()
+        except ValueError:
+            return web.json_response({"error": "bad request"}, status=400)
+        rel_dir = str(data.get("dir", ""))
+        d, err = self._upload_dir(user, rel_dir)
+        if err:
+            return err
+        name = uploads.safe_name(str(data.get("name", "")))
+        if not name:
+            return web.json_response({"error": "bad file name"}, status=400)
+        try:
+            size = int(data.get("size", -1))
+        except (TypeError, ValueError):
+            size = -1
+        if size < 0:
+            return web.json_response({"error": "bad size"}, status=400)
+        msg = uploads.space_error(d, size)
+        if msg:
+            return web.json_response({"error": msg}, status=507)
+        self._uploads.sweep()
+        if self._uploads.full():
+            return web.json_response({"error": "too many uploads in flight"},
+                                     status=503)
+        uploads.sweep_orphans(d)
+        dir_rel = str(d.relative_to(common.REPO_ROOT.resolve()))
+        rel_final = str(Path(dir_rel) / name)
+        secret = common.is_secret_path(rel_final)
+        spool = d / uploads.spool_name()
+        try:
+            uid = pwd.getpwnam(user).pw_uid
+            # The spool is born exactly as the finished file must be — owner,
+            # mode and inherited ACL — because the last step is a rename inside
+            # this same folder, which carries the inode over untouched.
+            _owner, fd = self._open_inheriting(
+                str(Path(dir_rel) / spool.name), exclusive=True,
+                owner=(uid, pwd.getpwnam(user).pw_gid) if secret else None,
+                force_mode=0o600 if secret else None)
+        except (OSError, KeyError) as e:
+            return web.json_response({"error": str(e)}, status=500)
+        sess = self._uploads.add(user=user, dir_rel=dir_rel, name=name,
+                                 spool=spool, size=size, fd=fd)
+        return web.json_response(uploads.begin_payload(sess))
+
+    async def fs_upload_chunk(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        sess = self._uploads.get(request.query.get("id", ""), user)
+        if sess is None:
+            return web.json_response({"error": "unknown upload"}, status=404)
+        try:
+            offset = int(request.query.get("offset", "0"))
+        except ValueError:
+            return web.json_response({"error": "bad offset"}, status=400)
+        return await uploads.receive(request, sess, offset)
+
+    async def fs_upload_finish(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        try:
+            data = await request.json()
+        except ValueError:
+            return web.json_response({"error": "bad request"}, status=400)
+        sid = str(data.get("id", ""))
+        sess = self._uploads.get(sid, user)
+        if sess is None:
+            return web.json_response({"error": "unknown upload"}, status=404)
+        err = uploads.complete_error(sess)
+        if err:
+            return err
+        # Re-check write access at the end too: a session can outlive the share
+        # that authorised it, and the rename is the write that counts.
+        _d, aerr = self._upload_dir(user, sess.dir_rel)
+        if aerr:
+            self._uploads.drop(sid)
+            return aerr
+        try:
+            pfd = common.opendir_beneath(sess.dir_rel)
+        except OSError as e:
+            self._uploads.drop(sid)
+            return web.json_response({"error": str(e)}, status=500)
+        try:
+            if not uploads.same_inode(sess.fd, sess.spool_name, pfd):
+                self._uploads.drop(sid)
+                return web.json_response({"error": "upload file vanished"}, status=409)
+            os.rename(sess.spool_name, sess.name, src_dir_fd=pfd, dst_dir_fd=pfd)
+        except OSError as e:
+            self._uploads.drop(sid)
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            os.close(pfd)
+        self._uploads.drop(sid, unlink=False)   # the spool IS the file now
+        rel_clean = str(Path(sess.dir_rel) / sess.name)
+        return web.json_response({"ok": True, "path": rel_clean, "size": sess.size,
+                                  "owner": _owner_name(common.REPO_ROOT / rel_clean)})
+
+    async def fs_upload_abort(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        try:
+            data = await request.json()
+        except ValueError:
+            data = {}
+        sid = str(data.get("id", ""))
+        if self._uploads.get(sid, user) is None:
+            return web.json_response({"error": "unknown upload"}, status=404)
+        self._uploads.drop(sid)
+        return web.json_response({"ok": True})
 
     async def fs_props_get(self, request: web.Request) -> web.Response:
         user = self.current_user(request)
@@ -2595,6 +2748,10 @@ def make_app() -> web.Application:
     # Privileged filesystem admin (hub handles these as root; NOT proxied).
     app.router.add_post("/fs/newfile", hub.fs_newfile)
     app.router.add_post("/fs/upload", hub.fs_upload)
+    app.router.add_post("/fs/upload/begin", hub.fs_upload_begin)
+    app.router.add_post("/fs/upload/chunk", hub.fs_upload_chunk)
+    app.router.add_post("/fs/upload/finish", hub.fs_upload_finish)
+    app.router.add_post("/fs/upload/abort", hub.fs_upload_abort)
     app.router.add_get("/fs/props", hub.fs_props_get)
     app.router.add_post("/fs/props", hub.fs_props_set)
     app.router.add_get("/fs/share", hub.fs_share_get)

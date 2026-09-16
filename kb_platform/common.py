@@ -501,27 +501,34 @@ def create_with_mode(path, data: bytes | None = None, *, exclusive: bool = False
         granted (exactly the failure that hid documents from the indexer).
       * parent has none — the mode bits are the whole story: birth_mode().
     """
+    fd = open_with_mode(path, exclusive=exclusive)
+    try:
+        if data:
+            os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def open_with_mode(path, *, exclusive: bool = False) -> int:
+    """`create_with_mode`, but handing back the OPEN WRITE FD instead of writing
+    in one shot — the same two regimes, decided once. A chunked upload needs the
+    fd: it is opened when the upload starts and appended to for as long as the
+    upload runs. Caller closes."""
     parent = os.path.dirname(str(path)) or "."
     flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
     if inherits_acl(parent) and not is_secret_path(str(path)):
         old = os.umask(0)
         try:
-            fd = os.open(path, flags, 0o666)
+            return os.open(path, flags, 0o666)
         finally:
             os.umask(old)
-        try:
-            if data:
-                os.write(fd, data)
-        finally:
-            os.close(fd)
-        return
     fd = os.open(path, flags, 0o600)
     try:
-        if data:
-            os.write(fd, data)
         os.fchmod(fd, birth_mode(parent, False, str(path)))
-    finally:
+    except OSError:
         os.close(fd)
+        raise
+    return fd
 
 
 def mkdir_with_mode(path) -> None:

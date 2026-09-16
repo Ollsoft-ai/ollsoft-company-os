@@ -962,6 +962,27 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 #toasts { position: fixed; bottom: max(1rem, env(safe-area-inset-bottom)); right: 1rem;
   display: flex; flex-direction: column; gap: .4rem; z-index: 90; pointer-events: none;
   max-width: min(420px, calc(100vw - 2rem)); }
+/* live uploads started from inside a document (the tree's ghost rows are the
+   equivalent for uploads landing in a folder). Lives inside the toast column so
+   the two never fight over the same corner; needs its own pointer events back
+   for the cancel button. */
+#uptray { display: none; flex-direction: column; gap: .35rem; pointer-events: auto; }
+#uptray.on { display: flex; }
+.uprow { display: flex; align-items: center; gap: .5rem; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+  padding: .45rem .7rem; font-size: .8rem; animation: rise .15s ease-out;
+  box-shadow: 0 10px 30px rgba(3, 8, 18, .5);
+  background-image: linear-gradient(to right,
+    color-mix(in srgb, var(--accent) 20%, transparent) var(--pct, 0%),
+    transparent var(--pct, 0%)); }
+.uprow .upname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.uprow .upct { flex: none; font-family: var(--mono); font-size: .68rem;
+  color: var(--accent); font-variant-numeric: tabular-nums; }
+.uprow .upcancel { flex: none; background: none; border: 0; cursor: pointer;
+  color: var(--muted); font-size: .8rem; line-height: 1; padding: .1rem .15rem; }
+.uprow .upcancel:hover { color: var(--ink); }
 .toast { background: var(--panel); border: 1px solid var(--border); color: var(--ink);
   border-left: 3px solid var(--accent); border-radius: 8px; padding: .5rem .8rem;
   font-size: .82rem; line-height: 1.5; box-shadow: 0 10px 30px rgba(3, 8, 18, .5);
