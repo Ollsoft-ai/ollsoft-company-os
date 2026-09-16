@@ -247,6 +247,19 @@ any they can, since a named `--x` entry would *downgrade* them. The response
 reports which directories got one. The indexer records those grants so search/RLS
 agree with the kernel.
 
+**Credentials (`_secrets/`) share like anything else — deliberately.** Sharing a
+project stops at the `_secrets/` folder inside it (`_walk_repo` never descends
+into one), and every key is born `0600` no matter how open the folder around it
+happens to be: on a real box a `_secrets/` folder made in a terminal inherits the
+project's group and default ACL, and that is not a decision anyone made about
+credentials. Sharing the `_secrets` **folder itself** is that decision — the one
+case where the walk does reach the contents, so the keys already in it follow,
+and the folder is marked (`user.kb_secrets_shared`) so the keys added afterwards
+follow too. Only the owner may widen one, not an admin, and the indexer is never
+put in a secret's group or ACL. What `_secrets/` guarantees is unchanged and is
+not about who may open it: never in git, never in the index, never a live CRDT
+session. The panel says exactly that above the people list.
+
 ## 8. The UI shell — tabs, terminals, cron panel
 
 VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js`):

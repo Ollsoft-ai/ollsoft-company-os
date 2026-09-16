@@ -78,7 +78,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 27
+BACKEND_V = 28   # chunked uploads (/api/upload/*); _secrets contents follow their folder
 
 
 def _name_key(name: str):

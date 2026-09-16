@@ -549,6 +549,18 @@ body.dragging-tab .pane-drop { display: block; }
 .cm-editor .cm-selectionBackground { background: rgba(77, 157, 255, .20) !important; }
 .cm-editor.cm-focused .cm-selectionBackground { background: rgba(77, 157, 255, .32) !important; }
 .cm-content ::selection { background: rgba(77, 157, 255, .30); }
+/* Selecting inside a fenced code block showed nothing at all. CodeMirror's
+   drawSelection() paints the selection into a LAYER BEHIND the text
+   (z-index: -1) and hides the browser's own — which works only while the lines
+   themselves are transparent. A code block has a solid background of its own,
+   so it covered every selection rectangle drawn under it; the caret stayed
+   visible because the cursor layer is the one drawn ON TOP. Give those lines
+   the native selection back (drawSelection turns it off for every line at
+   Prec.highest — hence the specificity and the !important) in the same colour,
+   so a drag that crosses in and out of a block still reads as one selection. */
+.cm-editor .cm-line.cm-codeblock::selection,
+.cm-editor .cm-line.cm-codeblock ::selection {
+  background: rgba(77, 157, 255, .32) !important; }
 
 /* ── Terminal panel ───────────────────────────────────────────────────────── */
 .terminal-panel { position: relative; flex: 0 0 auto; height: 38%; min-height: 110px; background: var(--term-bg);

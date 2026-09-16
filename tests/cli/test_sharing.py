@@ -186,7 +186,12 @@ def test_only_the_owner_can_change_access(k, folder):
     assert share(cl("bob"), name, "everyone").status_code == 403
 
 
-def test_secrets_are_never_shared(k, folder):
+def test_sharing_a_folder_stops_at_its_secrets(k, folder):
+    """Sharing a project must not hand its credentials out with it — the
+    `_secrets/` folder inside is listable, and stays unreadable, until it is
+    shared in its own right. (That second half is new: the panel used to refuse
+    a `_secrets/` path outright, which left a team with no way to share a
+    credential at all and guaranteed nothing — /fs/props could always do it.)"""
     name, _doc = folder
     sec = f"{name}/_secrets"
     assert k.post("/api/fs/mkdir", json={"path": sec}).status_code == 200
@@ -195,7 +200,13 @@ def test_secrets_are_never_shared(k, folder):
     assert share(k, name, "people", [("bob", "edit"), ("carol", "view")]).status_code == 200
     assert not can_open("bob", key), "a share must not reach into _secrets/"
     assert not can_open("carol", key)
-    assert share(k, key, "everyone").status_code == 400, "_secrets cannot be opened up at all"
+
+    # …and the owner CAN hand it over deliberately, folder and contents
+    assert share(k, sec, "people", [("bob", "view")]).status_code == 200
+    assert can_open("bob", key), "the owner shared the secrets folder itself"
+    assert not can_open("carol", key), "…with bob, not with everyone in the project"
+    assert share(k, sec, "private").status_code == 200
+    assert not can_open("bob", key), "and can take it back"
 
 
 def mode_of(c, path):

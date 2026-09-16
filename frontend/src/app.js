@@ -4257,12 +4257,18 @@ function showShareModal(s, principals) {
       <span class="muted">${s.is_dir ? "folder" : "file"}</span>
       <button class="modal-x" title="Close">×</button>
     </div>
-    ${ro ? `<div class="note">${["root", "daemon", "nobody"].includes(s.owner)
+    ${ro ? `<div class="note">${s.secret
+        ? "A secret is its owner's to share: only " + escapeHtml(s.owner_name || s.owner) +
+          " can change who can read this one — not even a platform admin."
+        : ["root", "daemon", "nobody"].includes(s.owner)
         ? "This belongs to the folder rather than to a person, so only a platform admin can change who has access."
         : "Only " + escapeHtml(s.owner_name || s.owner) + " (or a platform admin) can change who has access."}</div>` : ""}
-    ${s.secret ? '<div class="note">Inside <b>_secrets/</b> — owner-only by design, never shared and never indexed.</div>' : ""}
+    ${s.secret ? `<div class="note">Inside <b>_secrets/</b>: whoever you add here can read
+       ${s.is_dir ? "every credential in this folder" : "this credential"} in full. It stays out of
+       search, out of version history and out of live co-editing either way — that is what
+       <b>_secrets/</b> guarantees, not who may open it.</div>` : ""}
     <label class="frow"><span>Access</span>
-      <select id="sh-scope" data-testid="sh-scope"${ro || s.secret ? " disabled" : ""}>${scopeOpts}</select>
+      <select id="sh-scope" data-testid="sh-scope"${ro ? " disabled" : ""}>${scopeOpts}</select>
     </label>
     <div id="sh-hint" class="sh-hint muted"></div>
     <div class="acl-title">People</div>
@@ -4288,7 +4294,7 @@ function showShareModal(s, principals) {
   const hintHost = card.querySelector("#sh-hint");
   const addHost = card.querySelector("#sh-add");
 
-  function editable() { return !ro && !s.secret && scope === "people"; }
+  function editable() { return !ro && scope === "people"; }
 
   // "Same as the folder" describes the FOLDER's people, not this item's — so it
   // needs the folder's list. Fetched once, up front, so switching to it shows

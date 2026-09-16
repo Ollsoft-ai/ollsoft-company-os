@@ -234,6 +234,64 @@ def is_secret_path(rel: str) -> bool:
     return "_secrets" in rel.strip("/").split("/")
 
 
+# Set on a `_secrets` FOLDER when its owner deliberately shares it. Nothing
+# else may be read as that intent: two of this box's six `_secrets` folders are
+# group-open and one carries the company's default ACL, none of it a decision
+# anybody made about credentials — they were made in a terminal, or inherited
+# from the project around them. So a key is born owner-only wherever it lands,
+# and follows its folder only where this says the owner asked for it.
+SECRETS_SHARED_XATTR = "user.kb_secrets_shared"
+
+
+def secrets_folder_shares(parent) -> bool:
+    """Has the `_secrets` folder a child is being born into been shared?
+    `parent` is a path or an open dir fd — whichever the caller already has."""
+    try:
+        return bool(os.getxattr(parent, SECRETS_SHARED_XATTR))
+    except OSError:
+        return False
+
+
+def set_secrets_shared(target, on: bool) -> None:
+    """Mark (or unmark) a `_secrets` folder as deliberately shared. Best effort:
+    a filesystem without user xattrs simply keeps every key owner-only."""
+    try:
+        if on:
+            os.setxattr(target, SECRETS_SHARED_XATTR, b"1")
+        else:
+            os.removexattr(target, SECRETS_SHARED_XATTR)
+    except OSError:
+        pass
+
+
+def born_closed(parent, path) -> bool:
+    """Must this child be born owner-only, ignoring the folder it lands in?
+
+    Two cases: the `_secrets` folder itself (a folder of credentials never
+    starts out as wide as the project around it), and anything inside a
+    `_secrets` folder that has not been shared. Share the folder and this goes
+    false — which is what makes the share mean anything for keys added later.
+    """
+    rel = str(path)
+    if is_secret_root(rel):
+        return True
+    return is_secret_path(rel) and not secrets_folder_shares(parent)
+
+
+def is_secret_root(rel: str) -> bool:
+    """True for a `_secrets` FOLDER itself, as opposed to what is inside it.
+
+    The distinction is the whole sharing story. The folder is born closed —
+    owner-only, whatever the folder it sits in, so a key dropped into a
+    company-wide project is private the moment it exists. Its contents then
+    inherit the folder, which by default says exactly the same thing… but
+    follows it once the owner deliberately shares the folder with a team.
+    Forcing every file inside to 0600 forever (what this used to do) made that
+    share silently do nothing, and there was no other way to hand a colleague a
+    credential."""
+    return os.path.basename(str(rel).rstrip("/")) == "_secrets"
+
+
 # --- Kernel-exact access evaluation (for ROOT daemons only) ------------------
 # hub and syncd run as root but act on behalf of users; the kernel won't answer
 # "may THIS user read that?" for them (os.access answers for root), so they must
@@ -442,7 +500,8 @@ def human_readers(named) -> list:
     return out
 
 
-def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:
+def birth_mode(parent, is_dir: bool, child: str | None = None, *,
+               closed_secret_root: bool = True) -> int:
     """The mode a newly created child of `parent` should end up with: the same
     audience as the folder it lands in.
 
@@ -454,11 +513,12 @@ def birth_mode(parent, is_dir: bool, child: str | None = None) -> int:
     instead (execute stripped for files, setgid kept for directories) so the
     audience of a document is the audience of its folder, ACLs or not.
 
-    Secrets are the one exception and are born owner-only regardless of where
-    they sit: `_secrets/` folders are themselves listable by the team, so
-    inheriting their mode would publish the very thing that must not be.
+    `_secrets/` is the exception, and born_closed draws the line: the folder
+    itself is always born owner-only, and so is everything inside it until its
+    owner shares that folder — after which keys follow it like any other file,
+    which is the whole point of being able to share one.
     """
-    if is_secret_path(str(child if child is not None else parent)):
+    if closed_secret_root and born_closed(parent, child if child is not None else parent):
         return 0o700 if is_dir else 0o600
     try:
         pst = os.stat(parent)
@@ -516,7 +576,7 @@ def open_with_mode(path, *, exclusive: bool = False) -> int:
     upload runs. Caller closes."""
     parent = os.path.dirname(str(path)) or "."
     flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
-    if inherits_acl(parent) and not is_secret_path(str(path)):
+    if inherits_acl(parent) and not born_closed(parent, path):
         old = os.umask(0)
         try:
             return os.open(path, flags, 0o666)
@@ -534,18 +594,26 @@ def open_with_mode(path, *, exclusive: bool = False) -> int:
 def mkdir_with_mode(path) -> None:
     """mkdir as this user with the audience of its parent — see create_with_mode."""
     parent = os.path.dirname(str(path)) or "."
-    if inherits_acl(parent) and not is_secret_path(str(path)):
+    # A subfolder of a shared `_secrets` folder carries the mark on, so that
+    # keys born one level deeper follow the same decision.
+    carry_mark = is_secret_path(str(path)) and secrets_folder_shares(parent)
+    if inherits_acl(parent) and not born_closed(parent, path):
         old = os.umask(0)
         try:
             os.mkdir(path, 0o777)
         finally:
             os.umask(old)
+        if carry_mark:
+            set_secrets_shared(path, True)
         return
     os.mkdir(path, 0o700)
     os.chmod(path, birth_mode(parent, True, str(path)))
+    if carry_mark:
+        set_secrets_shared(path, True)
 
 
-def reset_to_parent_audience(path, is_dir: bool) -> None:
+def reset_to_parent_audience(path, is_dir: bool, *,
+                             secret_root_follows: bool = False) -> None:
     """Make `path` look exactly as if it had just been created where it sits —
     used after a copy, which otherwise carries the SOURCE's ACL and mode into a
     folder with a different audience, and after a move, which carries the whole
@@ -555,7 +623,13 @@ def reset_to_parent_audience(path, is_dir: bool) -> None:
     child, so a file renamed into a team folder keeps the group it arrived
     with: the team it now lives with cannot read it, and the team it came from
     still can. Only a setgid parent is followed — elsewhere the group is
-    nobody's business but the owner's."""
+    nobody's business but the owner's.
+
+    `secret_root_follows` is the share panel asking, in so many words, for a
+    `_secrets` folder to take the audience of the folder it sits in. A move or
+    a copy never asks for that: a folder of credentials dragged into a team
+    folder must not quietly become that team's, so there the born-closed rule
+    stands and only an explicit share may widen it."""
     parent = os.path.dirname(str(path)) or "."
     # One traversal, then every mutation goes through the fd. A symlink here
     # used to redirect a ROOT chmod onto any inode on the box: the share
@@ -580,7 +654,7 @@ def reset_to_parent_audience(path, is_dir: bool) -> None:
                 os.removexattr(fd, attr)
             except OSError:
                 pass
-        if dflt and not is_secret_path(str(path)):
+        if dflt and (secret_root_follows or not born_closed(parent, path)):
             try:                   # reproduce the kernel's inheritance
                 os.setxattr(fd, ACL_XATTR, dflt)
                 if is_dir:
@@ -596,7 +670,8 @@ def reset_to_parent_audience(path, is_dir: bool) -> None:
             except OSError:
                 pass
         try:
-            os.fchmod(fd, birth_mode(parent, is_dir, str(path)))
+            os.fchmod(fd, birth_mode(parent, is_dir, str(path),
+                                     closed_secret_root=not secret_root_follows))
         except OSError:
             pass
     finally:
@@ -669,7 +744,7 @@ def readership_key(st, entries) -> tuple:
     return (st.st_gid if group_reads else None, False, frozenset(named))
 
 
-def reset_audience_tree(root) -> None:
+def reset_audience_tree(root, *, secret_root_follows: bool = False) -> None:
     """reset_to_parent_audience over a whole tree, top-down so that each level
     is fixed before its children read it as their parent.
 
@@ -679,7 +754,9 @@ def reset_audience_tree(root) -> None:
     recoverable, one that stays private inside a team folder is the bug."""
     root = Path(root)
     is_dir = root.is_dir()
-    reset_to_parent_audience(root, is_dir)
+    # Only the root of the walk can be the `_secrets` folder being shared; its
+    # children follow it the ordinary way once it has moved.
+    reset_to_parent_audience(root, is_dir, secret_root_follows=secret_root_follows)
     if not is_dir:
         return
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):

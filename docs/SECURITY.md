@@ -95,6 +95,7 @@ candidates, 35 upheld. The ones that mattered and what closed them:
 | `artifact_query` ran artifact-authored SQL with the VIEWER's database authority, so a shared dashboard could `CREATE TABLE … ; GRANT … TO <author>` (**high**) | privilege/role/ownership statements refused; `statement_timeout`. Honest limit: a lexical check, not a parser — the structural fix is a consent gate before opening someone else's artifact |
 | A file's owner could `chown` it to root or another user while keeping write access — provenance forgery (**medium**) | reassignment requires admin, and never to a system account |
 | The admin override reached `_secrets/` files (**medium**) | admins can no longer widen a `_secrets/` file they do not own; the owner still can, which is the documented design |
+| Sharing a folder must not hand out the credentials inside it | `_walk_repo` never descends into a `_secrets/` folder — sharing a project stops at it. Sharing the `_secrets` folder *itself* is the one case that does reach its contents, and only its owner may ask for that (`/fs/share` and `/fs/props` both refuse an admin who is not the owner). The indexer is never added to a secret's group or ACL, and it prunes `_secrets` before it walks, so a shared secret is still never indexed |
 | `x-kb-user` from the client survived into the proxied request (**low**, latent) | asserted headers stripped on the way in |
 | The Olingo CRM and timesheet tables were granted `INSERT/UPDATE/DELETE` to every employee, and anyone could make themselves a timesheet admin (**low**) | revoked; the games and lunch votes stay shared on purpose |
 | `seed-demo.sh` wrote `/tmp/kb-test-creds.json` `0644` with three working passwords, one of them an admin's (**low**) | `0600`, owned by whoever will run the suite |
@@ -213,11 +214,16 @@ it can only show what the caller could already open.
   `users/<u>/` dir, so those files aren't searchable (by design; a per-user
   indexer would be needed).
 - **`_secrets/` is kernel-protected, not encrypted.** A `_secrets/` folder holds
-  creator-owned `0600` files that `kb-syncd` refuses to sync and `.gitignore`
-  keeps out of history, and the egress proxy can inject them server-side so an
-  artifact uses a credential without ever seeing it. What it is *not* is
-  encryption at rest: root, and anyone who can read the file, can read the
-  secret. Full-disk encryption and a real encrypted store (see the roadmap in
+  creator-owned files that `kb-syncd` refuses to sync and `.gitignore` keeps out
+  of history, and the egress proxy can inject them server-side so an artifact
+  uses a credential without ever seeing it. They are born `0600` — and stay that
+  way, whatever the folder around them says, until the owner of the `_secrets`
+  folder shares it deliberately (the share records that decision as a
+  `user.kb_secrets_shared` xattr on the folder, which is the only thing that
+  lets a later key inherit an audience). A share can then hand a credential to
+  named people, to a project group, or to the folder above — the containment
+  guarantees do not depend on who may open it. What it is *not* is encryption at
+  rest: root, and anyone who can read the file, can read the secret. Full-disk encryption and a real encrypted store (see the roadmap in
   [DEVELOPING.md](DEVELOPING.md)) are still worth having.
 - **`kb-convert` parses untrusted binaries.** Anything a user uploads (docx,
   pptx, xlsx, pdf) is fed to third-party parsers. It runs as the non-root

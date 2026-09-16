@@ -695,20 +695,24 @@ def _viewer_group(edit_group: str) -> str:
     return (edit_group[:29] + "-v") if not edit_group.endswith("-v") else edit_group
 
 
-def _walk_repo(root: Path):
-    """Every non-symlink path under `root`, secrets excluded. Sharing must never
-    reach into a `_secrets/` folder: those are listable by the team on purpose,
-    while their contents are owner-only, and a recursive grant would publish
-    exactly the thing that must not be."""
+def _walk_repo(root: Path, secrets: bool = False):
+    """Every non-symlink path under `root`, secrets excluded by default.
+
+    Sharing a folder must never reach *sideways* into a `_secrets/` folder
+    inside it: the folder is listable by the team on purpose, and a recursive
+    grant would publish the very thing that must not be published. Sharing the
+    `_secrets` FOLDER ITSELF is the one case where its contents are exactly
+    what the owner means (`secrets=True`) — a share that stopped at the folder
+    would grant a team the right to list credentials they still cannot read."""
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = [d for d in dirnames
-                       if not common.is_secret_path(str(Path(dirpath) / d))
+                       if (secrets or not common.is_secret_path(str(Path(dirpath) / d)))
                        and not os.path.islink(os.path.join(dirpath, d))]
         for n in dirnames:
             yield Path(dirpath) / n, True
         for n in filenames:
             f = Path(dirpath) / n
-            if common.is_secret_path(str(f)) or f.is_symlink():
+            if (not secrets and common.is_secret_path(str(f))) or f.is_symlink():
                 continue
             yield f, False
 
@@ -783,7 +787,11 @@ def _share_state(p: Path, rel: str, user: str) -> dict:
         "viewer_group": vg if vg in {g for g in named_g} else None,
         "secret": common.is_secret_path(rel),
         "people": people,
-        "can_edit": _owns_or_admin(p, user),
+        # A secret is its owner's alone to widen — an admin is not the owner
+        # here (see fs_share_set), so the panel must not offer them a Save the
+        # hub will refuse.
+        "can_edit": _owns_or_admin(p, user) and (owner == user
+                                                 or not common.is_secret_path(rel)),
         "advanced": {"mode": oct(stat.S_IMODE(st.st_mode))[2:], "owner": owner,
                      "group": group, "acls": _parse_acl(p)},
     }
@@ -808,13 +816,21 @@ def _grant_indexer(tfd: int, is_dir: bool) -> None:
 
 
 def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
-                 file_bits: int, indexer: bool = False) -> int:
+                 file_bits: int, indexer: bool = False, every: bool = False) -> int:
     """Bring the descendants that were FOLLOWING this folder along to its new
     audience.
 
     Only children whose group still matches the old one are touched — anything
     carrying a different group is a deliberate override (a private note, a
     sub-team folder) and is left exactly as it is.
+
+    `every` drops that rule (and lets the walk enter the `_secrets` folder at
+    all), and only a `_secrets` folder uses it. Inside one,
+    a mismatched group is not somebody's decision: every key used to be born
+    owner-and-primary-group owned no matter where it sat, so honouring that
+    would mean sharing a secrets folder left the keys already in it invisible —
+    which is the whole complaint. Sharing a folder of credentials shares the
+    credentials in it.
 
     Both halves matter, and the second one is easy to miss: without the chgrp
     the new people can enter the folder and read nothing in it, and without
@@ -823,12 +839,12 @@ def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
     restricted to three people.
     """
     n = 0
-    for path, is_dir in _walk_repo(root):
+    for path, is_dir in _walk_repo(root, every):
         try:
             st = os.lstat(path)
-            if st.st_gid != old_gid:
+            if st.st_gid != old_gid and not every:
                 continue
-            if new_gid != old_gid:
+            if new_gid != st.st_gid:
                 os.chown(path, -1, new_gid, follow_symlinks=False)
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
                          | (os.O_DIRECTORY if is_dir else 0))
@@ -871,7 +887,8 @@ def _base_args(mode: int) -> list[str]:
             "-m", f"o::{_perm_str(mode & 7)}"]
 
 
-def _acl_walk(root: Path, extra_dir: list[str], extra_file: list[str]) -> int:
+def _acl_walk(root: Path, extra_dir: list[str], extra_file: list[str],
+              secrets: bool = False) -> int:
     """Apply an ACL change across a subtree, each item keeping its OWN base
     entries (so a private note inside a shared folder stays private), secrets
     excluded, every inode pinned.
@@ -880,7 +897,7 @@ def _acl_walk(root: Path, extra_dir: list[str], extra_file: list[str]) -> int:
     group is first bound to a folder; adding or removing a viewer afterwards is
     a gpasswd on that group and touches no files at all."""
     n = 0
-    for path, is_dir in _walk_repo(root):
+    for path, is_dir in _walk_repo(root, secrets):
         try:
             st, entries = common.stat_and_acl(path)
             args = _base_args(common.effective_mode(st, entries)) + (extra_dir if is_dir else extra_file)
@@ -905,8 +922,21 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
     scope = data.get("scope")
     if scope not in ("everyone", "people", "private", "inherit"):
         raise ValueError("scope must be everyone, people, private or inherit")
-    if common.is_secret_path(rel) and scope != "private":
-        raise ValueError("a file under _secrets/ is owner-only by design")
+    # `_secrets/` used to refuse every scope but "private", which read as a
+    # guarantee and was not one: the same grant could always be made through
+    # /fs/props, and a team with a shared project had no way to hand each other
+    # a credential at all. What actually contains a secret is elsewhere and is
+    # untouched by this — never in git, never in the index (the indexer prunes
+    # `_secrets` before it walks in), never through the CRDT relay. So the panel
+    # shares them like anything else, with two differences kept below: the
+    # indexer is never made a member of a secret's audience, and a `_secrets`
+    # folder brings ALL of its contents along (see _rehome_tree).
+    secret = common.is_secret_path(rel)
+    # A `_secrets` FOLDER is where the decision lives: while it is unshared,
+    # every key born inside it is owner-only no matter how open the folder
+    # around it happens to be (see common.born_closed). Sharing it here is what
+    # says otherwise — so the mark goes on with the share and comes off with it.
+    secret_root = common.is_secret_root(rel)
 
     st0, entries0 = common.stat_and_acl(p)
     before_u, before_g = _named_effective(entries0)
@@ -936,28 +966,38 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
            "group": old_group, "share_with": []}
     try:
         if scope == "inherit":
+            if secret_root:
+                common.set_secrets_shared(tfd, True)
             os.close(tfd)
             tfd = None
-            common.reset_audience_tree(p)
+            # "Same as the folder it's in", asked for deliberately — the one
+            # thing that may open a `_secrets` folder up to its project, which
+            # is exactly what a team that shares credentials wants and could
+            # not have before.
+            common.reset_audience_tree(p, secret_root_follows=common.is_secret_root(rel))
             out["group"] = (grp.getgrgid(os.lstat(p).st_gid).gr_name
                             if _grp_ok(os.lstat(p).st_gid) else "")
             return out
 
         if scope == "private":
+            if secret_root:
+                common.set_secrets_shared(tfd, False)
             for attr in ((_ACL_ACCESS, _ACL_DEFAULT) if is_dir else (_ACL_ACCESS,)):
                 try:
                     os.removexattr(tfd, attr)
                 except OSError:
                     pass
             os.fchmod(tfd, 0o700 if is_dir else 0o600)
-            if not common.is_secret_path(rel):
+            if not secret:
                 _grant_indexer(tfd, is_dir)
             if is_dir:
                 out["regrouped"] = _rehome_tree(p, old_gid, old_gid, 0o2000, 0o000,
-                                                indexer=not common.is_secret_path(rel))
+                                                indexer=not secret, every=secret)
             return out
 
         if scope == "everyone":
+            if secret_root:
+                common.set_secrets_shared(tfd, True)
             gid = grp.getgrnam(EVERYONE_GROUP).gr_gid
             mode = 0o2775 if is_dir else 0o664
             os.fchown(tfd, -1, gid)
@@ -970,7 +1010,8 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
             _acl_apply_fd(tfd, is_dir, args)
             out["group"] = EVERYONE_GROUP
             if is_dir and gid != old_gid:
-                out["regrouped"] = _rehome_tree(p, old_gid, gid, 0o2075, 0o064)
+                out["regrouped"] = _rehome_tree(p, old_gid, gid, 0o2075, 0o064,
+                                                every=secret)
                 out["reaped"] = _reap_orphan_groups()
             return out
 
@@ -984,7 +1025,7 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
                 args += ["-m", f"u:{u}:rw"]
             for u in sorted(viewers):
                 args += ["-m", f"u:{u}:r"]
-            if not common.is_secret_path(rel):
+            if not secret:
                 args += ["-m", f"u:{INDEXER_USER}:r"]
             for u in sorted(set(before_u) - editors - viewers - {INDEXER_USER}):
                 args += ["-x", f"u:{u}"]
@@ -994,6 +1035,8 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
             out["share_with"] = [("u", u) for u in sorted(editors | viewers)]
             return out
 
+        if secret_root:
+            common.set_secrets_shared(tfd, bool(editors or viewers))
         # A folder: the owning group carries "can edit" so that adding a person
         # later is one gpasswd and no filesystem walk at all.
         # Mutate a group ONLY from the folder that owns it. Being a group we
@@ -1027,7 +1070,7 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
         # owner only through the group they were not in. Skip system owners —
         # files made with "New document" take the folder's owner, which under
         # company/ is root.
-        members = editors | {INDEXER_USER}
+        members = editors | (set() if secret else {INDEXER_USER})
         if owner and lst.st_uid >= 1000:
             members.add(owner)
         out["changed"] |= _set_group_members(g, members)
@@ -1044,7 +1087,8 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
             except KeyError:
                 if not _GROUP_RE.match(vg) or _run(["groupadd", vg]).returncode != 0:
                     raise OSError(f"groupadd {vg} failed")
-            out["changed"] |= _set_group_members(vg, viewers | {INDEXER_USER})
+            out["changed"] |= _set_group_members(
+                vg, viewers | (set() if secret else {INDEXER_USER}))
 
         args = _base_args(0o2770)
         args += ["-m", f"g:{vg}:rx"] if bind_viewers else (
@@ -1057,12 +1101,15 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
         os.fchmod(tfd, 0o2770)      # setfacl rewrote the mode's group bits (mask)
 
         if gid != old_gid:
-            out["regrouped"] = _rehome_tree(p, old_gid, gid, 0o2070, 0o060)
+            out["regrouped"] = _rehome_tree(p, old_gid, gid, 0o2070, 0o060,
+                                            every=secret)
             out["reaped"] = _reap_orphan_groups()
         if bind_viewers and vg not in before_g:
-            out["acl_walked"] = _acl_walk(p, ["-m", f"g:{vg}:rx"], ["-m", f"g:{vg}:r"])
+            out["acl_walked"] = _acl_walk(p, ["-m", f"g:{vg}:rx"], ["-m", f"g:{vg}:r"],
+                                          secrets=secret_root)
         elif not bind_viewers and vg in before_g:
-            out["acl_walked"] = _acl_walk(p, ["-x", f"g:{vg}"], ["-x", f"g:{vg}"])
+            out["acl_walked"] = _acl_walk(p, ["-x", f"g:{vg}"], ["-x", f"g:{vg}"],
+                                          secrets=secret_root)
             _set_group_members(vg, set())
         out["share_with"] = [("g", g)] + ([("g", vg)] if bind_viewers else [])
         return out
@@ -1518,11 +1565,12 @@ class Hub:
 
     def _create_inheriting(self, rel: str, data: bytes | None, exclusive: bool = False,
                            owner: tuple[int, int] | None = None,
-                           force_mode: int | None = None) -> str:
+                           force_mode: int | None = None,
+                           creator: int | None = None) -> str:
         """Create a file with its parent's audience and write `data` to it.
         Thin wrapper over `_open_inheriting` — see there for the symlink and
         mode rules. Returns the owner's name."""
-        own, fd = self._open_inheriting(rel, exclusive, owner, force_mode)
+        own, fd = self._open_inheriting(rel, exclusive, owner, force_mode, creator)
         try:
             if data:
                 os.write(fd, data)
@@ -1532,14 +1580,20 @@ class Hub:
 
     def _open_inheriting(self, rel: str, exclusive: bool = False,
                          owner: tuple[int, int] | None = None,
-                         force_mode: int | None = None) -> tuple[str, int]:
+                         force_mode: int | None = None,
+                         creator: int | None = None) -> tuple[str, int]:
         """Create a file (owned by its PARENT's owner/group; needs root) WITHOUT
         following any symlink in the path — the parent dir is reached via
         openat/O_NOFOLLOW and the file is opened O_NOFOLLOW under that dir fd, so
         a symlink planted by a user cannot redirect this root write. Returns the
         owner's name and an OPEN WRITE FD, which the caller must close.
-        `owner`/`force_mode` override inheritance — used for `_secrets/` files,
-        which must be born private (creator-owned, 0600), never group-open.
+        `owner`/`force_mode` override inheritance outright. `creator` overrides
+        only the UID — used inside `_secrets/`, where the person who put the
+        credential there stays the one who controls it (nothing else may widen
+        it, not even an admin), while its GROUP and MODE still follow the
+        folder. That is what makes sharing a `_secrets` folder mean something:
+        while the folder is closed, so is the key; once its owner shares the
+        folder, keys added to it are readable by exactly that audience.
 
         The fd is the point for a chunked upload: it is opened once, under a
         verified dir fd, and every later append goes to that inode no matter
@@ -1551,7 +1605,7 @@ class Hub:
         pfd = common.opendir_beneath(parent_rel)
         try:
             pst = os.fstat(pfd)
-            own = owner or (pst.st_uid, pst.st_gid)
+            own = owner or (pst.st_uid if creator is None else creator, pst.st_gid)
             flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
             flags |= os.O_EXCL if exclusive else os.O_TRUNC
             # common.birth_mode, not a local rule. The old one started from a
@@ -1560,7 +1614,7 @@ class Hub:
             # inside a private 0700 folder, 0o664 inside a 2770 team folder. It
             # also read st_mode's group bits, which on an ACL-bearing folder are
             # the MASK rather than the group's own permission.
-            secret = common.is_secret_path(rel)
+            secret = common.born_closed(pfd, rel)
             mode = (force_mode if force_mode is not None
                     else common.birth_mode(pfd, False, rel))
             # Where the folder carries a default ACL the kernel's inheritance is
@@ -1612,11 +1666,12 @@ class Hub:
             return web.json_response({"error": "no write access to folder"}, status=403)
         rel_clean = rel_resolved
         try:
-            # secrets are born private: creator-owned, 0600 — shared deliberately
+            # A secret stays its creator's to control (only the owner may widen
+            # one), but takes the audience of the `_secrets` folder it lands in
+            # — which is owner-only until that folder is deliberately shared.
             owner = self._create_inheriting(
                 rel_clean, None, exclusive=True,
-                owner=(uid, pwd.getpwnam(user).pw_gid) if secret else None,
-                force_mode=0o600 if secret else None)
+                creator=uid if secret else None)
         except FileExistsError:
             return web.json_response({"error": "already exists"}, status=409)
         except OSError as e:
@@ -1648,9 +1703,7 @@ class Hub:
         secret = common.is_secret_path(rel_clean)
         try:
             owner = self._create_inheriting(
-                rel_clean, bytes(chunks),
-                owner=(uid, pwd.getpwnam(user).pw_gid) if secret else None,
-                force_mode=0o600 if secret else None)
+                rel_clean, bytes(chunks), creator=uid if secret else None)
         except OSError as e:
             return web.json_response({"error": str(e)}, status=500)
         return web.json_response({"ok": True, "path": rel_clean, "owner": owner})
@@ -1713,8 +1766,7 @@ class Hub:
             # this same folder, which carries the inode over untouched.
             _owner, fd = self._open_inheriting(
                 str(Path(dir_rel) / spool.name), exclusive=True,
-                owner=(uid, pwd.getpwnam(user).pw_gid) if secret else None,
-                force_mode=0o600 if secret else None)
+                creator=uid if secret else None)
         except (OSError, KeyError) as e:
             return web.json_response({"error": str(e)}, status=500)
         sess = self._uploads.add(user=user, dir_rel=dir_rel, name=name,
@@ -1950,6 +2002,16 @@ class Hub:
                 if kind not in ("user", "group") or not _NAME_RE.match(aname):
                     return web.json_response({"error": "bad acl entry"}, status=400)
                 _acl_apply_fd(tfd, is_dir, ["-x", f"{'u' if kind == 'user' else 'g'}:{aname}"])
+            # Advanced is the other way to widen a `_secrets` folder, and it has
+            # to record the same decision the panel does — otherwise keys added
+            # after a raw ACL grant would still be born owner-only and the grant
+            # would look like it had done nothing.
+            if common.is_secret_root(rel):
+                if data.get("acl_add") or data.get("group") or \
+                        data.get("visibility") in ("team", "company"):
+                    common.set_secrets_shared(tfd, True)
+                elif data.get("visibility") == "private":
+                    common.set_secrets_shared(tfd, False)
         except KeyError:
             return web.json_response({"error": "no such user or group"}, status=400)
         except (OSError, subprocess.SubprocessError) as e:
@@ -2043,6 +2105,15 @@ class Hub:
             return web.json_response({"error": "only the owner (or an admin) can change who has access"},
                                      status=403)
         rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+        # The same exception /fs/props makes: a secret is the OWNER's to widen.
+        # ADMIN_GROUP is "sudo" here, so without this any platform admin could
+        # hand a colleague's credential around from the root hub. Closing one
+        # (scope "private") stays available to an admin, as it always was.
+        if (common.is_secret_path(rel) and _owner_name(p) != user
+                and data.get("scope") != "private"):
+            return web.json_response(
+                {"error": "only the owner can widen access to something under _secrets/"},
+                status=403)
         try:
             res = await asyncio.to_thread(_share_apply, p, rel, data, user)
         except ValueError as e:

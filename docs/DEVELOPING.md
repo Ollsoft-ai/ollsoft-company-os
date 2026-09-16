@@ -119,10 +119,10 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
 These were designed during the build (some deliberately deferred) and are the
 natural next steps.
 
-- **Encrypted secrets store.** `_secrets/` already exists: creator-owned `0600`
-  files that syncd refuses to sync, kept out of git history, with server-side
-  injection through the egress proxy so an agent uses a credential without seeing
-  it. What is *not* built is encryption at rest — a `passage`/age tree with
+- **Encrypted secrets store.** `_secrets/` already exists: creator-owned files,
+  born `0600` and shareable from the permissions panel like anything else, that
+  syncd refuses to sync, kept out of git history, with server-side injection
+  through the egress proxy so an agent uses a credential without seeing it. What is *not* built is encryption at rest — a `passage`/age tree with
   recipients-per-folder matching the sharing tiers, `secret://` reveal links
   resolved per-viewer, and a rotation runbook.
 - **True logout / session revocation.** A server-side session store or a
