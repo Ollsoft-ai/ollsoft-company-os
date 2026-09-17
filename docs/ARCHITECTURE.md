@@ -343,6 +343,26 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   container, so switching is instant and **background artifacts keep running**
   (their bridge messages are routed by `ev.source` to the tab they came from, and
   the file actions stay scoped to *that* artifact's folder, not the focused one).
+- **Deep links — the open document IS the URL**: `/company/notes.md` in the
+  address bar opens that file (hub route `deep_link`, which serves the same
+  `app.html` for every repo path and bounces an unauthenticated visitor through
+  `/login?next=…`), and switching tabs keeps the URL in step, so a document's URL
+  can be pasted straight to a colleague. Three orderings matter and each of them
+  was a bug once:
+  (a) boot reads `location` **before** `restoreSession()`, because restore
+  activates every tab it reopens and `activateTab → syncUrl()` `replaceState`s
+  the bar onto it — reading afterwards opened the restored document instead of
+  the link someone sent;
+  (b) `syncUrl` only ever *replaces* while `_restoring` or `_settling` (boot) is
+  set, so arriving on a link adds no history entry to go Back from;
+  (c) a session that expires mid-visit carries the current path into
+  `/login?next=…` too, rather than dropping the reader on `/`.
+  The whole mechanism is gated on `_deepLinksOk`, a `HEAD` probe at boot: against
+  a hub too old to route repo paths, rewriting the URL would turn F5 into a 404.
+  Regression cover lives in `tests/e2e/test_ui_ux_round.py` — note that a
+  deep-link test in a *fresh* browser context exercises the one case that never
+  broke, so the ordering test deliberately reuses a context that already has a
+  saved session.
 - **Editor panes (split view)**: the tab strip and editor host are per **pane**;
   dragging a tab onto another pane moves it, onto a pane's left/right edge splits
   a new column off. `tabs` stays the one flat list (a tab's `paneId` says which

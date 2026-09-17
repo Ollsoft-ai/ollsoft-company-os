@@ -2975,6 +2975,11 @@ function pathFromUrl() {
 // it does (old hub still running), rewriting the URL would make F5 a 404.
 let _deepLinksOk = false;
 
+// True until boot has finished settling the address bar. Opening the deep link
+// you arrived on is not a navigation you can go Back from — without this it
+// pushed an entry, so Back landed on the same app and looked stuck.
+let _settling = true;
+
 function syncUrl(replace) {
   if (!_deepLinksOk) return;
   const want = active
@@ -2985,7 +2990,7 @@ function syncUrl(replace) {
   // NB: `history` in this module is CodeMirror's history extension (imported
   // from @codemirror/commands) — always reach the browser API via window.history.
   try {
-    if (_restoring || replace) window.history.replaceState(st, "", want);
+    if (_restoring || _settling || replace) window.history.replaceState(st, "", want);
     else window.history.pushState(st, "", want);
   } catch (e) { /* about:blank in tests */ }
 }
@@ -6691,7 +6696,12 @@ function sessionExpired() {
   // replace(), not href: the dead app must not sit in the back-stack waiting
   // to be returned to. Documents are CRDT-synced continuously, so there is no
   // unsaved editor state to lose here.
-  location.replace("/login");
+  // Carry the document you were on through the login, exactly as the hub does
+  // for an unauthenticated deep link (hub.deep_link) — expiring mid-session
+  // used to drop you back on "/" and lose the file you had open.
+  const here = location.pathname;
+  const back = pathFromUrl() ? "?next=" + encodeURIComponent(here) : "";
+  location.replace("/login" + back);
 }
 
 // ---- boot -----------------------------------------------------------------
@@ -6777,9 +6787,14 @@ async function boot() {
     fetch("/api/cron").then((r) => r.json())
       .then((j) => { backendV = j.v || 0; }).catch(() => { /* old backend */ });
   }
+  // Read the pasted URL BEFORE restoring: restoreSession() activates every tab
+  // it reopens, and activateTab → syncUrl() replaceState()s the address bar onto
+  // that tab — so reading location afterwards yields the RESTORED path, not the
+  // link someone sent you. That is what made a shared link land on whatever
+  // document happened to be open last time.
+  const deep = pathFromUrl();
   await restoreSession();   // reopen tabs + reattach terminals from last time
   // deep link: a shared /company/….md URL wins over the restored active tab
-  const deep = pathFromUrl();
   if (deep) await openDeepLink(deep);
   // On a phone the file list is the home screen — but only when there is no
   // home to come back to. Restoring a document or a terminal means the drawer
@@ -6788,6 +6803,7 @@ async function boot() {
   if (isMobile() && !tabs.length && $("#terminal-panel").hidden)
     document.body.classList.add("nav-open");
   syncUrl(true);   // boot never adds a history entry, it just settles the URL
+  _settling = false;
   window.addEventListener("popstate", () => {
     const p = pathFromUrl();
     if (p) openDeepLink(p);

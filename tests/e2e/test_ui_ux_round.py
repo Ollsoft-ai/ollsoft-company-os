@@ -11,7 +11,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, dlg_fill, login, open_doc, doc_text
+from conftest import BASE, dlg_fill, login, open_doc, doc_text, wait_path
 from kbenv import CREDS, U, doc
 
 TAG = str(int(time.time()))
@@ -186,6 +186,41 @@ def test_shared_url_lands_on_the_file_after_login(browser, box):
     page.click('button[type="submit"]')
     page.wait_for_function(
         f'() => window.__kbpath === "{DIR}/typing.md"', timeout=10000)
+    ctx.close()
+
+
+def test_shared_url_beats_the_restored_session(browser, box):
+    """A pasted link must win over the tabs you had open last time.
+
+    The other two deep-link tests run in a virgin context, where localStorage is
+    empty and restoreSession() returns immediately — which is exactly the one
+    case that never broke. With a restored session, every reopened tab is
+    activated, and activateTab → syncUrl() replaceState()s the address bar onto
+    it; boot used to read location AFTER that and open the restored document
+    instead of the link. So this test insists on a context that already has a
+    saved session, and on a path with a space and a non-ASCII character in it,
+    which is what real folders here look like."""
+    if not hub_has_deep_links():
+        pytest.skip("hub not yet restarted with deep-link routes")
+    sub = f"{DIR}/💱 Broker"
+    assert box.post("/api/fs/mkdir", json={"path": sub}).status_code == 200
+    assert box.post("/api/file", json={"path": f"{sub}/fixes.md"}).status_code == 200
+    box.post("/api/artifact/write",
+             json={"path": f"{sub}/fixes.md", "content": "# fixes\n\n"})
+
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    open_doc(page, f"{DIR}/typing.md")        # this is what gets restored
+    page.wait_for_function(
+        '(p) => JSON.parse(localStorage.getItem("kbOpen") || "{}").active === p',
+        arg=f"{DIR}/typing.md", timeout=6000)
+
+    # Same context: the browser carries kbOpen into the next page load, exactly
+    # as clicking a colleague's link in a browser you already use does.
+    page.goto(f"{BASE}/{sub}/fixes.md")
+    wait_path(page, f"{sub}/fixes.md", timeout=15000)
+    # the restored tab is still there — the link focuses, it does not wipe
+    assert page.locator(".tab").count() >= 2
     ctx.close()
 
 
