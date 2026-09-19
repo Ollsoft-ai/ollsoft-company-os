@@ -18,11 +18,18 @@ guessed; re-measure before trusting them at a different scale.
    hold live PTY shells (someone's tmux-equivalent), so an idle-reaper must
    check for child shells before killing — the `bounce_backends.py` rule,
    hub-side. **Open.**
-3. **Tree polling is O(users × full repo walk).** Every client triggers a full
-   server-side `os.scandir` walk every 4 s (~150 ms CPU / 205 KB JSON at
-   1,119 nodes, no cache, no ETag). ~25 users saturate one core of four.
-   Fix shape: short-TTL per-backend cache, or an mtime-keyed ETag so the poll
-   is usually 304. **Open.**
+3. ~~**Tree polling is O(users × full repo walk).**~~ **Fixed 2026-09-19.**
+   Was a full server-side walk per client per 4 s — measured **580 ms / 640 KB
+   at 2,607 entries**, on the per-user event loop, so each poll also froze
+   that user's terminal. Now (`user_server.tree`): a ~37 ms signature walk
+   (lstat only, ctime covers permissions) decides whether anything moved, the
+   real walk (Path-free, **183 ms**, same bytes) runs only then, and the
+   JSON's hash is an `ETag` the client sends back — an unchanged poll is a 304
+   with no body. One signature per backend per 2 s at most, so N tabs of one
+   user cost one; everything blocking in the executor. Cost now follows change
+   rate, not users × tabs. Still O(entries) per signature: past ~20k files the
+   next step is a lazy per-folder tree (§ ARCHITECTURE, *The tree is cheap to
+   ask for again*).
 4. ~~**RLS flat tax grows with file count.**~~ **Fixed 2026-08-07.** Was
    `kb.can_read()` over all of `kb.files` once per statement — measured
    **0.34 s at 655 files**, linear, paid by every search keystroke, task list

@@ -41,12 +41,15 @@ for (const f of ["app.html", "login.html", "style.css",
   cpSync(`assets/${f}`, `static/${f}`);
 }
 
-// Cache-bust every deploy: static assets are served without Cache-Control, so
-// browsers (and any CDN edge, which caches .js/.css by extension) may hold the
-// old bundle. Stamping ?v= into the copied HTML makes each build a fresh URL —
-// no service restart or cache purge ever needed for a frontend deploy.
+// Cache-bust every deploy: every /static URL is served `immutable` for a year
+// (hub.static_cache), which is only honest because each build makes every one
+// of them a NEW URL. Stamping ?v= into the copied HTML — and into the font
+// urls inside style.css, so the preload in app.html and the @font-face request
+// are the same string and the browser fetches the font once — means a deploy
+// lands the instant app.html (served no-store) points at the new stamp. No
+// service restart or cache purge is ever needed for a frontend deploy.
 const v = Date.now();
-for (const f of ["static/app.html", "static/login.html"]) {
+for (const f of ["static/app.html", "static/login.html", "static/style.css"]) {
   writeFileSync(f, readFileSync(f, "utf8").replace(/\?v=\d+/g, "?v=" + v));
 }
 console.log("build complete (assets stamped v=" + v + ")");

@@ -2798,6 +2798,29 @@ class Hub:
         return server_ws
 
 
+# Every URL under /static carries a ?v= stamp that build.mjs rewrites on each
+# build — in app.html, and on the font urls inside style.css — so a changed file
+# is a NEW URL and the old one can be cached for good: the browser never spends
+# a round trip revalidating a bundle it already has (with no Cache-Control at
+# all it revalidated every asset on every reload, each one a full trip through
+# the tunnel before a line of JS could run), and a deploy still lands the
+# instant app.html — served no-store — points at the new stamp. The stamp is
+# what makes `immutable` honest; without it this header would pin a stale
+# bundle for a year. The HTML shells are the exception: they CARRY the stamps
+# and are served no-store by their own routes, so a direct fetch of
+# /static/app.html must not get a year either.
+STATIC_CACHE = "public, max-age=31536000, immutable"
+
+
+@web.middleware
+async def static_cache(request: web.Request, handler):
+    resp = await handler(request)
+    if (request.path.startswith("/static/") and not request.path.endswith(".html")
+            and resp.status in (200, 304)):
+        resp.headers["Cache-Control"] = STATIC_CACHE
+    return resp
+
+
 def make_app() -> web.Application:
     # client_max_size must match the per-user backend (2 GiB): the hub both
     # accepts /fs/upload directly AND buffers proxied /api/upload bodies, so
@@ -2815,7 +2838,8 @@ def make_app() -> web.Application:
             hub._egress_save(cfg if isinstance(cfg, dict) else {})
     except OSError:
         pass
-    app = web.Application(client_max_size=2 * 1024 * 1024 * 1024)
+    app = web.Application(client_max_size=2 * 1024 * 1024 * 1024,
+                          middlewares=[static_cache])
     app["hub"] = hub
     app.router.add_get("/login", hub.login_page)
     app.router.add_post("/login", hub.do_login)

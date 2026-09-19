@@ -15,7 +15,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, CREDS
+from conftest import BASE, CREDS, login, open_doc
 from kbenv import U, doc
 
 LAT = 1200          # ms added to every request while a slow phase is under test
@@ -201,5 +201,68 @@ def test_reduced_motion_still_communicates_but_does_not_spin(browser):
         assert page.eval_on_selector(
             '.palette-searching .upspin',
             "e => getComputedStyle(e).animationName") == "none"
+    finally:
+        ctx.close()
+
+
+# --- boot -------------------------------------------------------------------
+
+def test_boot_restores_tabs_and_terminal_before_the_tree_arrives(browser, scratch_doc):
+    """The tree is the slow boot request (a permission-checked walk of the
+    repo) and it used to be awaited in front of restoreSession(), which reads
+    nothing but localStorage. Hold the tree indefinitely and the tabs and the
+    terminal must still come back — and when the tree finally lands, nothing
+    already on screen may move."""
+    path = doc(f"{scratch_doc}.md")          # the fixture yields the bare name
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, USER)
+    try:
+        page.wait_for_selector(f'.tree-item[data-path="{path}"]', timeout=30000)
+        open_doc(page, path)
+        page.click('[data-testid="toggle-term"]')
+        page.wait_for_selector("#terminal .xterm-rows", timeout=10000)
+        page.wait_for_timeout(500)              # let saveSession() record both
+
+        held = []
+        def hold(route):
+            # the FIRST tree request is held until the test lets go; later
+            # polls (there are none until boot finishes) pass through
+            if held:
+                route.continue_()
+            else:
+                held.append(route)
+        page.route("**/api/tree*", hold)
+        page.reload()
+        page.wait_for_selector(f'.tab[data-path="{path}"]', timeout=4000)
+        page.wait_for_selector("#terminal-panel:not([hidden])", timeout=4000)
+        assert held, "the tree request never left — this proves nothing"
+        assert page.locator("#tree .tree-item").count() == 0, \
+            "the tree is on screen, so the tabs were not measured ahead of it"
+        before = page.locator("#editor").bounding_box()
+
+        held[0].continue_()
+        page.wait_for_selector(f'.tree-item[data-path="{path}"]', timeout=15000)
+        after = page.locator("#editor").bounding_box()
+        assert before == after, f"the editor moved when the tree landed: {before} -> {after}"
+        # and the tree caught up with the restored tab: highlighted and revealed
+        row = page.locator(f'.tree-item[data-path="{path}"]')
+        assert "active" in (row.get_attribute("class") or "")
+        assert row.is_visible()
+    finally:
+        ctx.close()
+
+
+def test_the_tree_poll_is_conditional(browser):
+    """After the first full answer every poll carries the ETag back and, with
+    nothing changed, is a 304 — no body to parse, every 4 s, per tab."""
+    ctx = browser.new_context()
+    page = login(ctx, USER)
+    try:
+        with page.expect_response(lambda r: "/api/tree" in r.url and r.status == 304,
+                                  timeout=12000) as got:
+            pass
+        req = got.value.request
+        assert req.headers.get("if-none-match"), "the poll did not send the ETag back"
+        assert got.value.headers.get("etag") == req.headers.get("if-none-match")
     finally:
         ctx.close()

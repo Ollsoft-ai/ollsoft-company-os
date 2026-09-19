@@ -69,7 +69,9 @@ there is no permission code here to get wrong.
 - `GET /api/tree` — walks `/srv/kb`, returning only entries the user can access
   (`os.access` as the user), with per-node `access:{read,write}`. Folders come
   first, ordered by name; files follow newest-first and carry an `mtime` (epoch
-  seconds) that the sidebar prints as a subtle last-modified stamp.
+  seconds) that the sidebar prints as a subtle last-modified stamp. Answers with
+  an `ETag` and honours `If-None-Match` → 304; `?fresh=1` skips the signature
+  hold (see *The tree is cheap to ask for again*, §8).
 - `GET/POST /api/file` — read / create a document (as the user).
 - `POST /api/fs/mkdir`, `POST /api/fs/delete` — create a folder / delete a file
   or folder (recursive), **as the user** — same authority as `mkdir`/`rm -r` in
@@ -402,6 +404,46 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   container, so switching is instant and **background artifacts keep running**
   (their bridge messages are routed by `ev.source` to the tab they came from, and
   the file actions stay scoped to *that* artifact's folder, not the focused one).
+- **Boot paints what it already knows first.** `boot()` used to be a serial
+  chain — a deep-link probe, whoami, the tree, `/admin/me`, and only then
+  `restoreSession()` — so the tab bar and the terminal panel arrived ~2 s after
+  the page looked ready, each one shoving the editor when it landed. Measured:
+  the tree alone was 580 ms + 640 KB, and `restoreSession()` never reads it (it
+  reopens tabs and terminals from `localStorage`). Now the tree fetch and the
+  deep-link probe leave immediately, only whoami is awaited (the restore needs
+  `canShell`, and whoami now carries the pty protocol `v` so a restored
+  terminal never races the old `/api/cron` answer into a hard reset), the
+  restore starts, and the tree paints whenever it lands — `restoreTreeState()`
+  runs inside whoami, so folders are open/closed as you left them on the first
+  paint. `/admin/me` is fire-and-forget; the probe is awaited only right before
+  the deep link and `syncUrl` need it. The two orderings that were bugs before
+  (read `location` before restoring; only ever `replaceState` while settling)
+  are unchanged. `app.html` `modulepreload`s the bundle and preloads the three
+  first-paint fonts (`crossorigin`, same `?v=` as `style.css`, or it is a
+  second download) so text does not reflow when IBM Plex arrives.
+- **The tree is cheap to ask for again.** Every open tab polls `/api/tree`
+  every 4 s, and it was a full permission-checked walk each time — 580 ms of
+  which more than half was `pathlib.relative_to` building objects to compute a
+  string `scandir` already provides — run *on* the per-user event loop, so a
+  poll froze that user's terminal and every other request for its duration.
+  The backend (`user_server.tree`) now splits the question: a **signature
+  walk** (scandir + one `lstat` per entry, no ACL reads: name, mode, owner,
+  size, mtime, ctime — `chmod`/`setfacl` bump ctime, so permissions are covered
+  without an xattr) at ~37 ms decides whether anything moved, the real walk
+  (~180 ms, Path-free, byte-identical output) runs only when it did, and the
+  cached JSON's hash is the `ETag`. A poll with a matching `If-None-Match` is a
+  304; the client sends it with `cache: "no-store"` so the browser's own cache
+  does not hand back a 200 to re-parse. The signature is checked at most once
+  per `TREE_SIG_TTL` (2 s) per backend — all of one user's tabs share the
+  process, so N tabs cost one check — and any non-GET `/api/*` that succeeds
+  clears the hold via middleware, so your own new file is in the next poll
+  without enumerating every mutating handler. Everything blocking runs in the
+  executor. Not inotify, deliberately: a recursive `watchfiles` watch over the
+  repo as an unprivileged user stayed silent when tried, inotify instances are
+  capped per uid (31 of 128 in use here), and inotify drops events under load;
+  the signature never lies and needs no fallback. Cost now scales with change
+  rate, not users × tabs; the signature is still O(entries), which is the
+  hand-off point to a lazy per-folder tree past ~20k files.
 - **The tab strip is Chrome's, for Chrome's reason.** Every tab in a strip is the
   same width (`flex: 1 1 0`, capped at `--tab-max` so two tabs do not stretch
   across the window, floored at `min-width` so they stop shrinking and the strip

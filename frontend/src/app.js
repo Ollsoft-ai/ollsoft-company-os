@@ -1992,6 +1992,9 @@ async function loadWhoami() {
   const r = await fetch("/api/whoami");
   const j = await r.json();
   canShell = j.shell !== false;
+  // Known BEFORE any terminal is restored — a restore that raced the separate
+  // /api/cron answer reattached the old way, a hard reset instead of replay.
+  if (typeof j.v === "number") { backendV = j.v; _bvAt = Date.now(); }
   $("#whoami").textContent = j.user + " · uid " + j.uid;
   $("#whoami-m").textContent = j.user + " · uid " + j.uid;
   $("#term-user").textContent = j.user;
@@ -2065,9 +2068,35 @@ function applyDefaultCollapse(nodes) {
   }
 }
 
+// The tree's ETag from its last full answer, sent back as If-None-Match. An
+// unchanged tree — which is nearly every poll — is then a 304: no 640 KB
+// parsed, no re-stringified diff, no Set of every path rebuilt, every 4 s,
+// per tab. `cache: "no-store"` keeps the browser's own HTTP cache out of it:
+// left in, the browser answers the 304 from ITS copy and hands us a 200 to
+// parse all over again. A backend from before the ETag simply answers 200
+// every time, exactly as it always did.
+let _treeEtag = null;
+
+async function fetchTree(fresh) {
+  const headers = _treeEtag ? { "If-None-Match": _treeEtag } : {};
+  const r = await fetch("/api/tree" + (fresh ? "?fresh=1" : ""), { headers, cache: "no-store" });
+  if (r.status === 304) return null;              // what we have is current
+  if (!r.ok) throw new Error("tree " + r.status);
+  _treeEtag = r.headers.get("ETag");
+  return r.json();
+}
+
 async function loadTree(force) {
   let j;
-  try { j = await (await fetch("/api/tree")).json(); } catch (e) { return; }
+  try { j = await fetchTree(!!force); } catch (e) { return; }
+  applyTree(j, force);
+}
+
+function applyTree(j, force) {
+  if (j === null) {                                // 304, or the fetch failed
+    if (force && _lastTreeData) rerenderTree();   // "reload" still repaints
+    return;
+  }
   const newPaths = collectTreePaths(j.tree, new Set());
   pruneVanishedTabs(newPaths);
   _lastTreePaths = newPaths;
@@ -7037,10 +7066,16 @@ async function boot() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && !_sessionGone) loadTree(false);
   });
-  try { _deepLinksOk = (await fetch("/company", { method: "HEAD" })).ok; }
-  catch (e) { /* old hub — URLs stay at / until it restarts */ }
+  // Everything the first paint needs leaves NOW, together. The tree is the
+  // slow one — a permission-checked walk of the whole repo — and it used to
+  // sit, awaited, in front of restoring your tabs and terminals, which need
+  // nothing but localStorage and never read it. That wait is what put the tab
+  // bar and the terminal panel on screen two seconds late, shoving the editor
+  // around under a page that already looked ready. Whoami IS awaited: the
+  // restore needs canShell, and a viewer account must never try to open a pty.
+  const treeP = fetchTree().catch(() => null);
+  const deepLinksP = fetch("/company", { method: "HEAD" }).then((r) => r.ok, () => false);
   await loadWhoami();
-  await loadTree();
   wireSearch(); wireNewDoc(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
   wireTabStrip();
   wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();
@@ -7082,26 +7117,31 @@ async function boot() {
   }
   $("#cron-btn").addEventListener("click", openCron);
   // Show the Admin panel to platform admins (sudo group) — and, network-section
-  // only, to users delegated write access on .claude/egress.json.
-  try {
-    const me = await (await fetch("/admin/me")).json();
-    let show = false;
-    if (me.admin) { isAdmin = true; show = true; }
-    else {
-      try { show = !!(await (await fetch("/admin/egress")).json()).can_edit; }
-      catch (e) { /* not delegated */ }
-    }
-    if (show) {
-      const b = $("#admin-btn");
-      b.hidden = false;
-      if (!isAdmin) b.textContent = "Network";
-      b.addEventListener("click", openAdmin);
-    }
-  } catch (e) { /* not admin */ }
-  loadLaunchers();
-  // learn the backend's pty protocol version (gates pings + offset replay);
-  // fire-and-forget — terminals opened before the answer use the safe fallback
-  if (canShell) {
+  // only, to users delegated write access on .claude/egress.json. Whether a
+  // button appears is not something the first paint waits two round trips for.
+  (async () => {
+    try {
+      const me = await (await fetch("/admin/me")).json();
+      let show = false;
+      if (me.admin) { isAdmin = true; show = true; }
+      else {
+        try { show = !!(await (await fetch("/admin/egress")).json()).can_edit; }
+        catch (e) { /* not delegated */ }
+      }
+      if (show) {
+        const b = $("#admin-btn");
+        b.hidden = false;
+        if (!isAdmin) b.textContent = "Network";
+        b.addEventListener("click", openAdmin);
+      }
+    } catch (e) { /* not admin */ }
+    // The launcher bar renders with isAdmin in hand — after the answer, so it
+    // paints once and right, rather than as a non-admin's until the 30 s poll.
+    loadLaunchers();
+  })();
+  // A backend from before whoami carried `v` still answers it on /api/cron;
+  // fire-and-forget, terminals opened before the answer use the safe fallback.
+  if (canShell && !backendV) {
     fetch("/api/cron").then((r) => r.json())
       .then((j) => { backendV = j.v || 0; }).catch(() => { /* old backend */ });
   }
@@ -7111,7 +7151,17 @@ async function boot() {
   // link someone sent you. That is what made a shared link land on whatever
   // document happened to be open last time.
   const deep = pathFromUrl();
-  await restoreSession();   // reopen tabs + reattach terminals from last time
+  const restoreP = restoreSession();   // tabs + terminals, from localStorage, now
+  // The tree paints whenever it lands — the restore has been running since the
+  // line above. restoreTreeState() ran inside loadWhoami, so the folders open
+  // and closed the way you left them on this first paint, not on a second.
+  applyTree(await treeP, false);
+  await restoreP;
+  // activateTab reveals the active file in the tree — a no-op while the tree
+  // was still on its way, so do it once now that both are here.
+  if (active && !isMobile() && !document.body.classList.contains("nav-hidden"))
+    revealActiveInTree(false);
+  _deepLinksOk = await deepLinksP;   // long resolved; awaited only where it matters
   // deep link: a shared /company/….md URL wins over the restored active tab
   if (deep) await openDeepLink(deep);
   // On a phone the file list is the home screen — but only when there is no

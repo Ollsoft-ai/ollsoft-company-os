@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import grp
@@ -68,8 +69,12 @@ async def _adb():
 async def whoami(request: web.Request) -> web.Response:
     # The definitive identity: who this process actually runs as (kernel truth),
     # not whatever header the hub claims. They must match.
+    # `v` rides along so the client knows the pty protocol before it restores a
+    # single terminal — it used to learn it from a separate /api/cron round trip
+    # that raced the restore, and a terminal that lost the race reattached the
+    # old way (a hard reset instead of an offset replay).
     return web.json_response({"user": ME, "uid": os.geteuid(), "shell": CAN_SHELL,
-                              "claimed": request.headers.get("X-KB-User")})
+                              "claimed": request.headers.get("X-KB-User"), "v": BACKEND_V})
 
 
 _NUM_RE = re.compile(r"(\d+)")
@@ -80,7 +85,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 28   # chunked uploads (/api/upload/*); _secrets contents follow their folder
+BACKEND_V = 29   # /api/tree: signature cache + ETag/304; whoami carries v
 
 
 def _name_key(name: str):
@@ -161,12 +166,89 @@ def _aud_flag(child, parent) -> str | None:
     return "custom"            # a different set of people from the folder
 
 
-async def tree(request: web.Request) -> web.Response:
-    root = common.REPO_ROOT
+# ---- the file tree, and why asking for it again is cheap ---------------------
+# Every open browser tab asks for the tree every 4 s. Building it is real
+# security work that has to run as the user — an O_PATH open, an fstat and an
+# ACL read for every entry — and the answer is ~640 KB that has not changed
+# 99.9 % of the times it is asked for. So the question is split in two:
+#
+#   * a SIGNATURE walk (scandir + one lstat per entry, no ACL reads, no Path
+#     objects) hashes everything the JSON is a function of — name, mode, owner,
+#     size, mtime and ctime. chmod and setfacl bump ctime, so a permission
+#     change is caught without reading a single xattr. Measured: ~37 ms on this
+#     box against ~180 ms for the real walk (and ~550 ms for the real walk as it
+#     was, more than half of which was pathlib building objects to compute a
+#     string scandir already hands over);
+#   * the real walk runs only when the signature moved, and its bytes are kept,
+#     so a poll that finds nothing changed is answered from the ETag.
+#
+# Deterministic on purpose. An inotify watcher would make the unchanged poll
+# O(1) and was tried first: a recursive watch over the repo as an unprivileged
+# user stayed silent, the kernel caps inotify instances per uid (31 of 128 were
+# already in use on this box), and inotify drops events under load — the
+# indexer's PERMS_RESCAN exists for exactly that. The signature never lies and
+# needs no fallback.
+#
+# It is checked at most once per TREE_SIG_TTL per backend: all of one user's
+# tabs share this process, so N tabs cost one walk. A mutation THROUGH this
+# backend clears the hold (the middleware below), so your own new file is in
+# the very next poll; a change made elsewhere — a colleague, the hub's /fs/*,
+# a terminal — is seen within TREE_SIG_TTL plus the client's poll interval.
+#
+# Everything blocking runs in the executor. This process is one event loop per
+# user, and a walk ON the loop used to freeze that user's terminal and every
+# other request for its duration — every 4 s, per open tab.
+TREE_MAX_DEPTH = 12
+TREE_SIG_TTL = 2.0
 
-    def walk(d: Path, depth: int, parent_aud=None) -> list:
+
+def _tree_skip(name: str) -> bool:
+    """Git internals and our own upload spools: never in the tree, and never a
+    reason to rebuild it."""
+    return name == ".git" or name.endswith(".kbtmp")
+
+
+def _tree_signature(root: str) -> str:
+    h = hashlib.blake2b(digest_size=16)
+
+    def walk(d: str, depth: int) -> None:
+        if depth > TREE_MAX_DEPTH:
+            return
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: e.name)
+        except OSError:
+            return
+        for e in entries:
+            if _tree_skip(e.name):
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            h.update(e.name.encode("utf-8", "surrogateescape"))
+            h.update(b"%d,%d,%d,%d,%d,%d\0" % (st.st_mode, st.st_uid, st.st_gid, st.st_size,
+                                                st.st_mtime_ns, st.st_ctime_ns))
+            if stat.S_ISDIR(st.st_mode) and os.access(e.path, os.R_OK | os.X_OK):
+                walk(e.path, depth + 1)
+
+    try:
+        st = os.stat(root)
+        h.update(b"%d,%d\0" % (st.st_mode, st.st_ctime_ns))
+    except OSError:
+        pass
+    walk(root, 0)
+    return h.hexdigest()
+
+
+def _build_tree(root: str) -> dict:
+    """The full walk: what the sidebar shows, with the kernel's answer on every
+    entry. Plain strings throughout — `e.path` is already the joined path, and
+    the repo-relative form is a slice of it."""
+    prefix = root.rstrip("/") + "/"
+
+    def walk(d: str, depth: int, parent_aud=None) -> list:
         out = []
-        if depth > 12:
+        if depth > TREE_MAX_DEPTH:
             return out
         try:
             entries = sorted(os.scandir(d), key=_entry_key)
@@ -175,10 +257,10 @@ async def tree(request: web.Request) -> web.Response:
         for e in entries:
             # Show everything except git internals and our temp files — including
             # dot-directories like .claude (agent config/skills).
-            if e.name == ".git" or e.name.endswith(".kbtmp"):
+            if _tree_skip(e.name):
                 continue
-            p = Path(e.path)
-            rel = str(p.relative_to(root))
+            p = e.path
+            rel = p[len(prefix):] if p.startswith(prefix) else p
             try:
                 is_dir = e.is_dir(follow_symlinks=False)
             except OSError:
@@ -214,7 +296,60 @@ async def tree(request: web.Request) -> web.Response:
                             **({"aud": flag} if flag else {}), "access": access})
         return out
 
-    return web.json_response({"root": str(root), "tree": walk(root, 0, _aud_key(root))})
+    return {"root": root, "tree": walk(root, 0, _aud_key(root))}
+
+
+class _TreeCache:
+    __slots__ = ("sig", "sig_at", "etag", "body", "lock")
+
+    def __init__(self) -> None:
+        self.sig = None          # signature the cached body was built from
+        self.sig_at = 0.0        # when the signature was last checked (monotonic)
+        self.etag = None         # a hash of `body`, quoted for the header
+        self.body = None         # the JSON bytes
+        self.lock = asyncio.Lock()
+
+
+_TREE = _TreeCache()
+
+
+def _tree_dirty() -> None:
+    """Something changed through this backend: re-check on the very next poll."""
+    _TREE.sig_at = 0.0
+
+
+@web.middleware
+async def _tree_dirty_on_write(request: web.Request, handler):
+    resp = await handler(request)
+    # Any write that went through this process — a new file, a folder, a
+    # delete, a rename, a copy, an upload, a toggled task, an artifact's write —
+    # may have changed the tree. The way to never forget one is to not
+    # enumerate them.
+    if request.method != "GET" and 200 <= resp.status < 300:
+        _tree_dirty()
+    return resp
+
+
+async def tree(request: web.Request) -> web.Response:
+    root = os.fspath(common.REPO_ROOT)
+    loop = asyncio.get_running_loop()
+    if request.query.get("fresh") == "1":      # "Reload the file tree": no hold
+        _tree_dirty()
+    async with _TREE.lock:                      # single flight: N tabs, one walk
+        if _TREE.body is None or time.monotonic() - _TREE.sig_at >= TREE_SIG_TTL:
+            sig = await loop.run_in_executor(None, _tree_signature, root)
+            _TREE.sig_at = time.monotonic()
+            if _TREE.body is None or sig != _TREE.sig:
+                data = await loop.run_in_executor(None, _build_tree, root)
+                body = json.dumps(data).encode()
+                _TREE.sig, _TREE.body = sig, body
+                # Hash of the BYTES, not the signature: a rebuild that produced
+                # the same tree (a spool that came and went) is still a 304.
+                _TREE.etag = '"' + hashlib.blake2b(body, digest_size=8).hexdigest() + '"'
+        etag, body = _TREE.etag, _TREE.body
+    if request.headers.get("If-None-Match") == etag:
+        return web.Response(status=304, headers={"ETag": etag})
+    return web.Response(body=body, content_type="application/json", headers={"ETag": etag})
 
 
 async def read_file(request: web.Request) -> web.Response:
@@ -2043,7 +2178,8 @@ async def pty_handler(request: web.Request) -> web.StreamResponse:
 
 
 def make_app() -> web.Application:
-    app = web.Application(client_max_size=2 * 1024 * 1024 * 1024)
+    app = web.Application(client_max_size=2 * 1024 * 1024 * 1024,
+                          middlewares=[_tree_dirty_on_write])
     app.router.add_get("/api/whoami", whoami)
     app.router.add_get("/api/tree", tree)
     app.router.add_get("/api/file", read_file)

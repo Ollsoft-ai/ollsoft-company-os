@@ -4,6 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Ollsoft Company OS</title>
+  <!-- The bundle is the last thing in <body>; announcing it here starts the
+       download before the parser gets there. The three fonts the first paint
+       sets text in are preloaded for the same reason: a font that arrives
+       after the text is a reflow of the whole page. `crossorigin` is what
+       makes this request identical to the one @font-face will make (fonts
+       fetch in CORS mode), so it is served from the preload rather than
+       fetched twice — and the URLs carry the same ?v= stamp as style.css, or
+       they would be two different resources. -->
+  <link rel="modulepreload" href="/static/app.js?v=1784984673475" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/ibm-plex-sans-latin-400-normal.woff2?v=0" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/ibm-plex-sans-latin-500-normal.woff2?v=0" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/ibm-plex-mono-latin-400-normal.woff2?v=0" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1784984673475" />
   <link rel="stylesheet" href="/static/style.css?v=1784984673475" />
   <link rel="stylesheet" href="/static/xterm.css?v=1784984673475" />
