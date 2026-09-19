@@ -402,6 +402,33 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   container, so switching is instant and **background artifacts keep running**
   (their bridge messages are routed by `ev.source` to the tab they came from, and
   the file actions stay scoped to *that* artifact's folder, not the focused one).
+- **The tab strip is Chrome's, for Chrome's reason.** Every tab in a strip is the
+  same width (`flex: 1 1 0`, capped at `--tab-max` so two tabs do not stretch
+  across the window, floored at `min-width` so they stop shrinking and the strip
+  scrolls); the icon and the `×` never shrink, only the name ellipsises. That is
+  not cosmetic: content-sized tabs put every `×` at its own unpredictable
+  offset, and equal widths put them on a regular pitch. The pitch is then made
+  *useful* by the **close-streak lock** — closing a tab with the pointer widens
+  the survivors and slides the next `×` out from under the cursor, so
+  `lockTabStrip` pins `--tab-max` to the width the tabs measured at the moment
+  of the close. The strip keeps that width (leaving a gap at the right, exactly
+  as Chrome does) until `pointerleave` on the strip, a new tab, or a window
+  resize releases it, and the transition on `max-width` glides them back. Only a
+  close the MOUSE performed freezes anything (`closeTab(t, fromPointer)`): a
+  keyboard close, or a tab retired because its file was deleted, has no cursor
+  to keep a `×` under and must re-flow at once. While locked, every `×` is shown
+  rather than just the hovered one — the row under the pointer has just been
+  rebuilt, and a browser need not re-evaluate `:hover` until the mouse next
+  moves, which for a pointer deliberately holding still is never. Only the
+  MOUSE leaving releases the lock: a touch pointer stops existing the instant
+  the finger lifts, so `pointerleave` fires after every tap and releasing there
+  would re-flow the strip between taps; for touch the streak ends at the next
+  `pointerdown` outside a locked strip. `revealCurrentTab` keeps the tab you
+  switched to on screen when the strip is scrolled (its own `scrollLeft`, not
+  `scrollIntoView`, which would scroll ancestors too) and stands down while
+  locked. Deliberately NOT copied from Chrome: its larger minimum width for the
+  active tab, which would make tabs unequal exactly when the equal pitch is
+  worth the most.
 - **Deep links — the open document IS the URL**: `/company/notes.md` in the
   address bar opens that file (hub route `deep_link`, which serves the same
   `app.html` for every repo path and bounces an unauthenticated visitor through

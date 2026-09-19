@@ -535,24 +535,51 @@ body.dragging-tab .pane-drop { display: block; }
 .access-badge.rw { color: var(--ok); background: rgba(47, 206, 152, .12); border: 1px solid rgba(47, 206, 152, .35); }
 .access-badge.ro { color: var(--warn); background: rgba(229, 174, 88, .12); border: 1px solid rgba(229, 174, 88, .35); }
 
-/* editor tabs */
+/* editor tabs — the Chrome model, and for Chrome's reason.
+
+   Every tab in a strip is the SAME width: `flex: 1 1 0` shares the space
+   equally, capped at --tab-max so a couple of tabs do not stretch across the
+   whole window, floored at min-width so they stop shrinking and the strip
+   scrolls instead — Chrome shrinks a long way before it resorts to scrolling,
+   and the floor here is the narrowest tab that still shows the icon, a few
+   characters of name and the ×. Content-sized tabs (what this was) put every × at a
+   different, unpredictable offset — with equal widths the ×s sit on a regular
+   pitch, which is what makes closing several in a row possible without moving
+   the mouse.
+
+   That only pays off with the close-streak lock: while you are closing tabs
+   with the pointer, JS pins --tab-max to the width the tabs had, so the strip
+   does NOT re-flow under your finger and the next × arrives exactly where the
+   last one was. Releasing the lock just removes the override, and the
+   transition on max-width is what lets the tabs glide back to full size. */
 .tabbar { display: flex; align-items: stretch; background: var(--chassis); border-bottom: 1px solid var(--border);
-  overflow-x: auto; flex: 0 0 auto; scrollbar-width: thin; }
+  overflow-x: auto; flex: 0 0 auto; scrollbar-width: thin; --tab-max: 240px; }
 .tab { display: flex; align-items: center; gap: .38rem; padding: .4rem .5rem .4rem .75rem;
   border-right: 1px solid var(--border); cursor: pointer; color: var(--muted); font-size: .8rem;
-  white-space: nowrap; max-width: 240px; border-top: 2px solid transparent; }
+  white-space: nowrap; border-top: 2px solid transparent;
+  flex: 1 1 0; min-width: 5.5rem; max-width: var(--tab-max);
+  transition: max-width .13s ease; }
+@media (prefers-reduced-motion: reduce) { .tab { transition: none; } }
+/* While the strip is locked every × is visible: during a close streak the row
+   under the pointer has just been rebuilt, and a browser may not re-evaluate
+   :hover until the mouse next moves — the affordance must not blink out from
+   under a pointer that is deliberately holding still. */
+.tabbar.tabs-locked .tab-x { opacity: 1; }
 .tab:hover { background: var(--panel); }
 .tab.current { background: var(--bg); color: var(--ink); }
 .tab.active { background: var(--bg); color: var(--ink); border-top-color: var(--accent); }
-.tab-icon { color: var(--faint); display: inline-flex; align-items: center; }
+.tab-icon { color: var(--faint); display: inline-flex; align-items: center; flex: 0 0 auto; }
 .tab-icon .icon { width: 13px; height: 13px; }
 .tab.active .tab-icon { color: var(--accent); }
 .tab.current .tab-icon { color: var(--muted); }
-.tab-name { overflow: hidden; text-overflow: ellipsis; }
+/* The name takes whatever is left and ellipsises; the icon and the × never
+   shrink, so the × keeps the same offset from the tab's right edge no matter
+   how narrow the tab gets. */
+.tab-name { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
 .tab-dir { color: var(--faint); font-family: var(--mono); font-size: .62rem;
-  overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
+  overflow: hidden; text-overflow: ellipsis; max-width: 90px; flex: 0 1 auto; min-width: 0; }
 .tab-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .95rem;
-  line-height: 1; padding: 0 .15rem; border-radius: 4px; opacity: 0; }
+  line-height: 1; padding: 0 .15rem; border-radius: 4px; opacity: 0; flex: 0 0 auto; }
 .tab:hover .tab-x, .tab.current .tab-x, .tab.active .tab-x { opacity: 1; }
 .tab-x:hover { color: var(--ink); background: var(--border); }
 

@@ -1980,6 +1980,8 @@ function wireSidebarResize() {
     const cur = parseInt(getComputedStyle(document.documentElement)
       .getPropertyValue("--sbw"), 10) || SBW_DEFAULT;
     if (cur > sbwMax()) setSidebarWidth(cur, false);
+    // …nor a tab strip frozen at a width the old window justified
+    unlockAllTabStrips();
   });
 }
 
@@ -2910,6 +2912,15 @@ function insertPane(index) {
   const barEl = document.createElement("div");
   barEl.className = "tabbar";
   barEl.hidden = true;
+  // The streak is over when the MOUSE leaves the strip — that is the moment
+  // Chrome springs the tabs back. Only the mouse: a touch pointer ceases to
+  // exist the instant the finger lifts, so pointerleave fires after every tap,
+  // and releasing there would re-flow the strip between taps — exactly what
+  // the freeze exists to prevent. For touch the end of the streak is the next
+  // touch somewhere else (see wireTabStrip).
+  barEl.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse") unlockTabStrip(barEl);
+  });
   const hostEl = document.createElement("div");
   hostEl.className = "editor";
   const dropEl = document.createElement("div");
@@ -3135,6 +3146,48 @@ function dirName(p) { return p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : 
 // masked secret viewer instead of the collaborative editor
 function isSecretPath(p) { return p.split("/").includes("_secrets"); }
 
+// ---- the close-streak lock (Chrome's, and for Chrome's reason) -------------
+// Closing a tab with the pointer widens the ones that remain, which slides the
+// next × out from under the cursor — so closing four tabs means four separate
+// aim-and-click trips. Chrome answers by freezing the strip's layout for the
+// duration of the streak: the tabs keep the width they had, leaving a gap at
+// the right, and only spring back once the pointer leaves the strip.
+//
+// The freeze is per strip (a split has one each) and is a single CSS custom
+// property — pinning --tab-max to the width the tabs currently have caps them
+// there, and dropping it lets the transition glide them back out.
+function lockTabStrip(barEl) {
+  if (!barEl) return;
+  const first = barEl.querySelector(".tab");
+  if (!first) return;
+  // Measured, not computed from the tab count: the strip may be scrolled, in a
+  // split pane, or already at its minimum, and the only width that keeps the
+  // next × under the cursor is the one actually on screen.
+  barEl.style.setProperty("--tab-max", first.getBoundingClientRect().width + "px");
+  barEl.classList.add("tabs-locked");
+}
+
+function unlockTabStrip(barEl) {
+  if (!barEl || !barEl.classList.contains("tabs-locked")) return;
+  barEl.classList.remove("tabs-locked");
+  barEl.style.removeProperty("--tab-max");
+}
+
+function unlockAllTabStrips() {
+  document.querySelectorAll(".tabbar.tabs-locked").forEach(unlockTabStrip);
+}
+
+function wireTabStrip() {
+  // Touching anything that is not a locked strip ends the streak. This is what
+  // releases the freeze on a touchscreen, where there is no pointer to leave,
+  // and it also covers a mouse that clicks straight into the editor without
+  // ever crossing the strip's edge.
+  document.addEventListener("pointerdown", (e) => {
+    const el = e.target instanceof Element ? e.target : null;
+    if (!el || !el.closest(".tabbar.tabs-locked")) unlockAllTabStrips();
+  }, true);
+}
+
 function renderTabBar() {
   const dup = {};
   tabs.forEach((t) => { dup[t.name] = (dup[t.name] || 0) + 1; });
@@ -3146,7 +3199,26 @@ function renderTabBar() {
     p.barEl.hidden = list.length === 0;
     p.el.classList.toggle("focused", p.id === activePaneId);
     for (const t of list) p.barEl.appendChild(tabEl(t, dup));
+    // The strip's own scroll needs no saving across this: emptying and
+    // refilling happens in one task, so layout never runs while the bar has no
+    // children and scrollLeft is never clamped to zero. Measured, not assumed.
+    revealCurrentTab(p);
   }
+}
+
+// Chrome keeps the tab you are looking at on screen: switch to one that is
+// scrolled out of the strip and the strip follows. Written against the bar's
+// own scrollLeft rather than scrollIntoView(), which also walks up and scrolls
+// ancestors — and skipped entirely mid-streak, where moving the strip is the
+// one thing we are trying to prevent.
+function revealCurrentTab(p) {
+  if (p.barEl.classList.contains("tabs-locked")) return;
+  const cur = p.barEl.querySelector(".tab.current");
+  if (!cur) return;
+  const bar = p.barEl.getBoundingClientRect();
+  const r = cur.getBoundingClientRect();
+  if (r.left < bar.left) p.barEl.scrollLeft -= bar.left - r.left;
+  else if (r.right > bar.right) p.barEl.scrollLeft += r.right - bar.right;
 }
 
 function tabEl(t, dup) {
@@ -3172,10 +3244,10 @@ function tabEl(t, dup) {
   }
   const x = document.createElement("button");
   x.className = "tab-x"; x.title = "Close"; x.textContent = "×";
-  x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(t); });
+  x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(t, true); });
   el.appendChild(x);
   el.addEventListener("click", () => activateTab(t));
-  el.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t); } });
+  el.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t, true); } });
   // Drag to reorder, to move into another pane, or onto a pane's edge to split.
   // Deliberately NO text/plain payload: the tree's folder rows and the editor
   // both accept dropped text, and a tab is not a path being pasted somewhere.
@@ -3333,10 +3405,15 @@ function activateTab(t) {
   syncUrl();
 }
 
-function closeTab(t) {
+// `fromPointer` is true only for a close the MOUSE performed on the strip (the
+// × or a middle-click). A keyboard close, or a tab retired because its file was
+// deleted or moved, has no cursor to keep the next × under and must leave the
+// strip free to re-flow.
+function closeTab(t, fromPointer) {
   const i = tabs.indexOf(t);
   if (i < 0) return;
   const p = paneOf(t);
+  if (fromPointer) lockTabStrip(p.barEl); else unlockTabStrip(p.barEl);
   const inPane = paneTabs(p);
   const j = inPane.indexOf(t);
   tabs.splice(i, 1);
@@ -3370,6 +3447,7 @@ async function openPath(path, kind, paneId) {
               access: null, synced: false,
               mode: localStorage.getItem("kbEditMode") || "rich", modeComp: null };
   tabs.push(t);
+  unlockTabStrip(pane.barEl);   // a new tab re-flows the strip; the streak is over
   noteRecent(path);
   activateTab(t);
   if (kind === "artifact") mountArtifact(t);
@@ -6964,6 +7042,7 @@ async function boot() {
   await loadWhoami();
   await loadTree();
   wireSearch(); wireNewDoc(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
+  wireTabStrip();
   wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();
   // null-guarded: a browser holding a cached older app.html must not lose the
   // whole boot sequence over one missing button
