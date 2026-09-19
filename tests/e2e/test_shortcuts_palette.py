@@ -98,15 +98,70 @@ def test_secrets_never_appear_in_the_palette(page):
     page.keyboard.press("Escape")
 
 
-def test_content_search_streams_in_on_top(page):
+def test_content_search_streams_in_underneath(page):
+    """Document matches land last, so they render LAST — under the files.
+
+    They used to insert above, which meant every late result shoved the file
+    rows down while the pointer was already travelling towards one. Whichever
+    section arrives last has to be the bottom one.
+    """
     palette(page, "zebrafish")
     page.wait_for_timeout(900)
     groups = [g.lower() for g in page.locator(".palette-group").all_inner_texts()]
     assert any("document" in g for g in groups), groups
-    # the documents section renders ABOVE the files section
-    assert "document" in groups[0], groups
+    assert "document" in groups[-1], groups
     assert [p for p in paths(page.locator('[data-testid="palette-item"]'))
             if p and p.startswith(proj("plan.md:"))]
+    page.keyboard.press("Escape")
+
+
+def test_the_palette_never_moves_under_the_pointer(page):
+    """The reported bug, in two halves.
+
+    The card was sized by its content (`max-height`), so it was small while the
+    local filename matches were all it had and grew when the document results
+    landed — resizing under a pointer already on its way to a row. And the rows
+    themselves shifted, because the documents section inserted above them.
+
+    Measured, not asserted about the CSS: the card's box and every file row's
+    box have to be identical before and after the content search resolves.
+    """
+    boxes = """() => {
+      const card = document.querySelector('.palette-card').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('[data-testid=palette-item]')]
+        .filter(r => r.dataset.path && !r.dataset.path.includes(':'))
+        .map(r => [r.dataset.path, Math.round(r.getBoundingClientRect().top)]);
+      return {card: [Math.round(card.width), Math.round(card.height)], rows};
+    }"""
+    # The card scales in (`animation: rise`, .985 -> 1), so a box read in the
+    # first 140 ms is 1% short of the real one and every later comparison is
+    # against a number that never existed. Measure once it has settled.
+    settled = """() => {const c = document.querySelector('.palette-card');
+      return !!c && c.getAnimations().every(a => a.playState === 'finished');}"""
+    page.keyboard.press("Control+p")
+    page.wait_for_selector('[data-testid="palette-input"]', timeout=5000)
+    page.wait_for_function(settled, timeout=5000)
+    opened = page.evaluate(boxes)["card"]
+
+    # "onboarding" is the one seeded token that matches BOTH a file name and
+    # document contents. A content-only word (zebrafish) would leave the row
+    # comparison below comparing [] to [] and proving nothing.
+    page.keyboard.type("onboarding")
+    page.wait_for_selector('[data-testid="palette-searching"]', timeout=10000)
+    during = page.evaluate(boxes)
+
+    page.wait_for_selector('[data-testid="palette-searching"]', state="detached",
+                           timeout=30000)
+    after = page.evaluate(boxes)
+
+    assert during["card"] == opened == after["card"], \
+        f"the palette resized: opened={opened} during={during['card']} after={after['card']}"
+    assert during["rows"], "no file rows were on screen — nothing could have jumped"
+    assert during["rows"] == after["rows"], \
+        f"file rows moved when the documents landed:\n{during['rows']}\n{after['rows']}"
+    # and the documents really did arrive, or the race was never run
+    assert [p for p in paths(page.locator('[data-testid="palette-item"]'))
+            if p and ":" in p], "no document matches — the test never exercised the race"
     page.keyboard.press("Escape")
 
 

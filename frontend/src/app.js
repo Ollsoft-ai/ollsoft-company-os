@@ -5555,11 +5555,7 @@ function openPalette(mode, seed) {
   const render = () => {
     list.innerHTML = "";
     kind.classList.toggle("busy", searching);
-    // The spinner sits on TOP: that is where the "In documents" section will
-    // appear when the results land, so nothing below it jumps.
-    if (searching) list.appendChild(spinnerRow("Searching documents…"));
-    if (!items.length) {
-      if (searching) return;               // don't claim "nothing" prematurely
+    if (!items.length && !searching) {
       const empty = document.createElement("div");
       empty.className = "palette-empty muted";
       empty.textContent = "No matches";
@@ -5616,6 +5612,10 @@ function openPalette(mode, seed) {
       row.addEventListener("click", () => choose(i));
       list.appendChild(row);
     });
+    // The spinner sits exactly where the "In documents" section will appear —
+    // at the BOTTOM, under the file matches that are already on screen. The
+    // results replace it in place, so nothing above it ever moves.
+    if (searching) list.appendChild(spinnerRow("Searching documents…"));
   };
 
   const choose = (i) => {
@@ -5633,16 +5633,22 @@ function openPalette(mode, seed) {
 
   // Rebuild `items` from the current sections and expansion state. Called on
   // every keystroke AND when the content results land or a section expands.
+  //
+  // Files first, documents appended BELOW them. Filename matches are computed
+  // locally and are on screen within the keystroke; document matches come back
+  // from the server a few hundred ms later. Whichever section arrives last has
+  // to be the bottom one — documents used to insert above, which shoved every
+  // file row the pointer was already travelling towards further down the list.
   const compose = () => {
     if (fixed) { items = fixed; return; }
-    items = docsOpen ? [...docFull] : docFull.slice(0, DOC_CUT);
-    if (!docsOpen && docFull.length > DOC_CUT)
-      items.push(moreItem("In documents", docFull.length - DOC_CUT,
-                          () => { docsOpen = true; compose(); render(); }));
-    items.push(...(filesOpen ? fileFull : fileFull.slice(0, FILE_CUT)));
+    items = filesOpen ? [...fileFull] : fileFull.slice(0, FILE_CUT);
     if (!filesOpen && fileFull.length > FILE_CUT)
       items.push(moreItem("Files", fileFull.length - FILE_CUT,
                           () => { filesOpen = true; compose(); render(); }));
+    items.push(...(docsOpen ? docFull : docFull.slice(0, DOC_CUT)));
+    if (!docsOpen && docFull.length > DOC_CUT)
+      items.push(moreItem("In documents", docFull.length - DOC_CUT,
+                          () => { docsOpen = true; compose(); render(); }));
   };
 
   const fileIcon = (n) => (n.dir ? I.folder : isSecretPath(n.path) ? I.lock
@@ -5734,11 +5740,11 @@ function openPalette(mode, seed) {
         sub: { text: m.path + " · line " + m.line, hits: [] },
         run: () => openAtLine(m.path, m.line),
       }));
-      // Documents insert ABOVE the files. Keep the selection anchored on the
-      // row it was on — by default the best file match — so Enter never
-      // changes meaning depending on whether the server answered yet. With no
-      // file rows at all, the first document hit gets the selection.
-      if (items.length) sel += Math.min(docFull.length, DOC_CUT) + (docFull.length > DOC_CUT ? 1 : 0);
+      // Documents append BELOW the files, so every index already on screen —
+      // the selection included — keeps its meaning and there is nothing to
+      // re-anchor. Enter cannot change meaning depending on whether the server
+      // has answered yet. With no file rows at all, sel is 0 and the first
+      // document hit takes the selection, which is still what you want.
       compose();
       render();
     }, 180);

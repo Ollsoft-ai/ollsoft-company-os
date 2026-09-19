@@ -380,6 +380,23 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   needs no special case. Destinations are read from the syntax tree via
   `linkTarget()` (which also unwraps the `<…>` form), never by regex over the
   source: a regex stops at the space and yields a truncated path.
+- **The palette (`Ctrl/Cmd+P`, `>` for commands) never moves.** It is the one
+  place you search from — file names, commands and document contents in a single
+  list — and it composes two sections that arrive at different times: filename
+  matches are scored locally against the client's copy of the tree and are on
+  screen within the keystroke, document matches come back from `/api/search` a
+  few hundred ms later. Two things follow, and both were once wrong:
+  *the card's height is fixed* (`height: 74vh`, not `max-height`), because a
+  content-sized panel was small while the local matches were all it had and
+  jumped to full size when the server answered — resizing under a pointer
+  already travelling towards a row; and *the late section renders last*.
+  Documents used to insert above the files, which shoved every row down at
+  exactly that moment. Now files sit on top, documents append beneath them, and
+  the "Searching documents…" spinner occupies precisely the slot they will fill,
+  so the results replace it in place and nothing above it ever moves. That also
+  removed the index arithmetic that used to re-anchor the selection: every index
+  already on screen keeps its meaning, so Enter cannot change what it opens
+  depending on whether the server has answered yet.
 - **Editor tabs**: every opened document/artifact is a tab; each keeps its own
   live mount (CodeMirror + Yjs provider, or sandboxed iframe) in a hidden
   container, so switching is instant and **background artifacts keep running**
