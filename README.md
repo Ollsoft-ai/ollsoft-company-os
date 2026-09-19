@@ -111,6 +111,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   interactive checkboxes, images) over the same markdown — with a formatting
   toolbar and drag-drop / screenshot-paste that stores files and renders them
   inline — or a raw-source view with line numbers. One toggle, same document.
+  Inline `code` carries its own copy button, and tagging a colleague with
+  `@name` colours them in the text when the name is a real account here.
 - **Link what is already there**: drag any file or folder from the tree into an
   open document and it becomes a link at the drop point — images and video embed,
   documents open as a tab when you click through.
@@ -122,7 +124,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 - **Drop in what you already have**: drag files — or whole folders, subfolders and
   all — from your desktop onto any folder in the tree (or right-click it →
   *Upload folder*); everything lands with live per-file progress, then converts
-  and becomes searchable.
+  and becomes searchable. Take it back the same way: right-click any folder →
+  *Download as ZIP*.
 - **VS-Code-style shell**: documents and artifacts open as tabs (background
   artifacts stay live); terminals are tabbed in a docked, resizable bottom panel.
 - **Cron panel**: every user has their own `crontab`; the UI lists, adds, pauses
@@ -356,7 +359,7 @@ someone is probing.
 *used* rather than changed, on the same line format:
 
 ```bash
-journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)' --since yesterday
+journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download|folder.download)' --since yesterday
 ```
 
 ```

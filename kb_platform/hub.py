@@ -145,15 +145,16 @@ def _audit(event: str, actor: str | None, ok: bool = True, **fields) -> None:
 # What is deliberately NOT recorded: every /api/* request. Tree listings,
 # search, presence polling, autosaves and CRDT frames are the app breathing,
 # not a person reaching for a document. Logging them would bury the signal and
-# turn an audit trail into a surveillance stream, so only two acts count — a
-# collaborative document being joined, and an attachment's bytes being served.
+# turn an audit trail into a surveillance stream, so only three acts count — a
+# collaborative document being joined, an attachment's bytes being served, and
+# a whole folder leaving as one archive.
 #
-#     journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)'
+#     journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.(down|zip)load)'
 #
 # Read the events for exactly what they say. `document.open` means a session
-# was joined, `file.preview` and `file.download` mean the server sent the
-# bytes. None of the three proves anyone read, understood or saved anything.
-ACCESS_EVENTS = ("document.open", "file.preview", "file.download")
+# was joined; `file.preview`, `file.download` and `folder.download` mean the
+# server sent the bytes. None proves anyone read, understood or saved anything.
+ACCESS_EVENTS = ("document.open", "file.preview", "file.download", "folder.download")
 
 
 def _audit_path(rel: str) -> str | None:
@@ -193,14 +194,27 @@ def _range_from_zero(value: str) -> bool:
 def _access_event(request: web.Request, status: int) -> tuple[str, str] | None:
     """Classify a FINISHED /api/* round-trip as an attachment access, or None.
 
-    Only `GET /api/attachment` counts, and only once the backend has actually
-    served the bytes. That ordering is the whole point: the backend runs as the
-    user, so the kernel has already ruled by the time a status exists, and a
-    401/403/404 can never be mistaken for a read. Every other route under
-    /api — tree, search, artifacts, upload, vc, presence — returns None, as do
-    a HEAD, a conditional 304 and a path that does not resolve into the repo.
+    Only `GET /api/attachment` and `GET /api/folder-zip` count, and only once
+    the backend has actually served the bytes. That ordering is the whole
+    point: the backend runs as the user, so the kernel has already ruled by the
+    time a status exists, and a 401/403/404 can never be mistaken for a read.
+    Every other route under /api — tree, search, artifacts, upload, vc,
+    presence — returns None, as do a HEAD, a conditional 304 and a path that
+    does not resolve into the repo.
     """
-    if request.method != "GET" or request.path != "/api/attachment":
+    if request.method != "GET":
+        return None
+    if request.path == "/api/folder-zip":
+        # A folder leaving as one archive is the largest single read this box
+        # can serve, so it is the one that most needs a line. `probe=1` builds
+        # nothing and serves no bytes — it is the UI asking whether the
+        # download is even possible, and recording it would log an intention
+        # rather than an act.
+        if status != 200 or request.query.get("probe") == "1":
+            return None
+        rel = _audit_path(request.query.get("path", ""))
+        return ("folder.download", rel) if rel is not None else None
+    if request.path != "/api/attachment":
         return None
     # 200 is a whole file served; 206 is a byte range, and only the opening one
     # counts (see _range_from_zero).

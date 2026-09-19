@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
-import { EditorState, Compartment, StateField } from "@codemirror/state";
+import { EditorState, Compartment, StateField, StateEffect } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine,
          ViewPlugin, Decoration, WidgetType, dropCursor, drawSelection } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -116,6 +116,49 @@ class CopyWidget extends WidgetType {
       navigator.clipboard.writeText(this.code).then(() => {
         b.textContent = "✓ copied"; b.classList.add("done");
         setTimeout(() => { b.textContent = "⧉ copy"; b.classList.remove("done"); }, 1300);
+      }, () => kbToast("could not copy to clipboard", "err"));
+    });
+    return b;
+  }
+  ignoreEvent() { return true; }
+}
+
+// The same gesture a fenced block has had, shrunk onto a `code span`. Inline
+// code in these documents is almost always the thing you were going to retype
+// by hand — a path, a flag, an account name — and retyping is where the typo
+// comes from. Deliberately faint until the span is hovered: inline code is
+// everywhere, and a solid button on every one of them would be noise.
+const INLINE_COPY_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="9" y="9" width="12" height="12" rx="2"/>' +
+  '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const INLINE_DONE_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<polyline points="20 6 9 17 4 12"/></svg>';
+
+class InlineCopyWidget extends WidgetType {
+  constructor(text) { super(); this.text = text; }
+  eq(o) { return o.text === this.text; }
+  toDOM() {
+    // A <span role=button>, not a <button>: this sits INSIDE the contenteditable
+    // line, where a real button drags the line's baseline around.
+    const b = document.createElement("span");
+    b.className = "cm-inline-copy";
+    b.setAttribute("data-testid", "inline-copy");
+    b.setAttribute("role", "button");
+    b.setAttribute("aria-label", "Copy " + this.text);
+    b.title = "Copy";
+    b.innerHTML = INLINE_COPY_SVG;
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      navigator.clipboard.writeText(this.text).then(() => {
+        b.innerHTML = INLINE_DONE_SVG; b.classList.add("done");
+        setTimeout(() => {
+          b.innerHTML = INLINE_COPY_SVG; b.classList.remove("done");
+        }, 1200);
       }, () => kbToast("could not copy to clipboard", "err"));
     });
     return b;
@@ -565,10 +608,21 @@ function livePreview(dir) {
             }
           } else if (name === "StrongEmphasis" || name === "Emphasis" ||
                      name === "Strikethrough" || name === "InlineCode") {
+            const marks = n.node.getChildren(
+              name === "InlineCode" ? "CodeMark"
+                : name === "Strikethrough" ? "StrikethroughMark" : "EmphasisMark");
             if (!touches(n.from, n.to)) {
-              const markName = name === "InlineCode" ? "CodeMark"
-                : name === "Strikethrough" ? "StrikethroughMark" : "EmphasisMark";
-              for (const m of n.node.getChildren(markName)) hide(m.from, m.to);
+              for (const m of marks) hide(m.from, m.to);
+            }
+            if (name === "InlineCode" && marks.length >= 2) {
+              // The content between the backticks, read from the tree so a span
+              // written with doubled fences (``a `b` c``) copies what it shows.
+              const code = state.sliceDoc(marks[0].to, marks[marks.length - 1].from);
+              if (code.trim()) {
+                decos.push(Decoration.widget({
+                  widget: new InlineCopyWidget(code), side: 1,
+                }).range(n.to));
+              }
             }
           } else if (name === "Link") {
             const node = n.node;
@@ -765,11 +819,25 @@ function listIndent(view, dir) {
 
 // ---- @mention autocomplete: type @ and pick a person -----------------------
 let _mentionCache = null, _mentionAt = 0;
+// Lower-cased set of the same names, for the editor highlight — a plain array
+// scan per match would be O(users) on every visible line.
+let _mentionNames = new Set();
+
 async function mentionUsers() {
   if (!_mentionCache || Date.now() - _mentionAt > 60000) {
     try {
       _mentionCache = (await (await fetch("/api/principals")).json()).users || [];
       _mentionAt = Date.now();
+      const next = new Set(_mentionCache.map((u) => u.toLowerCase()));
+      // Only repaint when the roster actually moved: this refreshes every
+      // minute, and an unconditional dispatch would churn every open editor.
+      if (next.size !== _mentionNames.size ||
+          [...next].some((u) => !_mentionNames.has(u))) {
+        _mentionNames = next;
+        for (const v of _mentionViews) {
+          try { v.dispatch({ effects: rosterChanged.of(null) }); } catch (e) { /* torn down */ }
+        }
+      }
     } catch (e) { _mentionCache = _mentionCache || []; }
   }
   return _mentionCache;
@@ -787,6 +855,82 @@ async function mentionSource(context) {
     options: users.map((u) => ({ label: u, type: "mention" })),
     validFor: /^[a-z0-9_]*$/i,
   };
+}
+
+// ---- @mention highlight ----------------------------------------------------
+// A tagged person should READ as a person, not as prose that happens to start
+// with "@". Markdown has no mention node, so this is a scan over the visible
+// lines rather than a syntax-tree walk — but it asks the tree before marking
+// anything, so an @ inside code, a link destination or a URL stays plain text.
+//
+// Only names that belong to a real account light up. Highlighting every @word
+// would colour typos and prose ("email me @ noon") as if someone had been
+// tagged, which is the one thing a mention colour must not do.
+const rosterChanged = StateEffect.define();
+const _mentionViews = new Set();
+
+// Character-for-character the indexer's ASSIGNEE_RE (kb_platform/indexer.py):
+// the colour has to mean exactly what the to-do index already means by a tag,
+// or a highlighted "@bob" that never reaches Bob's to-do list is a worse lie
+// than no highlight at all.
+const MENTION_RE = /(?:^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)/g;
+const MENTION_SKIP = new Set(["InlineCode", "FencedCode", "CodeText", "CodeMark",
+                              "CodeInfo", "URL", "LinkMark"]);
+
+function inCodeOrUrl(tree, pos) {
+  for (let n = tree.resolveInner(pos, 1); n; n = n.parent) {
+    if (MENTION_SKIP.has(n.name)) return true;
+  }
+  return false;
+}
+
+function buildMentionDecos(view) {
+  if (!_mentionNames.size) return Decoration.none;
+  const decos = [];
+  const { state } = view;
+  const tree = syntaxTree(state);
+  for (const range of view.visibleRanges) {
+    let pos = range.from;
+    while (pos <= range.to) {
+      const line = state.doc.lineAt(pos);
+      const text = line.text;
+      let m;
+      MENTION_RE.lastIndex = 0;
+      while ((m = MENTION_RE.exec(text))) {
+        const name = m[1];
+        if (!_mentionNames.has(name.toLowerCase())) continue;
+        const from = line.from + m.index + m[0].indexOf("@");
+        if (inCodeOrUrl(tree, from + 1)) continue;
+        decos.push(Decoration.mark({
+          class: "cm-mention",
+          attributes: { "data-mention": name, title: "@" + name + " — tagged in this document" },
+        }).range(from, from + 1 + name.length));
+      }
+      if (line.to >= range.to) break;
+      pos = line.to + 1;
+    }
+  }
+  return Decoration.set(decos, true);
+}
+
+function mentionHighlight() {
+  return ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.view = view;
+      _mentionViews.add(view);
+      // Warm the roster: until it lands nothing is highlighted, and the fetch
+      // answers with a `rosterChanged` repaint of every open editor.
+      mentionUsers();
+      this.decorations = buildMentionDecos(view);
+    }
+    update(u) {
+      if (u.docChanged || u.viewportChanged ||
+          u.transactions.some((tr) => tr.effects.some((e) => e.is(rosterChanged)))) {
+        this.decorations = buildMentionDecos(u.view);
+      }
+    }
+    destroy() { _mentionViews.delete(this.view); }
+  }, { decorations: (v) => v.decorations });
 }
 
 // ---- media drops & screenshot pastes (both modes) --------------------------
@@ -1989,6 +2133,9 @@ function openTreeMenu(n, parentWritable, x, y) {
       }
       items.push("-");
     }
+    // reading is enough to take a copy away — same bar as downloading one file
+    items.push({ icon: I.download, label: "Download as ZIP", fn: () => downloadFolderZip(n) });
+    items.push("-");
   } else {
     items.push({ icon: I.open, label: "Open", fn: () => openEntry(n) });
     items.push({ icon: I.download, label: "Download",
@@ -2021,6 +2168,25 @@ function kindForPath(p) {
   if (isSecretPath(p)) return "secret";
   if (p.endsWith(".html")) return "artifact";
   return "doc";
+}
+
+// Ask first, THEN navigate. A browser sent to a download that answers with an
+// error JSON navigates away to display it, taking the whole app — open tabs,
+// terminals and all — with it. The probe answers the same 403/404/413 without
+// building anything, so only a download that will actually arrive is started.
+async function downloadFolderZip(n) {
+  const q = "/api/folder-zip?path=" + encodeURIComponent(n.path);
+  let info = {};
+  try {
+    const r = await fetch(q + "&probe=1");
+    try { info = await r.json(); } catch (e) { info = {}; }
+    if (!r.ok) { kbToast(info.error || "that folder cannot be downloaded", "err"); return; }
+  } catch (e) {
+    kbToast("that folder cannot be downloaded", "err");
+    return;
+  }
+  kbToast("Zipping " + baseName(n.path) + " — the download starts when it is ready");
+  location.href = q;
 }
 
 function copyEntry(n) {
@@ -3280,6 +3446,7 @@ async function mountDoc(t) {
     // Strikethrough / Table nodes the live-preview layer decorates.
     markdown({ extensions: [TaskList, Strikethrough, Table, spacedLinks] }),
     syntaxHighlighting(mdHighlight),
+    mentionHighlight(),
     yCollab(ytext, provider.awareness, { undoManager }),
     EditorView.lineWrapping,
     // draw our own caret/selection: the native caret is near-invisible on some
@@ -5629,6 +5796,7 @@ function openShortcuts() {
   ] });
   groups.push({ name: "Good to know", rows: [
     { keys: [], label: "Right-click any file for rename, move, copy, download and permissions" },
+    { keys: [], label: "Right-click a folder to download the whole thing as a ZIP" },
     { keys: [], label: "Drag a file onto a folder to move it; drop files onto a folder to upload" },
     { keys: [], label: "Drag a file from the tree INTO an open document to link it",
       hint: "images and video embed; everything else becomes a link you can click" },

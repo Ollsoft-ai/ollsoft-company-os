@@ -22,9 +22,11 @@ import signal
 import stat
 import struct
 import subprocess
+import tempfile
 import termios
 import time
 import unicodedata
+import zipfile
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
@@ -739,6 +741,129 @@ async def attachment(request: web.Request) -> web.StreamResponse:
         "Content-Security-Policy": ATTACHMENT_CSP,
         "X-Content-Type-Options": "nosniff",
     })
+
+
+# A whole folder, as one file you can hand to someone. The ceiling is on the
+# UNCOMPRESSED total and is deliberately conservative: the hub buffers every
+# proxied /api/* response in memory, as root, on behalf of everyone — so an
+# unbounded archive here is an unbounded allocation there. A folder over the
+# limit is a clean 413 naming its size, not a truncated download.
+FOLDER_ZIP_MAX_BYTES = 1024 * 1024 * 1024
+
+
+def _zip_entries(root: Path):
+    """What belongs in a folder download, in tree order: the same exclusions the
+    sidebar applies (git internals, our own upload spools), no symlink ever
+    followed, and anything the kernel refuses simply left out rather than
+    failing the whole archive. Yields (path, arcname_suffix, is_dir)."""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        d = Path(dirpath)
+        keep = []
+        for n in sorted(dirnames):
+            sub = d / n
+            if n == ".git" or n.endswith(".kbtmp") or sub.is_symlink():
+                continue
+            if not os.access(sub, os.R_OK | os.X_OK):
+                continue
+            keep.append(n)
+            # Carried explicitly so an empty folder survives the round-trip.
+            yield sub, str(sub.relative_to(root)), True
+        dirnames[:] = keep
+        for name in sorted(filenames):
+            f = d / name
+            if name.endswith(".kbtmp") or f.is_symlink():
+                continue
+            try:
+                if not f.is_file() or not os.access(f, os.R_OK):
+                    continue
+            except OSError:
+                continue
+            yield f, str(f.relative_to(root)), False
+
+
+def _build_folder_zip(root: Path, top: str, out) -> None:
+    """Blocking: runs in an executor, never on the event loop."""
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z:
+        for path, arc, is_dir in _zip_entries(root):
+            name = top + "/" + arc
+            try:
+                if is_dir:
+                    z.writestr(zipfile.ZipInfo(name + "/"), b"")
+                else:
+                    z.write(path, arcname=name)
+            except OSError:
+                continue    # vanished or locked between the walk and the read
+
+
+async def folder_zip(request: web.Request) -> web.StreamResponse:
+    rel = request.query.get("path", "")
+    p = common.resolve_repo_path(rel)
+    if p is None:
+        return web.json_response({"error": "bad path"}, status=404)
+    try:
+        if not p.is_dir():
+            return web.json_response({"error": "not a folder"}, status=404)
+        if not os.access(p, os.R_OK | os.X_OK):
+            return web.json_response({"error": "forbidden"}, status=403)
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError:
+        return web.json_response({"error": "not a folder"}, status=404)
+
+    loop = asyncio.get_running_loop()
+
+    def measure() -> int:
+        total = 0
+        for path, _arc, is_dir in _zip_entries(p):
+            if is_dir:
+                continue
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+            if total > FOLDER_ZIP_MAX_BYTES:
+                break
+        return total
+
+    size = await loop.run_in_executor(None, measure)
+    if size > FOLDER_ZIP_MAX_BYTES:
+        gb = FOLDER_ZIP_MAX_BYTES / (1024 ** 3)
+        return web.json_response(
+            {"error": f"that folder holds more than {gb:.0f} GB — "
+                      "download a subfolder, or copy it from a terminal"},
+            status=413)
+
+    # A probe lets the UI find out whether this download is even possible
+    # BEFORE it navigates: a browser pointed at a failing download navigates
+    # away to show the error JSON, which would throw the app away.
+    if request.query.get("probe") == "1":
+        return web.json_response({"ok": True, "bytes": size})
+
+    # The name the archive unpacks INTO. The repo root has no name of its own,
+    # and a folder called ".." or "." can't exist, so this is always a real
+    # single path segment.
+    top = p.name or "knowledgebase"
+    tmp = tempfile.TemporaryFile()    # unnamed: it is gone the moment we close it
+    try:
+        await loop.run_in_executor(None, _build_folder_zip, p, top, tmp)
+        total = tmp.tell()
+        tmp.seek(0)
+        resp = web.StreamResponse(headers={
+            "Content-Disposition": _content_disposition(top + ".zip", True),
+            "X-Content-Type-Options": "nosniff",
+        })
+        resp.content_type = "application/zip"
+        resp.content_length = total
+        await resp.prepare(request)
+        while True:
+            chunk = await loop.run_in_executor(None, tmp.read, 256 * 1024)
+            if not chunk:
+                break
+            await resp.write(chunk)
+        await resp.write_eof()
+        return resp
+    finally:
+        tmp.close()
 
 
 async def tasks(request: web.Request) -> web.Response:
@@ -1933,6 +2058,7 @@ def make_app() -> web.Application:
     app.router.add_post("/api/upload/finish", upload_finish)
     app.router.add_post("/api/upload/abort", upload_abort)
     app.router.add_get("/api/attachment", attachment)
+    app.router.add_get("/api/folder-zip", folder_zip)
     app.router.add_get("/api/tasks", tasks)
     app.router.add_post("/api/tasks/toggle", toggle_task)
     app.router.add_get("/api/search", search)

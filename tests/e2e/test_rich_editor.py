@@ -461,3 +461,49 @@ def test_internal_md_link_opens_a_tab_not_a_download(browser):
     finally:
         cleanup([doc, target, folder])
         ctx.close()
+
+
+def test_inline_code_carries_its_own_copy_button(browser):
+    """A `code span` gets the same one-click copy a fenced block has — copying
+    the code and not the backticks, and without putting anything in the file."""
+    docp = kbdoc(f"inlinecopy_{int(time.time())}.md")
+    ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, docp)
+        snippet = "kb-history --author me"
+        set_source(page, f"run `{snippet}` first\n\nand a line with no code at all\n")
+        page.wait_for_selector('[data-testid="inline-copy"]', timeout=12000)
+        icons = page.locator('[data-testid="inline-copy"]')
+        assert icons.count() == 1, "one code span, one icon — prose gets none"
+        icons.first.click()
+        page.wait_for_selector(".cm-inline-copy.done", timeout=3000)
+        assert page.evaluate("() => navigator.clipboard.readText()") == snippet
+        # the affordance is a decoration, never text: the document is untouched
+        assert source(page) == f"run `{snippet}` first\n\nand a line with no code at all\n"
+    finally:
+        cleanup([docp])
+        ctx.close()
+
+
+def test_tagged_people_are_coloured_and_nothing_else_is(browser):
+    """@someone lights up only when "someone" is a real account here, and never
+    inside code — the colour has to mean the same thing the to-do index means."""
+    docp = kbdoc(f"mention_{int(time.time())}.md")
+    real = U("bob")
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, docp)
+        set_source(page,
+                   f"- [ ] ship it @{real} please\n\n"
+                   f"not a person: @nobody_by_that_name_here\n\n"
+                   f"`@{real}` inside code is just text\n")
+        page.wait_for_selector(".cm-mention", timeout=12000)
+        names = page.locator(".cm-mention").evaluate_all(
+            "els => els.map(e => e.getAttribute('data-mention'))")
+        assert names == [real], f"expected only @{real} to light up, got {names}"
+        assert page.locator(".cm-mention").first.text_content() == "@" + real
+    finally:
+        cleanup([docp])
+        ctx.close()

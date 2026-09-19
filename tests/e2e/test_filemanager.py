@@ -1,6 +1,9 @@
 """File-manager UI: collapsible tree, .claude visibility, access badge, create
-via the folder button, and the permissions modal (add an ACL end to end)."""
+via the folder button, the permissions modal (add an ACL end to end), and
+downloading a whole folder as a zip."""
+import io
 import time
+import zipfile
 
 import httpx
 from conftest import BASE, CREDS, dlg_fill, dlg_ok, login
@@ -133,6 +136,89 @@ def test_machinery_folders_collapsed_by_default(browser):
         page.wait_for_timeout(4600)
         assert page.locator(f'.tree-item[data-path="{base}/_files/a.md"]').is_visible(), \
             "the poll must not refold a folder the user opened"
+    finally:
+        c.post("/api/fs/delete", json={"path": base})
+        ctx.close()
+
+
+def _http(user):
+    c = httpx.Client(base_url=BASE, timeout=120)
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
+    return c
+
+
+def test_folder_downloads_as_a_zip_of_what_you_can_read():
+    """A folder comes back as one archive that unpacks into a folder of its own
+    name, nested structure intact, empty subfolders included."""
+    c = _http("alice")
+    base = doc(f"zipme_{TAG}")
+    top = base.rsplit("/", 1)[-1]
+    try:
+        c.post("/api/fs/mkdir", json={"path": base})
+        c.post("/api/fs/mkdir", json={"path": f"{base}/sub"})
+        c.post("/api/fs/mkdir", json={"path": f"{base}/empty"})
+        c.post("/api/file", json={"path": f"{base}/sub/note.md"})
+        r = c.post("/api/upload", params={"dir": base},
+                   files={"file": ("hello.txt", b"hello zip", "text/plain")})
+        assert r.status_code == 200, r.text
+
+        probe = c.get("/api/folder-zip", params={"path": base, "probe": "1"})
+        assert probe.status_code == 200, probe.text
+        assert probe.json()["bytes"] >= len(b"hello zip")
+
+        r = c.get("/api/folder-zip", params={"path": base})
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/zip"
+        assert f'filename="{top}.zip"' in r.headers["content-disposition"]
+
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        assert z.testzip() is None
+        names = set(z.namelist())
+        assert f"{top}/_files/hello.txt" in names
+        assert f"{top}/sub/note.md" in names
+        assert f"{top}/empty/" in names, "an empty folder must survive the trip"
+        assert z.read(f"{top}/_files/hello.txt") == b"hello zip"
+    finally:
+        c.post("/api/fs/delete", json={"path": base})
+
+
+def test_folder_zip_refuses_a_folder_you_cannot_read():
+    """The zip is built by the per-user backend, so the kernel answers this —
+    but it has to answer with a clean status, not a half-written archive."""
+    a, b = _http("alice"), _http("bob")
+    base = doc(f"zipdeny_{TAG}")
+    try:
+        assert a.post("/api/fs/mkdir", json={"path": base}).status_code == 200
+        a.post("/api/file", json={"path": f"{base}/private.md"})
+        # "private" is the panel's own dial — owner only, access AND default ACL
+        assert a.post("/fs/props",
+                      json={"path": base, "visibility": "private"}).status_code == 200
+        for params in ({"path": base}, {"path": base, "probe": "1"}):
+            r = b.get("/api/folder-zip", params=params)
+            assert r.status_code in (403, 404), f"{params}: {r.status_code} {r.text[:200]}"
+    finally:
+        a.post("/api/fs/delete", json={"path": base})
+
+
+def test_right_click_a_folder_downloads_it(browser):
+    """The gesture people already know from files, on a folder."""
+    c = _http("alice")
+    base = doc(f"zipui_{TAG}")
+    top = base.rsplit("/", 1)[-1]
+    c.post("/api/fs/mkdir", json={"path": base})
+    c.post("/api/file", json={"path": f"{base}/a.md"})
+    ctx = browser.new_context(accept_downloads=True)
+    try:
+        page = login(ctx, "alice")
+        row = f'.tree-item[data-path="{base}"]'
+        page.wait_for_selector(row, timeout=10000)
+        page.click(row, button="right")
+        page.wait_for_selector('[data-testid="ctx-menu"]')
+        with page.expect_download(timeout=30000) as dl:
+            page.click('.ctx-item:has-text("Download as ZIP")')
+        assert dl.value.suggested_filename == f"{top}.zip"
+        # the app is still here: the download must never navigate the page away
+        assert page.locator('[data-testid="tree"]').count() == 1
     finally:
         c.post("/api/fs/delete", json={"path": base})
         ctx.close()

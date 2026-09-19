@@ -3,11 +3,12 @@
 `share.set`/`props.set` record who changed access. Nothing recorded that access
 being used, so exfiltration by a colleague who legitimately held the permission
 — the likeliest incident shape on a box where everyone is authenticated — left
-no trace at all. Three events close the meaningful part of that gap:
+no trace at all. Four events close the meaningful part of that gap:
 
     document.open   a collaborative session was joined  (/ws/doc/*, accepted)
     file.preview    the server served an attachment inline
     file.download   the server served it as an explicit download (dl=1)
+    folder.download the server served a whole folder as one zip
 
 The hard part is what must NOT appear. Tree polling, search, presence, `/api/vc`,
 autosaves and CRDT frames are the app breathing; a 403 or a 404 is a refusal,
@@ -60,11 +61,12 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def test_the_three_events_are_the_whole_list():
-    # A fourth event must be a deliberate decision with its own tests and its
+def test_the_four_events_are_the_whole_list():
+    # A fifth event must be a deliberate decision with its own tests and its
     # own line in the docs, not something that appears because a proxy grew a
     # hook. Reads are the surveillance-shaped half of an audit trail.
-    assert ACCESS_EVENTS == ("document.open", "file.preview", "file.download")
+    assert ACCESS_EVENTS == ("document.open", "file.preview", "file.download",
+                             "folder.download")
 
 
 @pytest.mark.parametrize("raw,want", [
@@ -113,6 +115,31 @@ def test_only_dl_1_is_a_download(repo, dl):
     does, or the trail says "download" about a response that went out inline."""
     ev, _ = _access_event(FakeReq(query={"path": "company/x.md", "dl": dl}), 200)
     assert ev == "file.preview"
+
+
+def test_a_folder_zip_is_a_folder_download(repo):
+    assert _access_event(
+        FakeReq(path="/api/folder-zip", query={"path": "company/team"}), 200) == \
+        ("folder.download", "company/team")
+
+
+def test_the_zip_probe_is_not_a_read(repo):
+    """probe=1 builds nothing and serves no bytes — it is the UI asking whether
+    the download is possible. Recording it would log an intention as an act."""
+    assert _access_event(
+        FakeReq(path="/api/folder-zip",
+                query={"path": "company/team", "probe": "1"}), 200) is None
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 413, 500])
+def test_a_refused_folder_zip_is_never_a_read(repo, status):
+    assert _access_event(
+        FakeReq(path="/api/folder-zip", query={"path": "company/team"}), status) is None
+
+
+@pytest.mark.parametrize("raw", ["../../etc", "", "/", "."])
+def test_a_folder_zip_outside_the_repo_audits_as_nothing(repo, raw):
+    assert _access_event(FakeReq(path="/api/folder-zip", query={"path": raw}), 200) is None
 
 
 @pytest.mark.parametrize("status", [401, 403, 404, 409, 500, 502, 304, 301])
@@ -316,6 +343,31 @@ def test_an_explicit_download_is_recorded_as_one(c):
     # doubles and the two events stop meaning different things.
     assert not [l for l in (_journal() or "").splitlines()
                 if "file.preview" in l and f"path='{p}'" in l]
+
+
+@journal_required
+def test_a_folder_download_is_recorded(c):
+    """The largest single read this box can serve is the one that most needs a
+    line — and the probe that precedes it must not add a second."""
+    folder = doc(f"aud_{TOK}_zip")
+    try:
+        assert c.post("/api/fs/mkdir", json={"path": folder}).status_code == 200
+        body = "zip me\n"
+        r = c.post("/api/upload", params={"dir": folder},
+                   files={"file": ("in.txt", body.encode(), "text/plain")})
+        assert r.status_code == 200, r.text
+        assert c.get("/api/folder-zip",
+                     params={"path": folder, "probe": "1"}).status_code == 200
+        fence(c)
+        assert not [l for l in (_journal() or "").splitlines()
+                    if "folder.download" in l and f"path='{folder}'" in l], \
+            "the probe serves no bytes and must not be recorded as a read"
+        assert c.get("/api/folder-zip", params={"path": folder}).status_code == 200
+        found = hits(f"folder.download actor={U('alice')} result=ok path='{folder}'")
+        assert found, "a whole folder left the box and the audit trail says nothing"
+        assert "bytes=" in found[-1], "the served byte count is missing from the line"
+    finally:
+        c.post("/api/fs/delete", json={"path": folder})
 
 
 @journal_required

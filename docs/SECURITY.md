@@ -125,12 +125,12 @@ journald shows every other account nothing but its own messages.
 
 ### Access events — who opened what
 
-Three further events record access being *used*, not granted. They exist
+Four further events record access being *used*, not granted. They exist
 because the likeliest incident here is not an intruder but a colleague who
 already holds the permission, and until 2026-08-29 that left no trace at all.
 
 ```bash
-journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)' --since yesterday
+journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download|folder.download)' --since yesterday
 ```
 
 | Event | Means exactly | Does **not** mean |
@@ -138,9 +138,14 @@ journalctl -u kb-hub -g 'AUDIT (document.open|file.preview|file.download)' --sin
 | `document.open` | a collaborative session for that document was joined through `/ws/doc/*` and syncd accepted it | that anything was read, or that the tab stayed open |
 | `file.preview` | the server served the attachment inline (`Content-Disposition: inline`) | that the browser rendered it or a person looked |
 | `file.download` | the server served it with `Content-Disposition: attachment` — a download was *requested and served* | that the file reached the user's disk |
+| `folder.download` | the server built and served a whole folder as one zip (`GET /api/folder-zip`) | that every file *in* the folder was in it — the archive holds only what the kernel let that user read |
+
+The zip's `?probe=1` preflight builds nothing and serves no bytes, so it is
+deliberately silent: it is the UI asking whether a download is possible, and
+logging it would record an intention as an act.
 
 Each line carries only the event, the authenticated actor, `result=ok`, the
-normalized repo-relative `path`, the byte count served (the two attachment
+normalized repo-relative `path`, the byte count served (the three byte-serving
 events; a `document.open` has none), and — for a request that came through the
 Cloudflare tunnel — the same trusted `source` the `login` event records. Never content, headers, cookies, query strings, user agents, or
 a path the caller spelled but the server did not serve.
@@ -163,7 +168,7 @@ What it does NOT cover, and should not be relied on for:
   the server's word that it sent the bytes. It is not proof of attention,
   comprehension, or a completed client-side save — and its absence is not proof
   nobody looked, since anyone with a shell reads `/srv/kb` directly.
-- **Reads outside those three paths are still invisible.** SSH, the mounted
+- **Reads outside those paths are still invisible.** SSH, the mounted
   drive, `cat`, the search index, and the secrets viewer (`GET /api/file`, the
   only document read that never joins a live session) write no access line.
 - **Root bypasses it.** An administrator running `setfacl` over SSH writes no

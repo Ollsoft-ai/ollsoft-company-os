@@ -268,7 +268,20 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   (all three only on folders you can write), `⚙` permissions, `✕` delete (only
   where you can write the parent). Deleting a file/folder retires any tabs
   showing it. The context menu (right-click, or `⋯` on touch) adds the rest,
-  including **Upload folder**.
+  including **Upload folder** and **Download as ZIP**.
+- **Download as ZIP** (`GET /api/folder-zip`, `user_server.folder_zip`): the same
+  right-click gesture a single file already had, on a folder. The archive is
+  built by the per-user backend, so the kernel decides what goes in: symlinks are
+  never followed, `.git` and `.kbtmp` spools are skipped exactly as the tree skips
+  them, and a file the user cannot read is left out rather than failing the whole
+  download. Empty subfolders are carried as explicit entries so the folder
+  unpacks the shape it had. Two details are load-bearing: the hub *buffers* every
+  proxied `/api/*` response in memory as root, so the handler refuses a folder
+  over `FOLDER_ZIP_MAX_BYTES` (1 GiB uncompressed) with a 413 instead of an
+  unbounded allocation; and `?probe=1` answers that same 403/404/413 *without*
+  building anything, which is what the UI calls first — a browser pointed at a
+  download that errors navigates away to show the JSON, throwing away the open
+  tabs and terminals.
 - **Uploads of any size** (`/fs/upload/*` on the hub, `/api/upload/*` on the
   backend, protocol in `kb_platform/uploads.py`): the browser slices the file
   and sends it a chunk at a time (8 MiB), each chunk carrying its byte offset.
@@ -326,6 +339,16 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   dropped on a folder still moves the file. A **Source** toggle (persisted in
   `localStorage`) drops to raw markdown with line numbers. GFM task/strikethrough/
   table nodes come from `@lezer/markdown` extensions.
+- **Reading affordances in the rendered view**: a `code span` carries the same
+  one-click copy a fenced block has (`InlineCopyWidget`, faint until hovered —
+  inline code is everywhere in these documents), and an **@mention of a real
+  account** is coloured (`mentionHighlight()`, `.cm-mention`). Both are
+  decorations over the unchanged markdown, so nothing reaches the file. The
+  mention scan uses character-for-character the indexer's `ASSIGNEE_RE` and
+  consults the syntax tree before marking, so an `@` inside code or a URL stays
+  plain and a highlighted name is exactly one the to-do index will also pick up.
+  The roster comes from `/api/principals` (the same list the `@` autocomplete
+  uses); when it lands, a `rosterChanged` effect repaints every open editor.
 - **Spaces in link targets.** CommonMark refuses a bare space in a link
   destination, so `[q3](_files/q3 final.xlsx)` is not a link at all — it renders
   as literal text and cannot be clicked. Both halves are handled: an upload now
@@ -433,10 +456,12 @@ an incident. The hub logs five events to journald as
 deletion, the full↔viewer switch, group create/delete, the launcher list, the
 egress allow-list — write no AUDIT line.
 
-**Access audit** — who opened what. Three events on the same line format record
+**Access audit** — who opened what. Four events on the same line format record
 access being *used*: `document.open` (a `/ws/doc/*` session syncd accepted),
 `file.preview` and `file.download` (`/api/attachment` served inline, or with
-`dl=1` as an explicit download). The hub is the only place that can emit them,
+`dl=1` as an explicit download), and `folder.download` (`/api/folder-zip` served
+a whole folder as one archive — the `?probe=1` preflight serves no bytes and is
+deliberately not recorded). The hub is the only place that can emit them,
 because it is the only component that holds both the authenticated identity and
 the downstream service's answer — so an event exists only after the kernel has
 already allowed the read, and a refusal can never look like one. Nothing else

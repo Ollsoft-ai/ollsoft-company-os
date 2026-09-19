@@ -34,6 +34,10 @@
   --danger: #F2809C;
   --danger-deep: #C24568;
   --term-bg: #071019;
+  /* a tagged person — deliberately NOT the link blue or the secrets amber,
+     so "who" never reads as "where this goes" */
+  --mention: #B79BFF;
+  --mention-wash: rgba(183, 155, 255, .13);
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
   --r: 8px;
@@ -399,6 +403,18 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
   cursor: pointer; line-height: 1.4; }
 .cm-code-copy:hover { color: var(--ink); background: var(--panel2); border-color: #2C4166; }
 .cm-code-copy.done { color: var(--ok); border-color: rgba(47, 206, 152, .4); }
+/* the same affordance, shrunk onto a `code span`: faint enough to disappear
+   into a paragraph full of inline code, solid the moment you reach for it */
+.cm-inline-copy { display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: -.12em; margin-left: .22em; width: .82em; height: .82em;
+  color: var(--faint); opacity: .45; cursor: pointer;
+  transition: opacity .12s ease, color .12s ease; }
+.cm-inline-copy svg { width: 100%; height: 100%; }
+.cm-inline-copy:hover, .cm-inline-copy:focus-visible { opacity: 1; color: var(--accent); }
+.cm-inline-copy.done { opacity: 1; color: var(--ok); }
+/* @someone, when someone is a real account here */
+.cm-mention { color: var(--mention); background: var(--mention-wash);
+  border-radius: 4px; padding: 0 .18em; font-weight: 500; }
 .cm-rich .cm-dim { color: var(--faint); }
 .cm-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .cm-olmark { color: var(--accent); font-family: var(--mono); }
