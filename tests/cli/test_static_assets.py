@@ -24,6 +24,11 @@ def test_stamped_assets_are_immutable_and_shells_are_not():
         assert r.status_code == 200, path
         cc = r.headers.get("cache-control", "")
         assert "immutable" in cc and "max-age=31536000" in cc, f"{path}: {cc!r}"
+    # the lazily loaded chunk is a hashed name, so it gets the same year
+    chunks = sorted((STATIC_DIR / "chunks").glob("term-*.js"))
+    assert chunks, "no terminal chunk was built — code splitting is off"
+    cc = c.get(f"/static/chunks/{chunks[-1].name}").headers.get("cache-control", "")
+    assert "immutable" in cc, f"chunk: {cc!r}"
     r = c.get("/static/app.html")
     assert "immutable" not in r.headers.get("cache-control", ""), \
         "the shell carries the stamps; caching it pins every old one"

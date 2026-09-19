@@ -266,3 +266,91 @@ def test_the_tree_poll_is_conditional(browser):
         assert got.value.headers.get("etag") == req.headers.get("if-none-match")
     finally:
         ctx.close()
+
+
+def _hold(page, pattern):
+    """Route `pattern` so the FIRST matching request is held until the test
+    lets go; later ones pass. Returns the list the held route lands in."""
+    held = []
+    def handler(route):
+        if held:
+            route.continue_()
+        else:
+            held.append(route)
+    page.route(pattern, handler)
+    return held
+
+
+def test_tabs_restore_before_whoami_answers_and_you_are_still_you(browser, scratch_doc):
+    """Phase 1 of the restore needs nothing but localStorage — not even your
+    name. Hold whoami: the tab must come back anyway. Then release it: the
+    collaboration session must learn who you are (a tab restored early used
+    to announce itself as "user" for as long as it stayed open)."""
+    path = doc(f"{scratch_doc}.md")
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, USER)
+    try:
+        page.wait_for_selector(f'.tree-item[data-path="{path}"]', timeout=30000)
+        open_doc(page, path)
+        page.wait_for_timeout(400)
+        held = _hold(page, "**/api/whoami")
+        page.reload()
+        page.wait_for_selector(f'.tab[data-path="{path}"]', timeout=3000)
+        assert held, "whoami was never asked — this proves nothing"
+        assert page.evaluate("() => window.__kbuser") is None, \
+            "whoami answered before the tab appeared — the ordering was not exercised"
+        held[0].continue_()
+        # the self avatar carries the awareness name ("<name> (you)"): it must
+        # become yours, and "user" — the name announced before whoami — must
+        # not survive anywhere in the row
+        page.wait_for_function(
+            "(u) => { const a = document.querySelector('#presence .presence-avatar.self');"
+            "         return a && a.title.startsWith(u + ' (you)'); }", arg=U(USER), timeout=10000)
+        titles = page.evaluate(
+            "() => [...document.querySelectorAll('#presence .presence-avatar')].map(a => a.title)")
+        assert not any(t.startswith("user") for t in titles), titles
+    finally:
+        ctx.close()
+
+
+def test_terminal_restores_without_waiting_for_the_documents(browser, scratch_doc):
+    """The terminals used to queue behind every document's websocket. Hold the
+    documents' first round trip and the terminal must still come back."""
+    path = doc(f"{scratch_doc}.md")
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, USER)
+    try:
+        page.wait_for_selector(f'.tree-item[data-path="{path}"]', timeout=30000)
+        open_doc(page, path)
+        page.click('[data-testid="toggle-term"]')
+        page.wait_for_selector("#terminal .xterm-rows", timeout=10000)
+        page.wait_for_timeout(500)
+        held = _hold(page, "**/fs/props*")        # mountDoc awaits this first
+        page.reload()
+        page.wait_for_selector("#terminal-panel:not([hidden]) .xterm-rows", timeout=4000)
+        assert held, "the document never asked for its props — nothing was held"
+        assert page.evaluate("() => !window.__kbview"), \
+            "the document mounted before the terminal — the wait was not exercised"
+        held[0].continue_()
+        page.wait_for_function("() => !!window.__kbview", timeout=10000)
+    finally:
+        ctx.close()
+
+
+def test_xterm_is_fetched_only_when_a_terminal_opens(browser):
+    """A quarter of the bundle, in its own chunk: a session that never opens a
+    shell never downloads it, and the first shell fetches it exactly then."""
+    ctx = browser.new_context()
+    chunks = []
+    # esbuild also emits a few-hundred-byte helper chunk both halves share,
+    # which the entry loads at boot; the terminal's own chunk is the `term-` one
+    ctx.on("request", lambda r: chunks.append(r.url) if "/static/chunks/term-" in r.url else None)
+    page = login(ctx, USER)
+    try:
+        page.wait_for_timeout(800)
+        assert not chunks, f"xterm was fetched before any terminal was opened: {chunks}"
+        page.click('[data-testid="toggle-term"]')
+        page.wait_for_selector("#terminal .xterm-rows", timeout=10000)
+        assert any("term-" in u for u in chunks), f"no terminal chunk was fetched: {chunks}"
+    finally:
+        ctx.close()

@@ -7,7 +7,16 @@ await esbuild.build({
   entryPoints: ["src/app.js"],
   bundle: true,
   format: "esm",
-  outfile: "static/app.js",
+  // One entry, one lazy chunk: `import("./term.js")` in app.js becomes
+  // static/chunks/term-<hash>.js, fetched the first time a terminal opens.
+  // The hash in the name is what lets the hub serve it immutable; the cost is
+  // that a deploy (rsync --delete) removes the previous hash, so a page from
+  // before the deploy asking for its FIRST terminal is told to reload
+  // (newTerminal) rather than shown a blank panel.
+  outdir: "static",
+  entryNames: "[name]",
+  chunkNames: "chunks/[name]-[hash]",
+  splitting: true,
   sourcemap: false,
   // Minified + literal UTF-8 (app.html declares utf-8): ~2 MB of readable JS
   // was real parse time on every load, and every byte rides the tunnel.

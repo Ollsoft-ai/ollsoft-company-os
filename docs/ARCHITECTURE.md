@@ -421,6 +421,25 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   are unchanged. `app.html` `modulepreload`s the bundle and preloads the three
   first-paint fonts (`crossorigin`, same `?v=` as `style.css`, or it is a
   second download) so text does not reflow when IBM Plex arrives.
+  The restore itself is two phases because its halves wait on different
+  things. `restoreTabs()` runs at t=0 from `localStorage` alone — before
+  whoami: `openPath` registers and draws each tab synchronously, the saved
+  active tab is activated at once so the first frame is right, and nothing a
+  tab needs knows who you are (an expired session bounces on the first 401
+  whichever request it is). The one thing that did depend on identity — the
+  collaborator name announced to the CRDT session — is read live and
+  re-announced by `loadWhoami` (`t.announce`), so a tab restored early never
+  stays introduced as "user". `restoreRest()` runs after whoami and the
+  terminal wiring: terminals immediately (they need `canShell` and the pty
+  protocol `v`, not the documents' websockets they used to queue behind), then
+  the tabs' contents and the tidy-up that depends on them. **xterm is its own
+  chunk** (`src/term.js`, `static/chunks/term-<hash>.js`, esbuild `splitting`):
+  a quarter of the bundle that a viewer never needs and nobody needs to read a
+  document. `warmTerminal()` fetches it on the first terminal — or at t=0 when
+  a restore already knows it will want one — and the hash lets the hub serve it
+  immutable. The cost of the hash: `deploy.sh` rsyncs `--delete`, so a page
+  from before a deploy asking for its *first* terminal finds nothing at the old
+  name and is told to reload rather than shown a blank panel.
 - **The tree is cheap to ask for again.** Every open tab polls `/api/tree`
   every 4 s, and it was a full permission-checked walk each time — 580 ms of
   which more than half was `pathlib.relative_to` building objects to compute a

@@ -12,8 +12,8 @@ import { Strikethrough, TaskList, Table } from "@lezer/markdown";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { yCollab } from "y-codemirror.next";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
+// xterm is NOT imported here: it is a quarter of the bundle and lives in its
+// own chunk, loaded by warmTerminal() the first time a terminal is wanted.
 import { initDictation, toggleDictation, dictationReady, retryDictation,
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
@@ -1664,23 +1664,59 @@ function saveSession() {
   } catch (e) { /* private mode */ }
 }
 
-async function restoreSession() {
+// Restoring the last session is two phases, because its two halves wait on
+// different things — and used to wait on each other's.
+//
+// Phase 1, at t=0: panes and tabs, from localStorage alone. openPath registers
+// a tab and draws its row synchronously before its first await, so the whole
+// tab bar — the right tab active — is on screen in the first frame; only the
+// documents' contents are still on their way. Nothing here needs to know who
+// you are: an expired session bounces on the first 401 whichever request it
+// is, and your name reaches the collaboration session the moment whoami
+// answers (t.announce, from loadWhoami).
+function restoreTabs() {
   let s;
-  try { s = JSON.parse(localStorage.getItem("kbOpen") || "null"); } catch (e) { return; }
-  if (!s) return;
+  try { s = JSON.parse(localStorage.getItem("kbOpen") || "null"); } catch (e) { return null; }
+  if (!s) return null;
   _restoring = true;
+  // Rebuild the columns first, so every tab lands in the pane it was in.
+  while (panes.length < Math.min((s.panes || []).length, 6)) insertPane(panes.length);
+  (s.panes || []).forEach((g, i) => { if (panes[i] && g > 0) panes[i].grow = g; });
+  normalizeSplits();
+  // Open every saved tab CONCURRENTLY: mapping over the list preserves order
+  // while firing all the props/epoch/websocket round-trips at once.
+  const mounts = Promise.allSettled((s.tabs || []).map(
+    (t) => openPath(t.path, t.kind, (panes[t.pane || 0] || panes[0]).id)));
+  // The tab you were on, from the first frame — not the last one opened.
+  const first = s.active && tabs.find((x) => x.path === s.active);
+  if (first) activateTab(first);
+  // A restore that will want a terminal starts fetching its chunk now, so the
+  // wait for whoami and the wait for xterm overlap instead of adding up.
+  if ((s.terms || []).length) warmTerminal().catch(() => { /* reported on use */ });
+  return { s, mounts };
+}
+
+// Phase 2, once whoami has answered (canShell, the pty protocol version) and
+// the terminal UI is wired: the terminals — straight away, not after every
+// document's websocket has connected, which is what they used to queue behind
+// and never needed. Then the tabs' contents, and the tidy-up that depends on
+// them (a pane whose files all vanished collapses, the saved per-pane
+// selection comes back).
+async function restoreRest(h) {
+  if (!h) return;
+  const { s, mounts } = h;
   try {
-    // Open every saved tab CONCURRENTLY. openPath registers the tab (and its DOM
-    // order) synchronously before its first await, so mapping over the list
-    // preserves order while firing all the props/epoch/websocket round-trips at
-    // once — N tabs restore in one batch instead of one-after-another.
-    // Rebuild the columns first, so every tab lands in the pane it was in.
-    while (panes.length < Math.min((s.panes || []).length, 6)) insertPane(panes.length);
-    (s.panes || []).forEach((g, i) => { if (panes[i] && g > 0) panes[i].grow = g; });
-    normalizeSplits();
-    await Promise.allSettled((s.tabs || []).map(
-      (t) => openPath(t.path, t.kind, (panes[t.pane || 0] || panes[0]).id)));
-    // Panes whose files all vanished collapse on their own; drop the strays.
+    if (canShell && (s.terms || []).length) {
+      let act = null;
+      for (const o of s.terms) {   // older saves stored bare sid strings
+        const sid = typeof o === "string" ? o : o.sid;
+        const t = await newTerminal(undefined, sid, typeof o === "string" ? undefined : o.name);
+        if (t && sid === s.activeTerm) act = t;
+      }
+      if (act) activateTerm(act, false);
+      if (!s.termOpen) hideTerminalPanel();
+    }
+    await mounts;
     for (const p of panes.slice()) if (!paneTabs(p).length) removePane(p);
     (s.paneActive || []).forEach((path, i) => {
       const t = path && tabs.find((x) => x.path === path);
@@ -1690,16 +1726,6 @@ async function restoreSession() {
       const t = tabs.find((x) => x.path === s.active);
       if (t) activateTab(t);
     } else if (tabs.length) activateTab(panes[0].active || tabs[0]);
-    if (canShell && (s.terms || []).length) {
-      let act = null;
-      for (const o of s.terms) {   // older saves stored bare sid strings
-        const sid = typeof o === "string" ? o : o.sid;
-        const t = newTerminal(undefined, sid, typeof o === "string" ? undefined : o.name);
-        if (sid === s.activeTerm) act = t;
-      }
-      if (act) activateTerm(act, false);
-      if (!s.termOpen) hideTerminalPanel();
-    }
   } finally {
     _restoring = false;
     saveSession();
@@ -1999,6 +2025,10 @@ async function loadWhoami() {
   $("#whoami-m").textContent = j.user + " · uid " + j.uid;
   $("#term-user").textContent = j.user;
   window.__kbuser = j.user;
+  // Tabs restored before this answer announced themselves as "user"; tell the
+  // collaboration sessions, and the avatar row, who you actually are.
+  for (const t of tabs) if (t.announce) t.announce();
+  renderPresence();
   repaintMentions();    // "@you" glows; until we know who you are, it cannot
   restoreTreeState();   // before the first loadTree() render (boot awaits us first)
   if (!canShell) {
@@ -3659,8 +3689,12 @@ async function mountDoc(t) {
       }
     } catch (e) { /* stay disconnected; the badge shows it */ }
   });
-  const me = window.__kbuser || "user";
-  const setMe = () => provider.awareness.setLocalStateField("user", { name: me, ...userColors(me) });
+  // Read at every announce, never captured: a tab restored before whoami has
+  // answered would otherwise introduce you to your colleagues as "user" for
+  // as long as it stayed open. loadWhoami re-announces every open tab.
+  const me = () => window.__kbuser || "user";
+  const setMe = () => provider.awareness.setLocalStateField("user", { name: me(), ...userColors(me()) });
+  t.announce = setMe;
   setMe();
   // Presence + remote cursors both ride on awareness: repaint the avatar row
   // whenever anyone joins, leaves, or moves — for the tab that's showing. The
@@ -6752,13 +6786,35 @@ function wireTermClipboard(t) {
 // replays only the bytes this client missed. The tab retires only when the
 // server says the shell actually ended. With `cmd`, type that command into a
 // fresh shell once the prompt has painted (launcher buttons).
-function newTerminal(cmd, sid, savedName) {
+// The terminal's code is a separate chunk (src/term.js): a quarter of the
+// bundle that a viewer account never needs and nobody needs to read a
+// document. Fetched once, the first time a terminal is wanted — or at t=0 by
+// a restore that already knows it will want one — and cached immutable.
+let _termMod = null;
+function warmTerminal() {
+  if (!_termMod) _termMod = import("./term.js").catch((e) => { _termMod = null; throw e; });
+  return _termMod;
+}
+
+async function newTerminal(cmd, sid, savedName) {
   const wasHidden = $("#terminal-panel").hidden;
   $("#terminal-panel").hidden = false;
   // Every door into the terminal honours the mobile mode, not just the toggle —
   // launcher buttons and session restore land here too, and each of them must
   // also get the drawer out of the way (a full-screen terminal covers the ☰).
   if (wasHidden && isMobile()) { closeNav(); setTermMax(preferredTermMax()); }
+  let xterm;
+  try { xterm = await warmTerminal(); }
+  catch (e) {
+    // The chunk is a hashed file beside the bundle and a deploy replaces it.
+    // A page from before the deploy asking for its first terminal finds
+    // nothing at the old name — the honest answer is a reload, not a blank
+    // panel that looks like a broken terminal.
+    if (!terms.length && wasHidden) hideTerminalPanel();
+    kbToast("A new version was deployed — reload the page to open a terminal", "err");
+    return null;
+  }
+  const { Terminal, FitAddon } = xterm;
   const el = document.createElement("div");
   el.className = "term-content";
   $("#terminal").appendChild(el);
@@ -7075,7 +7131,16 @@ async function boot() {
   // restore needs canShell, and a viewer account must never try to open a pty.
   const treeP = fetchTree().catch(() => null);
   const deepLinksP = fetch("/company", { method: "HEAD" }).then((r) => r.ok, () => false);
-  await loadWhoami();
+  const whoamiP = loadWhoami();
+  // Read the pasted URL BEFORE restoring: restoring activates every tab it
+  // reopens, and activateTab → syncUrl() replaceState()s the address bar onto
+  // that tab — so reading location afterwards yields the RESTORED path, not the
+  // link someone sent you. That is what made a shared link land on whatever
+  // document happened to be open last time.
+  const deep = pathFromUrl();
+  // Tabs come back NOW, before we even know who you are (see restoreTabs).
+  const restoring = restoreTabs();
+  await whoamiP;
   wireSearch(); wireNewDoc(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
   wireTabStrip();
   wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();
@@ -7145,16 +7210,11 @@ async function boot() {
     fetch("/api/cron").then((r) => r.json())
       .then((j) => { backendV = j.v || 0; }).catch(() => { /* old backend */ });
   }
-  // Read the pasted URL BEFORE restoring: restoreSession() activates every tab
-  // it reopens, and activateTab → syncUrl() replaceState()s the address bar onto
-  // that tab — so reading location afterwards yields the RESTORED path, not the
-  // link someone sent you. That is what made a shared link land on whatever
-  // document happened to be open last time.
-  const deep = pathFromUrl();
-  const restoreP = restoreSession();   // tabs + terminals, from localStorage, now
-  // The tree paints whenever it lands — the restore has been running since the
-  // line above. restoreTreeState() ran inside loadWhoami, so the folders open
-  // and closed the way you left them on this first paint, not on a second.
+  // Terminals now that whoami has answered and the terminal UI is wired; then
+  // the tabs' contents. The tree paints whenever it lands — restoreTreeState()
+  // ran inside loadWhoami, so the folders are open and closed the way you left
+  // them on this first paint, not on a second.
+  const restoreP = restoreRest(restoring);
   applyTree(await treeP, false);
   await restoreP;
   // activateTab reveals the active file in the tree — a no-op while the tree
