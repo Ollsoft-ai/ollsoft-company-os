@@ -100,8 +100,14 @@ def test_truncated_tree_name_gets_a_tooltip(browser, docs):
         page.wait_for_timeout(150)
         assert row.get_attribute("title") == LONG_NAME
 
-        # a name that fits gets no tooltip — otherwise every row would nag
-        short = page.locator(f'.tree-item[data-path="{AREA}"]')
+        # A name that fits gets no tooltip — otherwise every row would nag.
+        # The control is this fixture's own `one.md`, a SIBLING of the long
+        # name: same folder, same indent, so the pair isolates the one thing
+        # that differs. It used to be AREA, which was `company` when the suite
+        # had no namespaces and is `kbtest-<ns>` one level deeper now — long
+        # enough at this viewport that it really is clipped, so the app was
+        # right to label it and the assertion was simply aimed at the wrong row.
+        short = page.locator(f'.tree-item[data-path="{FOLDER}/one.md"]')
         short.hover()
         page.wait_for_timeout(150)
         assert short.get_attribute("title") is None

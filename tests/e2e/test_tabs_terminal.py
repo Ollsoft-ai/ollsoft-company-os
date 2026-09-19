@@ -202,17 +202,29 @@ def test_terminal_shift_drag_selects_inside_mouse_app(browser):
     page.wait_for_timeout(700)
 
     box = page.locator("#terminal .xterm-screen").bounding_box()
+    # The marker is on the screen TWICE: once in the line the shell echoed back
+    # ("…$ printf 'MOUSEAPP_LINE_QQ\n'; …") and once as the output. Scanning
+    # top-down for the first line that *contains* it finds the echo, and then a
+    # half-width drag selects the prompt instead — which is exactly what this
+    # test did until the account names grew a namespace and pushed the marker
+    # past the halfway point. Match the OUTPUT line: bottom-up, exact.
     info = page.evaluate("""() => { const t=window.__kbterm,b=t.buffer.active; let row=-1;
-      for(let i=0;i<b.length;i++){const l=b.getLine(i); if(l&&l.translateToString(true).includes('MOUSEAPP_LINE_QQ')){row=i;break;}}
+      for(let i=b.length-1;i>=0;i--){const l=b.getLine(i);
+        if(l&&l.translateToString(true).trim()==='MOUSEAPP_LINE_QQ'){row=i;break;}}
       return {row, baseY:b.baseY, rows:t.rows}; }""")
+    assert info["row"] >= 0, "the marker never reached the screen"
     vrow = info["row"] - info["baseY"]
     rowh = box["height"] / info["rows"]
     y = box["y"] + vrow * rowh + rowh / 2
+    # Across the whole row, not half of it: how far along the line the marker
+    # sits depends on how long this run's prompt is, which is not this test's
+    # subject.
+    drag_to = box["x"] + box["width"] - 6
 
     # plain drag: the app owns the mouse -> no local selection
     page.mouse.move(box["x"] + 4, y)
     page.mouse.down()
-    page.mouse.move(box["x"] + box["width"] * 0.5, y, steps=6)
+    page.mouse.move(drag_to, y, steps=6)
     page.mouse.up()
     page.wait_for_timeout(250)
     assert not page.evaluate("() => window.__kbterm.getSelection()"), "plain drag must not steal the app's mouse"
@@ -222,7 +234,7 @@ def test_terminal_shift_drag_selects_inside_mouse_app(browser):
     page.keyboard.down("Shift")
     page.mouse.move(box["x"] + 4, y)
     page.mouse.down()
-    page.mouse.move(box["x"] + box["width"] * 0.5, y, steps=6)
+    page.mouse.move(drag_to, y, steps=6)
     page.mouse.up()
     page.keyboard.up("Shift")
     page.wait_for_timeout(400)
