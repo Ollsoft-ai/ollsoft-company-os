@@ -38,6 +38,9 @@
      so "who" never reads as "where this goes" */
   --mention: #B79BFF;
   --mention-wash: rgba(183, 155, 255, .13);
+  /* and being tagged YOURSELF — the one mention you must not scroll past */
+  --mention-me: #FFD34E;
+  --mention-me-wash: rgba(255, 211, 78, .16);
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
   --r: 8px;
@@ -415,6 +418,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 /* @someone, when someone is a real account here */
 .cm-mention { color: var(--mention); background: var(--mention-wash);
   border-radius: 4px; padding: 0 .18em; font-weight: 500; }
+/* @you. A glow rather than another flat colour: at a glance down a long
+   document the eye finds a light before it reads a hue. */
+.cm-mention.cm-mention-me { color: var(--mention-me); background: var(--mention-me-wash);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(255, 211, 78, .38), 0 0 10px rgba(255, 211, 78, .30); }
 .cm-rich .cm-dim { color: var(--faint); }
 .cm-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .cm-olmark { color: var(--accent); font-family: var(--mono); }

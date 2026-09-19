@@ -111,8 +111,10 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   interactive checkboxes, images) over the same markdown — with a formatting
   toolbar and drag-drop / screenshot-paste that stores files and renders them
   inline — or a raw-source view with line numbers. One toggle, same document.
-  Inline `code` carries its own copy button, and tagging a colleague with
-  `@name` colours them in the text when the name is a real account here.
+  Inline `code` carries its own copy button; tagging a colleague with `@name`
+  colours them in the text when the name is a real account here, and a tag of
+  **you** glows yellow; and pasting a URL writes the markdown link — over a
+  selection it links that selection, on its own it links to itself.
 - **Link what is already there**: drag any file or folder from the tree into an
   open document and it becomes a link at the drop point — images and video embed,
   documents open as a tab when you click through.

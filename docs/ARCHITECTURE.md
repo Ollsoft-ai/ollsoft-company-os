@@ -347,8 +347,27 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   mention scan uses character-for-character the indexer's `ASSIGNEE_RE` and
   consults the syntax tree before marking, so an `@` inside code or a URL stays
   plain and a highlighted name is exactly one the to-do index will also pick up.
-  The roster comes from `/api/principals` (the same list the `@` autocomplete
-  uses); when it lands, a `rosterChanged` effect repaints every open editor.
+  **Your own** tag is the exception that gets its own treatment — a yellow glow
+  (`.cm-mention-me`) rather than one more flat colour, because scanning a long
+  document the eye finds a light before it reads a hue. The roster comes from
+  `/api/principals` (the same list the `@` autocomplete uses) and the viewer's
+  name from `/api/whoami`; both are boot fetches in no fixed order relative to
+  the first document opening, so *either* landing calls `repaintMentions()` —
+  whichever loses the race would otherwise leave the editor a mention short, or
+  colour your own name as somebody else's.
+- **Pasting a URL writes the link.** GFM autolinking is deliberately not among
+  the loaded markdown extensions, so a bare address is not a link in this
+  dialect — it used to paste as dead text that rendered as dead text.
+  `pasteAsLink` (a `paste` handler beside the media one, so it works in rich and
+  source alike) turns a pasted `http(s):`/`mailto:` URL into markdown: over a
+  selection it becomes that selection's link, on its own it links to itself.
+  It stands down wherever the URL is content rather than a link — inside a code
+  span, a fenced block or an existing destination, asked of the same syntax tree
+  the mention scan uses — and wherever the selected label carries a bracket or a
+  newline, since writing markdown that cannot parse is worse than pasting
+  plainly. `mdDestination` leaves balanced parentheses unwrapped (CommonMark
+  allows them, and `…_(disambiguation)` reads better in source) and angle-wraps
+  anything else.
 - **Spaces in link targets.** CommonMark refuses a bare space in a link
   destination, so `[q3](_files/q3 final.xlsx)` is not a link at all — it renders
   as literal text and cannot be clicked. Both halves are handled: an upload now

@@ -834,9 +834,7 @@ async function mentionUsers() {
       if (next.size !== _mentionNames.size ||
           [...next].some((u) => !_mentionNames.has(u))) {
         _mentionNames = next;
-        for (const v of _mentionViews) {
-          try { v.dispatch({ effects: rosterChanged.of(null) }); } catch (e) { /* torn down */ }
-        }
+        repaintMentions();
       }
     } catch (e) { _mentionCache = _mentionCache || []; }
   }
@@ -868,6 +866,16 @@ async function mentionSource(context) {
 // tagged, which is the one thing a mention colour must not do.
 const rosterChanged = StateEffect.define();
 const _mentionViews = new Set();
+
+// Both the roster and `window.__kbuser` arrive from their own boot fetch, in no
+// fixed order relative to the first document opening. Either one landing has to
+// repaint, or whichever lost the race leaves the editor a mention short — or,
+// worse, your own name coloured as somebody else's.
+function repaintMentions() {
+  for (const v of _mentionViews) {
+    try { v.dispatch({ effects: rosterChanged.of(null) }); } catch (e) { /* torn down */ }
+  }
+}
 
 // Character-for-character the indexer's ASSIGNEE_RE (kb_platform/indexer.py):
 // the colour has to mean exactly what the to-do index already means by a tag,
@@ -901,9 +909,17 @@ function buildMentionDecos(view) {
         if (!_mentionNames.has(name.toLowerCase())) continue;
         const from = line.from + m.index + m[0].indexOf("@");
         if (inCodeOrUrl(tree, from + 1)) continue;
+        // Being tagged YOURSELF is the one mention you must not scroll past, so
+        // it gets its own treatment rather than sharing everyone else's colour.
+        const mine = name.toLowerCase() === (window.__kbuser || "").toLowerCase();
         decos.push(Decoration.mark({
-          class: "cm-mention",
-          attributes: { "data-mention": name, title: "@" + name + " — tagged in this document" },
+          class: "cm-mention" + (mine ? " cm-mention-me" : ""),
+          attributes: {
+            "data-mention": name,
+            ...(mine ? { "data-me": "1" } : {}),
+            title: mine ? "@" + name + " — that is you"
+                        : "@" + name + " — tagged in this document",
+          },
         }).range(from, from + 1 + name.length));
       }
       if (line.to >= range.to) break;
@@ -1074,12 +1090,60 @@ function mediaExtension(tab) {
       const items = [...((e.clipboardData && e.clipboardData.items) || [])]
         .filter((i) => i.kind === "file");
       const files = items.map((i) => i.getAsFile()).filter(Boolean);
-      if (!files.length) return false;   // plain text paste -> CodeMirror handles it
+      // a plain-text paste is either a URL worth linking, or CodeMirror's job
+      if (!files.length) return pasteAsLink(e, view);
       e.preventDefault();
       uploadAndInsert(view, tab, files, view.state.selection.main.head);
       return true;
     },
   });
+}
+
+// ---- pasting a URL ---------------------------------------------------------
+// A bare URL is NOT a link in this dialect — GFM autolinking is not among the
+// markdown extensions we load — so a pasted address used to sit there as dead
+// text that rendered as dead text. Pasting one now writes the markdown:
+// over a selection it becomes that selection's link, which is the gesture
+// everyone already has muscle memory for, and on its own it links to itself so
+// it is at least clickable.
+const PASTED_URL = /^(https?:\/\/|mailto:)[^\s<>]+$/i;
+
+// A destination that survives what people actually paste. CommonMark allows
+// balanced parentheses unwrapped, and leaving them alone keeps the source
+// readable (Wikipedia's "…_(disambiguation)"); anything else goes in angle
+// brackets, with the two characters that would close them percent-encoded.
+function mdDestination(url) {
+  let depth = 0;
+  for (const ch of url) {
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth < 0) break;
+  }
+  if (depth === 0 && !/[<>]/.test(url)) return url;
+  return "<" + url.replace(/</g, "%3C").replace(/>/g, "%3E") + ">";
+}
+
+function pasteAsLink(e, view) {
+  const raw = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
+  const url = raw.trim();
+  if (!PASTED_URL.test(url)) return false;
+  const sel = view.state.selection.main;
+  // Inside a code span, a fenced block or an existing link destination, a URL
+  // is content and must land exactly as typed — the same rule the mention
+  // highlight follows, asked of the same syntax tree.
+  if (inCodeOrUrl(syntaxTree(view.state), sel.from)) return false;
+  const label = view.state.sliceDoc(sel.from, sel.to);
+  // A label carrying a bracket or a newline cannot be a link label; pasting
+  // over it plainly is better than writing markdown that will not parse.
+  if (/[\[\]\n]/.test(label)) return false;
+  const insert = "[" + (label || url) + "](" + mdDestination(url) + ")";
+  e.preventDefault();
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert },
+    selection: { anchor: sel.from + insert.length },
+    userEvent: "input.paste",
+    scrollIntoView: true,
+  });
+  return true;
 }
 
 // ---- editing mode (rich | source) ------------------------------------------
@@ -1930,6 +1994,7 @@ async function loadWhoami() {
   $("#whoami-m").textContent = j.user + " · uid " + j.uid;
   $("#term-user").textContent = j.user;
   window.__kbuser = j.user;
+  repaintMentions();    // "@you" glows; until we know who you are, it cannot
   restoreTreeState();   // before the first loadTree() render (boot awaits us first)
   if (!canShell) {
     $("#toggleterm").hidden = true;

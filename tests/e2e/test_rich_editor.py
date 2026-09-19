@@ -507,3 +507,110 @@ def test_tagged_people_are_coloured_and_nothing_else_is(browser):
     finally:
         cleanup([docp])
         ctx.close()
+
+
+def test_your_own_tag_glows_and_a_colleagues_does_not(browser):
+    """Being tagged yourself is the one mention you must not scroll past, so it
+    carries its own class — and reading the SAME document as someone else must
+    move the glow onto their name instead."""
+    docp = kbdoc(f"mentionme_{int(time.time())}.md")
+    alice, bob = U("alice"), U("bob")
+    body = f"- [ ] @{alice} and @{bob} both\n"
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, docp)
+        set_source(page, body)
+        page.wait_for_selector(".cm-mention-me", timeout=12000)
+        glowing = page.locator(".cm-mention-me").evaluate_all(
+            "els => els.map(e => e.getAttribute('data-mention'))")
+        assert glowing == [alice], f"alice should see only her own tag glow: {glowing}"
+        # a glow, not just another colour: the box-shadow has to actually render
+        shadow = page.locator(".cm-mention-me").first.evaluate(
+            "e => getComputedStyle(e).boxShadow")
+        assert shadow and shadow != "none", "the 'this is you' mention has no glow"
+
+        # the same document, read by bob: the glow moves
+        bctx = browser.new_context()
+        bpage = login(bctx, "bob")
+        try:
+            bpage.goto(f"{BASE}/{docp}")
+            bpage.wait_for_function(
+                f"() => window.__kbview && window.__kbpath === '{docp}'", timeout=15000)
+            bpage.wait_for_selector(".cm-mention-me", timeout=12000)
+            assert bpage.locator(".cm-mention-me").evaluate_all(
+                "els => els.map(e => e.getAttribute('data-mention'))") == [bob]
+        finally:
+            bctx.close()
+    finally:
+        cleanup([docp])
+        ctx.close()
+
+
+def paste_text(page, text):
+    """A real paste event carrying text/plain, the way a browser delivers one."""
+    page.evaluate("""(t) => {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', t);
+        window.__kbview.contentDOM.dispatchEvent(
+            new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+    }""", text)
+    page.wait_for_timeout(250)
+
+
+def test_a_pasted_url_becomes_a_link(browser):
+    """Over a selection it links that selection; on its own it links to itself.
+    A bare URL is not a link in this dialect, so pasting one used to leave dead
+    text that rendered as dead text."""
+    docp = kbdoc(f"pastelink_{int(time.time())}.md")
+    url = "https://example.com/a/b?q=1#frag"
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, docp)
+
+        # on its own: links to itself
+        set_source(page, "see \n")
+        move_cursor(page, 4)
+        paste_text(page, url)
+        assert source(page) == f"see [{url}]({url})\n", source(page)
+
+        # over a selection: that selection becomes the link text
+        set_source(page, "read the docs here\n")
+        page.evaluate("() => window.__kbview.dispatch({selection:{anchor:9,head:13}})")
+        page.wait_for_timeout(150)
+        paste_text(page, url)
+        assert source(page) == f"read the [docs]({url}) here\n", source(page)
+    finally:
+        cleanup([docp])
+        ctx.close()
+
+
+def test_a_pasted_url_is_left_alone_where_it_is_content(browser):
+    """Inside a code span or a fenced block a URL is content, and whitespace or
+    a non-URL is an ordinary paste — CodeMirror's job, not ours."""
+    docp = kbdoc(f"pasteraw_{int(time.time())}.md")
+    url = "https://example.com/x"
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, docp)
+
+        set_source(page, "run `x` here\n")
+        move_cursor(page, 5)                       # inside the code span
+        paste_text(page, url)
+        assert source(page) == f"run `{url}x` here\n", source(page)
+
+        set_source(page, "```\ncode\n```\n")
+        move_cursor(page, 4)                       # inside the fence
+        paste_text(page, url)
+        assert source(page) == f"```\n{url}code\n```\n", source(page)
+
+        # not a URL at all
+        set_source(page, "x\n")
+        move_cursor(page, 1)
+        paste_text(page, "just some words")
+        assert source(page) == "xjust some words\n", source(page)
+    finally:
+        cleanup([docp])
+        ctx.close()
