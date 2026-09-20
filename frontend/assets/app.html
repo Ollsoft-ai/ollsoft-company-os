@@ -26,8 +26,6 @@
     <span class="brand">
       <span class="brand-word"><img class="logo-word" src="/static/logo.svg?v=1784984673475" alt="Ollsoft" /><small>Company OS</small></span>
     </span>
-    <button id="search" class="search" data-testid="search" aria-haspopup="dialog"
-            aria-label="Search files and contents"><span id="search-label">Search files and contents…</span></button>
     <span class="spacer"></span>
     <!-- The mic stays in the BAR, not the user menu: dictation's point is reaching
          it without leaving what you are typing in, and the trip through the
@@ -39,6 +37,9 @@
   <div id="scrim" class="scrim" aria-hidden="true"></div>
   <main class="layout">
     <aside class="sidebar">
+      <!-- the search: a button that opens the palette (Ctrl/Cmd+K) — it never takes text -->
+      <button id="search" class="search" data-testid="search" aria-haspopup="dialog"
+              aria-label="Search files and contents" title="Search files and contents"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.4" y2="16.4"/></svg><span id="search-label">Search…</span><kbd id="search-kbd" class="search-kbd" hidden></kbd></button>
       <div class="pane-title">Files
         <button id="tree-fold" class="mini" data-testid="tree-fold" title="Collapse all folders">⊟</button>
         <button id="hidden-toggle" class="mini" data-testid="hidden-toggle"

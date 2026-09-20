@@ -7458,8 +7458,8 @@ async function boot() {
   $("#doc-history").addEventListener("click", () => { if (active) openHistory(active.path); });
   // a physical keyboard is worth advertising the shortcut to; a phone is not
   if (!window.matchMedia("(hover: none)").matches) {
-    const lbl = $("#search-label");
-    if (lbl) lbl.textContent = "Search files and contents…  " + comboLabel("Mod+K");
+    const kbd = $("#search-kbd");
+    if (kbd) { kbd.textContent = comboLabel("Mod+K"); kbd.hidden = false; }
   }
   $("#cron-btn").addEventListener("click", openCron);
   // Show the Admin entry (in the user menu) to platform admins (sudo group) —

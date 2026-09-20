@@ -256,12 +256,18 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
   font-size: .88rem; white-space: nowrap; }
 .brand-word small { color: var(--muted); font-weight: 400; }
 @keyframes live { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
-/* the topbar search is a BUTTON that opens the palette — it never takes text */
-.search { flex: 0 1 360px; margin-left: auto; padding: .42rem .7rem; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--panel); color: var(--faint);
-  font-family: var(--mono); font-size: .8rem; text-align: left; cursor: pointer;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the search: a button that opens the palette, at the top of the sidebar —
+   it never takes text (opening on focus would make it untraversable) */
+.search { display: flex; align-items: center; gap: .5rem; width: 100%; margin: .3rem 0 .1rem;
+  padding: .5rem .65rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg);
+  color: var(--faint); font-family: var(--sans); font-size: .82rem; text-align: left; cursor: pointer;
+  overflow: hidden; white-space: nowrap; flex: 0 0 auto; }
+.search .icon { width: 15px; height: 15px; color: var(--muted); }
+.search #search-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.search-kbd { font-family: var(--mono); font-size: .6rem; color: var(--faint); border: 1px solid var(--border);
+  border-radius: 4px; padding: .05rem .32rem; line-height: 1.35; }
 .search:hover { color: var(--ink); border-color: var(--border-hover); }
+.search:hover .icon { color: var(--ink); }
 .search:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
 .spacer { flex: 1; }
 .topbar button, .topbar .logout { background: transparent; color: var(--muted); border: 1px solid var(--border);
@@ -277,7 +283,7 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 }
 
 /* interaction feel: quick, quiet transitions — never mushy */
-.topbar button, .user-btn, .user-menu button, .user-menu .logout, .tree-item, .tab, .term-tab,
+.topbar button, .search, .user-btn, .user-menu button, .user-menu .logout, .tree-item, .tab, .term-tab,
   .mini, .tbtn, .sr-item,
 .modal-foot button, .admin-form button, .chip-preset, .tab-x, .term-x {
   transition: background-color .1s ease, color .1s ease, border-color .1s ease; }
@@ -1281,11 +1287,11 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .cm-rich .cm-line { padding: .05rem 1rem; }
   .cm-rich .cm-quoteline { padding-left: 1.7rem !important; }
 
-  .brand-word { display: none; }
+  /* the name stays on phones: the bar has room now that search and the
+     actions live in the drawer */
   .topbar { gap: .45rem; }
   .navbtn { display: inline-flex; align-items: center; justify-content: center;
     font-size: 1.05rem; padding: .45rem .6rem; line-height: 1; }
-  .search { flex: 1 1 auto; min-width: 0; margin-left: .15rem; }
   /* the mic sits in the bar itself: icon-only, finger-sized */
   #mic-btn { padding: .45rem .6rem; }
   #mic-btn .btn-label { display: none; }

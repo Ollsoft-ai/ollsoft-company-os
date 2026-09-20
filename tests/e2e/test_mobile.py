@@ -82,7 +82,7 @@ def test_drawer_boots_open_and_closes_on_file_open(browser):
     assert nav_open(page)
     assert page.locator("#nav-btn").is_visible()
     assert not page.locator("#whoami").is_visible()      # desktop chrome is gone
-    assert not page.locator(".brand-word").is_visible()
+    assert page.locator(".brand-word").is_visible()             # the name stays on phones
     # opening a document dismisses the drawer and shows the editor
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
