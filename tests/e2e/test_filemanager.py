@@ -53,7 +53,7 @@ def test_access_badge_reflects_permissions(browser):
     page = login(ctx, "alice")
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     page.wait_for_selector('#access-badge:not([hidden])')
-    assert "write" in page.inner_text('#access-badge')
+    assert "write" in page.get_attribute('#access-badge', 'title')          # the pen; words on hover
     ctx.close()
 
 

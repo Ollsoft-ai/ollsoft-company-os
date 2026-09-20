@@ -1636,6 +1636,7 @@ const I = {
   trash: svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
   more: svgIcon('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
   pencil: svgIcon('<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>'),
+  eye: svgIcon('<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>'),
   copy: svgIcon('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
   paste: svgIcon('<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>'),
   move: svgIcon('<polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/>'),
@@ -3806,17 +3807,30 @@ function userColors(name) {
   return { color: `hsl(${hue} ${sat}% 62%)`, colorLight: `hsl(${hue} ${sat}% 62% / .30)` };
 }
 
-function renderSyncBadge() {
-  const b = $("#sync-badge");
+// One badge in the title bar for two facts. The icon: a pen when you may
+// write here, an eye when you may only read. The colour: primary while the
+// live session is connected and synced, the danger colour while it is not
+// (a silently dead connection once made a whole pairing session look broken).
+// The words live in the tooltip.
+function renderDocBadge(accessOverride) {
+  const b = $("#access-badge");
   const t = active;
-  if (!t || t.kind !== "doc" || !t.provider) { b.hidden = true; return; }
+  const access = accessOverride !== undefined ? accessOverride : (t ? t.access : null);
+  if (!t || !access) { b.hidden = true; return; }
+  const write = !!access.write;
+  const state = t.provider ? (t.conn === "connected" && t.synced ? "live" : "off") : "";
+  b.innerHTML = write ? I.pencil : I.eye;
+  b.className = "access-badge " + (write ? "rw" : "ro") + (state ? " " + state : "");
+  const what = write ? "You can read and write this file"
+             : access.read ? "Read-only: you can see this file, not change it" : "No access";
+  const how = state === "live" ? "live — everyone sees your edits in real time"
+            : state === "off" ? "NOT connected to the live session — your edits are not reaching others. Reopen the tab if this persists."
+            : "";
+  b.title = how ? `${what} · ${how}` : what;
+  b.setAttribute("aria-label", b.title);
   b.hidden = false;
-  const live = t.conn === "connected" && t.synced;
-  b.textContent = live ? "live" : "not syncing";
-  b.className = "sync-badge " + (live ? "live" : "off");
-  b.title = live ? "Connected — everyone sees your edits in real time"
-                 : "NOT connected to the live session — your edits are not reaching others. Reopen the tab if this persists.";
 }
+function renderSyncBadge() { renderDocBadge(); }
 
 let _presenceSig = "";
 
@@ -5196,14 +5210,7 @@ async function buildAdvanced(host, path, ro) {
   });
 }
 
-function setAccessBadge(access) {
-  const b = $("#access-badge");
-  if (!access) { b.hidden = true; return; }
-  const label = access.write ? "read · write" : access.read ? "read-only" : "no access";
-  b.textContent = label;
-  b.className = "access-badge " + (access.write ? "rw" : "ro");
-  b.hidden = false;
-}
+function setAccessBadge(access) { renderDocBadge(access === undefined ? null : access); }
 
 async function createAndOpen(path) {
   const r = await fetch("/fs/newfile", {

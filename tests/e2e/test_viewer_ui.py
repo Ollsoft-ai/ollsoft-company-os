@@ -54,7 +54,7 @@ def test_viewer_browser_experience(browser, viewer):
         page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
         wait_path(page, doc("overview.md"))
         page.wait_for_selector('#access-badge:not([hidden])')
-        assert "write" in page.inner_text('#access-badge')
+        assert "write" in page.get_attribute('#access-badge', 'title')      # the pen; words on hover
     finally:
         a.post("/admin/launchers", json={"buttons": original})
         ctx.close()

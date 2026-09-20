@@ -108,15 +108,16 @@ def test_terminal_survives_connection_drop(browser):
     ctx.close()
 
 
-def test_sync_badge_shows_live(browser):
-    """An editor that is actually syncing says 'live'; a silently dead
-    connection was how a whole pairing session looked broken."""
+def test_doc_badge_shows_live(browser):
+    """An editor that is actually syncing wears the primary colour and says
+    'live' on hover; a silently dead connection was how a whole pairing session
+    looked broken."""
     ctx = browser.new_context()
     page = login(ctx, "alice")
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
-    page.wait_for_selector(".sync-badge.live", timeout=8000)
-    assert "live" in page.inner_text('[data-testid="sync-badge"]')
+    page.wait_for_selector("#access-badge.live", timeout=8000)
+    assert "live" in page.get_attribute('[data-testid="access-badge"]', "title").lower()
     ctx.close()
 
 
