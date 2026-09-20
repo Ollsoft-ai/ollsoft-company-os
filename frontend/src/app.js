@@ -1659,7 +1659,6 @@ function wireMdBar() {
       case "table": tbTable(); break;
       case "photo": pickInto(mediaInput); break;     // touch: camera / library
       case "attach": pickInto(fileInput); break;
-      case "mic": toggleDictation(); break;
     }
   });
 }
@@ -7488,17 +7487,17 @@ async function boot() {
   // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.
-  const micBtn = $("#mic-btn");
+  // The mic lives in the formatting dock (and the terminal keybar has its own);
+  // the dock's is dictation's button: press-and-hold, and the recording state.
+  const micBtn = document.querySelector('#mdbar button[data-md="mic"]');
   const dhBtn = $("#dict-hist-btn");   // null-guarded: cached older app.html
   if (micBtn && dictationReady()) {
     initDictation({ resolveTarget: dictationTarget, insert: insertDictation,
                     toast: kbToast, button: micBtn });
     if (dhBtn) dhBtn.addEventListener("click", openDictHistory);
-  } else if (micBtn) {
-    micBtn.hidden = true;
+  } else {
+    if (micBtn) micBtn.hidden = true;
     if (dhBtn) dhBtn.hidden = true;    // no mic here → the history would stay empty
-    const mdMic = document.querySelector('#mdbar button[data-md="mic"]');
-    if (mdMic) mdMic.hidden = true;
   }
   const ht = $("#hidden-toggle");
   ht.classList.toggle("on", showHidden);

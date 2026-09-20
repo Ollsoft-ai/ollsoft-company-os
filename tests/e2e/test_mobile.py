@@ -471,18 +471,19 @@ def test_toolbar_tap_keeps_editor_focus_and_selection(browser):
 
 def test_mic_is_one_tap_away_and_steals_no_focus(browser):
     """Dictation's point is reaching it without leaving what you're typing in:
-    the mic sits in the topbar (not behind the user menu), and pressing it must
-    not blur the editor — that closed the phone keyboard and dropped the selection."""
+    the mic is the first key of the keyboard row, where the thumb rests, and
+    pressing it must not blur the editor — that closed the phone keyboard and
+    dropped the selection."""
     ctx, page = m_login(browser)
-    assert page.locator("#mic-btn").is_visible()       # no menu needed
-    assert not page.locator('[data-testid="user-menu"]').is_visible()
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
     page.click(".cm-content")
+    page.set_viewport_size({"width": 390, "height": 520})       # the keyboard is up
+    page.wait_for_selector('[data-testid="mdbar"]', state="visible", timeout=4000)
     page.wait_for_timeout(200)
     in_editor = "() => !!(document.activeElement && document.activeElement.closest('.cm-editor'))"
     assert page.evaluate(in_editor)
-    box = page.locator("#mic-btn").bounding_box()
+    box = page.locator('#mdbar button[data-md="mic"]').bounding_box()
     page.touchscreen.tap(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
     page.wait_for_timeout(300)
     assert page.evaluate(in_editor), "a mic tap must leave the editor focused"

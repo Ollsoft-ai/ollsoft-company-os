@@ -1,42 +1,70 @@
 ---
 name: kb-settings
-description: How platform settings work — the layered files (company defaults in .os/settings.json, personal in users/<you>/.os/settings.json), what each key means, and how an agent may change them. Load it when asked to change a preference or a company-wide default.
+description: How platform settings work — company-wide defaults in .os/settings.json, personal overrides in users/<you>/.os/settings.json, every key and its values, how an agent changes them, and what to update when a setting is added. Load it when asked to change a preference, a company-wide default, the theme, or to add a setting to the platform.
 ---
 
 # Settings
 
-Settings resolve per key, lowest to highest: the shipped default, the company
-layer, the person's own layer. One value from exactly one layer.
+Settings resolve **per key**, lowest to highest: the shipped default, the
+company layer, the person's own layer. One value from exactly one layer; the
+API says which (`source`). Everything the app lets people choose — the theme,
+and whatever joins it — is a setting. Nothing is a config file of its own.
 
 | Layer | File | Who may write |
 |---|---|---|
+| shipped default | `kb_platform/settings.py` in the platform repo (`REGISTRY`) | platform developers |
 | company | `/srv/kb/.os/settings.json` (root-owned, everyone reads) | an admin only — the Settings dialog's Company tab, or `POST /admin/settings`. If you run as a non-admin, ask one; do not try to write it |
 | yours | `/srv/kb/users/<you>/.os/settings.json` (0600) | you. Edit it with any tool, or `POST /api/settings` |
 
-Both files are flat maps:
+Both files are flat maps of `"key": value`:
 
 ```json
 {
-  "ui.theme": "deep-blue"
+  "ui.theme": "light"
 }
 ```
 
-Rules when editing the file yourself:
+Rules when editing a file yourself:
 
-- Keep it a JSON object of `"key": value`. Unknown keys and wrong values are
-  ignored one by one (the dialog reports them as "ignored"); a file that is not
-  valid JSON counts as empty until the next save repairs it.
+- Unknown keys and wrong values are ignored one by one (the dialog reports
+  them as "ignored"); a file that is not valid JSON counts as empty until the
+  next save repairs it.
 - Keys starting with `_` are reserved and ignored — safe for a `_note`.
-- The directory `users/<you>/.os/` is created 0700 by your backend the first
-  time you save from the app; if it does not exist yet, create it with mode 700.
-- To go back to the company default, remove the key from your file.
+- `users/<you>/.os/` is created 0700 by your backend the first time you save
+  from the app; if it does not exist yet, create it with mode 700.
+- To go back to the company default, remove the key from your file. To go
+  back to the shipped default company-wide, an admin removes it from the
+  company file (or unsets it in the dialog).
 
 ## Keys
 
-| Key | Values | Meaning |
-|---|---|---|
-| `ui.theme` | `deep-blue` | Colour theme for the whole app. One theme today; more arrive with the theme work. |
+| Key | Values | Default | Layers | Meaning |
+|---|---|---|---|---|
+| `ui.theme` | `deep-blue` · `dark` · `light` | `deep-blue` | company, user | Colours for the whole app, editor and terminal included. Deep blue is the house look; Dark and Light follow Notion's greys and paper. |
 
 `GET /api/settings` (as you, with your session) returns the full picture:
-`effective` (what applies), `source` (which layer each value came from),
-`company` and `user` (each layer's values, plus anything ignored and why).
+`schema` (every key, its type, options and labels), `effective` (what
+applies), `source` (which layer each value came from), `company` and `user`
+(each layer's values, plus anything ignored and why). Prefer it over reading
+the files when you only need to know what applies.
+
+## Adding a setting (platform developers)
+
+A setting is one entry in `REGISTRY` in `kb_platform/settings.py` — key, type
+(`bool`, `int` with min/max, `enum` with options and labels, `string` with a
+pattern), default, `scopes` (which layers may set it: company, user, or both),
+group, label, help. The validation, the two files, `/api/settings`,
+`/admin/settings` and the dialog row follow from the entry; add a
+`settings.subscribe(key, fn)` in `frontend/src/app.js` if the value has a
+live effect. Then, in the same change:
+
+1. a row in the table above — **this skill is the agents' reference and must
+   list every key**; `tests/cli/test_settings.py` fails when it does not;
+2. the same row in `docs/settings.md`;
+3. redeploy the skill to `/srv/kb/.claude/skills/kb-settings/SKILL.md`
+   (`scripts/install.sh` does it; on a running box copy it as root:kb-users 0644).
+
+A new theme is a `:root[data-theme="<name>"]` block in
+`frontend/assets/style.css` setting every colour token plus the name in
+`ui.theme`'s options; `tests/cli/test_theme_tokens.py` refuses a theme that
+forgets a token and any colour named outside the token blocks.

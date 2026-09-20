@@ -225,16 +225,24 @@ def doc_text(page):
 # ---- the affordance ---------------------------------------------------------
 
 def test_mic_button_present(page):
-    b = page.locator('[data-testid="mic-btn"]')
+    """The mic is in the formatting dock (the terminal keybar has its own): on
+    a writable document it is there, idle."""
+    from kbenv import doc as kbdoc
+    page.click(f'.tree-item[data-path="{kbdoc("overview.md")}"]')
+    page.wait_for_selector('#mdbar:not([hidden])', timeout=10000)
+    b = page.locator('#mdbar button[data-md="mic"]')
     assert b.count() == 1
     assert b.is_visible()
     assert b.get_attribute("aria-pressed") == "false"
+    # the context is shared by the module: leave no open tab behind for the
+    # next test's page to restore
+    page.evaluate("() => { localStorage.removeItem('kbOpen'); localStorage.removeItem('kbTreeState'); }")
 
 
 def test_indicator_shows_while_recording(page):
     page.keyboard.down("F9")
     recording(page)
-    assert page.locator('[data-testid="mic-btn"]').get_attribute("aria-pressed") == "true"
+    assert page.locator('#mdbar button[data-md="mic"]').get_attribute("aria-pressed") == "true"
     assert "Listening" in page.locator("#ptt-status").inner_text()
     page.wait_for_timeout(HOLD_MS)      # make it a hold, so releasing ends it
     page.keyboard.up("F9")
@@ -299,7 +307,7 @@ def test_late_duplicate_release_does_not_stop_a_latch(page):
     Firefox for Android can deliver the second one late, >450 ms after the
     press, where it used to read as a hold ending and stopped the recording an
     instant after the tap latched it. A release must count exactly once."""
-    b = page.locator('[data-testid="mic-btn"]')
+    b = page.locator('#mdbar button[data-md="mic"]')
     b.dispatch_event("pointerdown")
     b.dispatch_event("pointerup")           # a real tap: released immediately
     recording(page)

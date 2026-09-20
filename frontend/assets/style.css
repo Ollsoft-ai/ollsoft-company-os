@@ -274,13 +274,6 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
   padding: .38rem .7rem; border-radius: 7px; cursor: pointer; text-decoration: none;
   font-family: var(--sans); font-size: .8rem; font-weight: 500; white-space: nowrap; }
 .topbar button:hover, .topbar .logout:hover { color: var(--ink); background: var(--panel2); border-color: var(--border-hover); }
-/* The mic is icon-only in the bar — the label stays in the DOM (a11y), the
-   title is the tooltip */
-.topbar .icon-btn { display: inline-flex; align-items: center; gap: .45rem; }
-@media (min-width: 881px) {
-  .topbar .icon-btn { padding: .42rem .55rem; }
-  .topbar .icon-btn .btn-label { display: none; }
-}
 
 /* interaction feel: quick, quiet transitions — never mushy */
 .topbar button, .search, .user-btn, .user-menu button, .user-menu .logout, .tree-item, .tab, .term-tab,
@@ -1220,9 +1213,9 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   transform-origin: left center; transform: scaleX(0); will-change: transform; }
 @keyframes ptt-pulse { 50% { opacity: .3; } }
 /* Recording is the one thing worth colouring the topbar button for. */
-#mic-btn.rec { color: var(--danger); border-color: var(--danger);
+#mdbar button[data-md="mic"].rec { color: var(--danger); border-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent); }
-#mic-btn.busy { color: var(--muted); }
+#mdbar button[data-md="mic"].busy { color: var(--muted); }
 #mdbar button[data-md="mic"].rec { color: var(--danger); }
 /* Screen-reader-only. The live regions must occupy no space but must stay in the
    accessibility tree — display:none or visibility:hidden would silence them. */
@@ -1321,9 +1314,6 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .topbar { gap: .45rem; }
   .navbtn { display: inline-flex; align-items: center; justify-content: center;
     font-size: 1.05rem; padding: .45rem .6rem; line-height: 1; }
-  /* the mic sits in the bar itself: icon-only, finger-sized */
-  #mic-btn { padding: .45rem .6rem; }
-  #mic-btn .btn-label { display: none; }
 
   /* screen space: no permanent bar on phones — the launcher chips sit in the
      drawer, just above the person */

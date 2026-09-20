@@ -143,6 +143,24 @@ async function vaultMark(id, status) {
   if (m && m.status !== status) { m.status = status; await vaultPutMeta(m); }
 }
 
+// Which recording THIS TAB is making, if any. sessionStorage belongs to one
+// tab and survives what kills a page mid-sentence — a reload, a crash that
+// the browser restores — so on the next load it is proof that a record still
+// marked "recording" is dead, however young: the sweep's age rule below can
+// only guess, because a young one might be another tab, still speaking.
+const LIVE_KEY = "kbDictLive";
+function noteLive(id) {
+  try { if (id) sessionStorage.setItem(LIVE_KEY, id); else sessionStorage.removeItem(LIVE_KEY); }
+  catch (e) { /* storage blocked: the age rule is the fallback */ }
+}
+async function recoverOwnDead() {
+  let id = null;
+  try { id = sessionStorage.getItem(LIVE_KEY); sessionStorage.removeItem(LIVE_KEY); } catch (e) { return; }
+  if (!id) return;
+  const m = await vaultGetMeta(id);
+  if (m && m.status === "recording") { m.status = "interrupted"; await vaultPutMeta(m); }
+}
+
 async function vaultBlob(id) {
   const m = await vaultGetMeta(id);
   if (!m) return null;
@@ -389,6 +407,7 @@ async function beginRecording() {
   chunkSeq = 0;
   const rid = recId;
   vaultPutMeta({ id: rid, t: startedAt, mime: recMime, status: "recording", ms: 0 });
+  noteLive(rid);
   rec.ondataavailable = (e) => {
     if (!(e.data && e.data.size)) return;
     chunks.push(e.data);
@@ -446,6 +465,7 @@ function collectBlob() {
 
 async function finishRecording(note) {
   if (state !== "recording") return;
+  noteLive(null);                    // whatever happens next, it is no longer live
   const elapsed = Date.now() - startedAt;
   clearTimeout(maxTimer);
   if (stopMeter) { stopMeter(); stopMeter = null; }
@@ -648,7 +668,7 @@ export function initDictation(h) {
   hooks = h;
   // Rescue first: recordings stranded by a crash become "interrupted" (listed
   // in history with transcribe/download), and expired audio is cleared out.
-  vaultSweep();
+  recoverOwnDead().then(vaultSweep);   // this tab's own dead recording first, then the age rule
   // Test hook: is the microphone actually open (a LIVE track — what lights the
   // OS mic indicator), as opposed to merely permitted? The stream is module-
   // private, so the release-on-hide behaviour is unobservable without this.

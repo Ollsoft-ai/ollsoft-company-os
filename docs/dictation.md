@@ -1,8 +1,8 @@
 # Dictation (speech-to-text)
 
 Speak, and the words land wherever you were already typing — a document, a
-terminal, the command palette, any text field. `F9` (or `Alt+K`, or the mic button
-in the top bar).
+terminal, the command palette, any text field. `F9` (or `Alt+K`, or the mic in the
+formatting dock at the bottom of a document, or the terminal keybar's).
 
 Two gestures, one key, no mode to remember:
 
