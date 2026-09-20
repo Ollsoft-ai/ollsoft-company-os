@@ -17,6 +17,7 @@ import { yCollab } from "y-codemirror.next";
 import { initDictation, toggleDictation, dictationReady, retryDictation,
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
+import { settings } from "./settings.js";
 
 // Markdown on the Ollsoft palette: content stays ink; the machinery (marks,
 // urls, code) recedes into blues so the words lead.
@@ -1967,6 +1968,14 @@ function restoreSidebarWidth() {
 // Applied at module eval, not in boot(): boot awaits the network, and a tree
 // that snaps from 264px to your width after the first fetch is a visible jump.
 restoreSidebarWidth();
+
+// The theme is a setting (kb_platform/settings.py: ui.theme), applied at module
+// eval from the cached value so the first paint is already in the right colours,
+// then kept in step with the server. One theme today; the attribute is the hook
+// the theme step fills with CSS.
+function applyTheme(t) { document.documentElement.dataset.theme = t || "deep-blue"; }
+applyTheme(settings.get("ui.theme"));
+settings.subscribe("ui.theme", applyTheme);
 
 function wireSidebarResize() {
   const bar = $("#sb-resizer");
@@ -4177,6 +4186,194 @@ function showLaunchersModal() {
   render();
 }
 
+// ---- settings dialog — generated from the registry the backend serves ------
+// One row per setting: the control comes from its type, the pill says which
+// layer the value came from, × clears that layer. Admins get a Company tab that
+// edits the shared layer with the same rows. Nothing here knows any setting by
+// name: adding one is a registry entry on the server, and the row appears.
+const SET_SOURCE_LABEL = { default: "default", company: "company default", user: "your setting" };
+
+function openSettings() {
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.setAttribute("data-testid", "settings");
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+  const card = document.createElement("div");
+  card.className = "modal-card settings-card";
+  card.setAttribute("data-testid", "settings-card");
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+  let tab = "yours";
+  // Escape closes any .modal-overlay from outside (closeTopModal), so the
+  // subscription lets go by itself once the card is off the page.
+  const unsub = settings.subscribe("*", () => { if (ov.isConnected) render(); else unsub(); });
+  const close = () => { unsub(); ov.remove(); };
+  const tid = (key) => key.replace(/\./g, "-");
+  const fail = (r) => { if (r && !r.ok) kbToast(r.error || "could not save the setting", "err"); };
+
+  // The control for one entry. `onChange` receives a typed value — or undefined
+  // for "not set", which only the company tab offers.
+  function control(e, value, onChange, unsettable) {
+    let el;
+    const notSet = value === undefined;
+    if (e.type === "bool" && unsettable) {
+      el = document.createElement("select");
+      el.innerHTML = '<option value="">— not set —</option><option value="true">on</option><option value="false">off</option>';
+      el.value = notSet ? "" : String(value);
+      el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value === "true"));
+    } else if (e.type === "bool") {
+      el = document.createElement("input"); el.type = "checkbox"; el.checked = !!value;
+      el.addEventListener("change", () => onChange(el.checked));
+    } else if (e.type === "enum") {
+      el = document.createElement("select");
+      if (unsettable) el.appendChild(new Option("— not set —", ""));
+      for (const o of e.options) el.appendChild(new Option(o, o));
+      el.value = notSet ? "" : value;
+      el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value));
+    } else if (e.type === "int") {
+      el = document.createElement("input"); el.type = "number";
+      el.min = e.min; el.max = e.max; el.step = 1;
+      el.value = notSet ? "" : value;
+      el.placeholder = unsettable ? "not set" : "";
+      el.addEventListener("change", () => {
+        if (el.value === "" && unsettable) { onChange(undefined); return; }
+        const n = Math.round(Number(el.value));
+        if (!Number.isFinite(n) || n < e.min || n > e.max) {
+          kbToast(`${e.label}: ${e.min} to ${e.max}`, "err"); render(); return;
+        }
+        onChange(n);
+      });
+    } else {
+      el = document.createElement("input"); el.type = "text";
+      if (e.maxlen) el.maxLength = e.maxlen;
+      el.value = notSet ? "" : value;
+      el.placeholder = unsettable ? "not set" : "";
+      el.addEventListener("change", () => {
+        const v = el.value.trim();
+        if (v === "" && unsettable) { onChange(undefined); return; }
+        if (e.pattern && !new RegExp("^(?:" + e.pattern + ")$").test(v)) {
+          kbToast(`${e.label}: not a valid value`, "err"); render(); return;
+        }
+        onChange(v);
+      });
+    }
+    el.setAttribute("data-testid", `set-${tid(e.key)}-${unsettable ? "co" : "input"}`);
+    return el;
+  }
+
+  function row(e, scope) {
+    const st = settings.state();
+    const r = document.createElement("div");
+    r.className = "set-row";
+    r.setAttribute("data-testid", `set-${tid(e.key)}${scope === "company" ? "-company" : ""}`);
+    const lab = document.createElement("div");
+    lab.innerHTML = '<div class="set-label"></div><span class="set-help"></span>';
+    lab.querySelector(".set-label").textContent = e.label;
+    lab.querySelector(".set-help").textContent = e.help || "";
+    r.appendChild(lab);
+    const pill = document.createElement("span");
+    const x = document.createElement("button");
+    x.className = "mini set-reset"; x.type = "button"; x.textContent = "×";
+    if (scope === "company") {
+      const cur = st.company.values[e.key];
+      r.appendChild(control(e, cur, (v) => (v === undefined
+        ? settings.unset(e.key, "company") : settings.set(e.key, v, "company")).then(fail), true));
+      pill.className = "set-src" + (cur === undefined ? "" : " company");
+      pill.setAttribute("data-testid", `set-${tid(e.key)}-co-src`);
+      pill.textContent = cur === undefined ? "not set" : "company default";
+      x.title = "Clear the company default";
+      x.setAttribute("data-testid", `set-${tid(e.key)}-co-reset`);
+      x.addEventListener("click", () => settings.unset(e.key, "company").then(fail));
+      if (cur !== undefined) r.classList.add("resettable");
+    } else {
+      const src = settings.source(e.key) || "default";
+      r.appendChild(control(e, settings.get(e.key), (v) => settings.set(e.key, v, "user").then(fail), false));
+      pill.className = "set-src " + src;
+      pill.setAttribute("data-testid", `set-${tid(e.key)}-src`);
+      pill.textContent = SET_SOURCE_LABEL[src] || src;
+      x.title = "Back to " + (st.company.values[e.key] !== undefined ? "the company default" : "the default");
+      x.setAttribute("data-testid", `set-${tid(e.key)}-reset`);
+      x.addEventListener("click", () => settings.unset(e.key, "user").then(fail));
+      if (src === "user") r.classList.add("resettable");
+    }
+    r.appendChild(pill);
+    r.appendChild(x);
+    return r;
+  }
+
+  function render() {
+    const st = settings.state();
+    card.innerHTML = `
+      <div class="modal-head"><b>Settings</b>
+        <span class="muted">yours override the company's, the company's override the defaults</span>
+        <button class="modal-x" title="Close">×</button></div>`;
+    card.querySelector(".modal-x").addEventListener("click", close);
+    if (!st) {
+      const p = document.createElement("div");
+      p.className = "muted";
+      p.textContent = "Settings are not available: the backend predates them. Reload once it has been updated.";
+      card.appendChild(p);
+    } else {
+      if (isAdmin) {
+        const tabs = document.createElement("div");
+        tabs.className = "settings-tabs";
+        for (const [id, label] of [["yours", "Yours"], ["company", "Company"]]) {
+          const b = document.createElement("button");
+          b.type = "button"; b.textContent = label;
+          b.setAttribute("data-testid", `settings-tab-${id}`);
+          b.classList.toggle("active", tab === id);
+          b.addEventListener("click", () => { tab = id; render(); });
+          tabs.appendChild(b);
+        }
+        card.querySelector(".modal-head b").after(tabs);
+      }
+      // a hand-edited file that went wrong is reported, never silently blanked
+      const problems = [];
+      if (st.company.error) problems.push("company file: " + st.company.error);
+      if (st.user.error) problems.push("your file: " + st.user.error);
+      for (const [k, why] of Object.entries(st.company.rejected || {})) problems.push(`company file, ${k}: ${why}`);
+      for (const [k, why] of Object.entries(st.user.rejected || {})) problems.push(`your file, ${k}: ${why}`);
+      if (problems.length) {
+        const n = document.createElement("div");
+        n.className = "note"; n.setAttribute("data-testid", "settings-problems");
+        n.textContent = "Ignored — " + problems.join("; ");
+        card.appendChild(n);
+      }
+      const scope = tab === "company" ? "company" : "user";
+      const entries = st.schema.filter((e) => e.scopes.includes(scope));
+      const groups = [];
+      for (const e of entries) if (!groups.includes(e.group)) groups.push(e.group);
+      if (!entries.length) {
+        const p = document.createElement("div");
+        p.className = "muted"; p.textContent = "Nothing to set here yet.";
+        card.appendChild(p);
+      }
+      for (const g of groups) {
+        const h = document.createElement("div");
+        h.className = "admin-sec-title"; h.textContent = g;
+        card.appendChild(h);
+        for (const e of entries.filter((x) => x.group === g)) card.appendChild(row(e, scope));
+      }
+      const note = document.createElement("div");
+      note.className = "muted lnch-note";
+      note.textContent = scope === "company"
+        ? "Company defaults apply to everyone who has not chosen their own. Stored in .os/settings.json."
+        : "Yours follow you to every device. Stored in users/" + (window.__kbuser || "you") +
+          "/.os/settings.json — an agent running as you may edit it too.";
+      card.appendChild(note);
+    }
+    const foot = document.createElement("div");
+    foot.className = "modal-foot";
+    const cb = document.createElement("button");
+    cb.className = "modal-close"; cb.type = "button"; cb.textContent = "Close";
+    cb.addEventListener("click", close);
+    foot.appendChild(cb);
+    card.appendChild(foot);
+  }
+  render();
+  settings.fetch();     // the latest state, in case the tab was asleep for a while
+}
+
 // ---- admin panel (user & group management; admins only) -------------------
 async function openAdmin() {
   // Admins get the full panel; users with write access to .os/egress.json
@@ -5287,6 +5484,7 @@ const EXTRA_COMMANDS = [
   { id: "cron", label: "Scheduled jobs (cron)", when: () => canShell, run: openCron },
   { id: "admin", label: "Admin — users, groups, network", when: () => !$("#admin-btn").hidden,
     run: openAdmin },
+  { id: "settings", label: "Settings — theme and preferences", run: () => openSettings() },
   { id: "copypath", label: "Copy the open file's path", when: hasTab,
     run: () => { if (!active) return;
       navigator.clipboard.writeText(active.path)
@@ -7120,7 +7318,7 @@ async function boot() {
   // once a minute, so the poll alone can feel slow at exactly the moment you
   // are looking at it).
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && !_sessionGone) loadTree(false);
+    if (!document.hidden && !_sessionGone) { loadTree(false); settings.fetch(); }
   });
   // Everything the first paint needs leaves NOW, together. The tree is the
   // slow one — a permission-checked walk of the whole repo — and it used to
@@ -7132,6 +7330,7 @@ async function boot() {
   const treeP = fetchTree().catch(() => null);
   const deepLinksP = fetch("/company", { method: "HEAD" }).then((r) => r.ok, () => false);
   const whoamiP = loadWhoami();
+  const settingsP = settings.fetch();      // same burst; awaited with whoami below
   // Read the pasted URL BEFORE restoring: restoring activates every tab it
   // reopens, and activateTab → syncUrl() replaceState()s the address bar onto
   // that tab — so reading location afterwards yields the RESTORED path, not the
@@ -7140,7 +7339,7 @@ async function boot() {
   const deep = pathFromUrl();
   // Tabs come back NOW, before we even know who you are (see restoreTabs).
   const restoring = restoreTabs();
-  await whoamiP;
+  await whoamiP; await settingsP;
   wireSearch(); wireNewDoc(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
   wireTabStrip();
   wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();
@@ -7149,6 +7348,8 @@ async function boot() {
   // icon + label markup lives in app.html now
   const keysBtn = $("#keys-btn");
   if (keysBtn) keysBtn.addEventListener("click", openShortcuts);
+  const settingsBtn = $("#settings-btn");
+  if (settingsBtn) settingsBtn.addEventListener("click", () => openSettings());
   // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.

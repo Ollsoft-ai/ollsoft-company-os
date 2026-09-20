@@ -33,6 +33,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 
 from . import common, uploads
+from . import settings as kbsettings
 
 try:
     import psycopg
@@ -85,7 +86,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 30   # config in users/<me>/.os/ (lazy move from .launchers.json)
+BACKEND_V = 31   # /api/settings; config in users/<me>/.os/ (lazy move from .launchers.json)
 
 
 def _name_key(name: str):
@@ -1798,6 +1799,34 @@ async def launchers_set(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "mine": buttons})
 
 
+# --- settings: shipped default -> company (.os/settings.json, read) -> mine
+# --- (users/<me>/.os/settings.json, written AS me). See kb_platform/settings.py.
+async def settings_get(request: web.Request) -> web.Response:
+    return web.json_response(kbsettings.snapshot(ME))
+
+
+async def settings_set(request: web.Request) -> web.Response:
+    """{"set": {key: value}, "unset": [key]} against MY layer. Validated
+    against the registry; the whole file is rewritten atomically, which also
+    repairs a hand-edit that went wrong (the loader keeps the valid keys)."""
+    try:
+        data = await request.json()
+    except ValueError:
+        return web.json_response({"error": "expected JSON"}, status=400)
+    change, err = kbsettings.validate_change(data, "user")
+    if err:
+        return web.json_response({"error": err}, status=400)
+    current = kbsettings.load_layer(kbsettings.user_file(ME), "user")["values"]
+    try:
+        common.write_user_config(ME, kbsettings.FILE_NAME,
+                                 kbsettings.dumps(kbsettings.apply_change(current, change)))
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response(kbsettings.snapshot(ME))
+
+
 def _cron_guard(handler):
     """Uniform failure mode: cron problems are clean 400s, never 500s."""
     async def wrapped(request: web.Request) -> web.Response:
@@ -2221,6 +2250,8 @@ def make_app() -> web.Application:
     app.router.add_get("/api/principals", principals)
     app.router.add_get("/api/launchers", launchers_get)
     app.router.add_post("/api/launchers", launchers_set)
+    app.router.add_get("/api/settings", settings_get)
+    app.router.add_post("/api/settings", settings_set)
     app.router.add_get("/api/cron", cron_list)
     app.router.add_post("/api/cron/add", _cron_guard(cron_add))
     app.router.add_post("/api/cron/remove", _cron_guard(cron_remove))

@@ -112,15 +112,16 @@ maintenance agent's input — is protected directly by dropping group write.
 
 ## Audit trail — who changed access, and who opened what
 
-The hub records five **mutation** events — logins, and the sharing and account
-changes that decide who can reach what — as one line each in journald:
+The hub records six **mutation** events — logins, the sharing and account
+changes that decide who can reach what, and company-wide settings — as one line
+each in journald:
 
 ```bash
 journalctl -u kb-hub -g AUDIT --since yesterday
 ```
 
 `login` (both outcomes), `share.set`, `props.set`, `group.member`,
-`user.create`. Readable only by root and `sudo`/`adm`/`systemd-journal`;
+`user.create`, `settings.company`. Readable only by root and `sudo`/`adm`/`systemd-journal`;
 journald shows every other account nothing but its own messages.
 
 ### Access events — who opened what
@@ -159,7 +160,7 @@ would be unfindable inside it.
 
 What it does NOT cover, and should not be relied on for:
 
-- **Not every privileged action.** Only the five mutation events above.
+- **Not every privileged action.** Only the six mutation events above.
   Deleting a user, switching an account between full and viewer, creating or
   deleting a group, rewriting the launcher list and editing
   `.os/egress.json` all run in the hub as root and write no AUDIT line —

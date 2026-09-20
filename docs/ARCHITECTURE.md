@@ -105,6 +105,10 @@ there is no permission code here to get wrong.
   die with the backend (deploy restarts).
 - `GET /api/tasks`, `POST /api/tasks/toggle` — task aggregation + write-back.
 - `GET /api/search` — full-text search over the RLS index (as the user).
+- `GET /api/settings`, `POST /api/settings` — the user's **settings**: the
+  registry's schema, the company layer (read from `.os/settings.json`), their
+  own layer (`users/<me>/.os/settings.json`, written as them) and the per-key
+  resolution. See [settings.md](settings.md).
 - `GET /api/cron`, `POST /api/cron/{add,remove,toggle}` — the user's **own
   crontab**, via `crontab(1)` run as them. List/add/delete/pause (pause = a
   `#kb:paused ` comment prefix, so cron skips it but the entry survives). Add is
@@ -382,6 +386,14 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   needs no special case. Destinations are read from the syntax tree via
   `linkTarget()` (which also unwraps the `<…>` form), never by regex over the
   source: a regex stops at the space and yields a truncated path.
+- **Settings** (the sliders button in the top bar, or "Settings" in the
+  palette) is a dialog generated from the registry the backend serves: one row
+  per setting, the control from its type, a pill saying which layer the value
+  came from, × to clear that layer; admins get a Company tab over the same rows.
+  `frontend/src/settings.js` holds the resolved values, refetches at boot,
+  after every save and when the tab becomes visible, and applies `ui.theme` as
+  `data-theme` on `<html>` before the first paint from a cached copy. Nothing in
+  the client knows a setting by name; see [settings.md](settings.md).
 - **The palette (`Ctrl/Cmd+P`, `>` for commands) never moves.** It is the one
   place you search from — file names, commands and document contents in a single
   list — and it composes two sections that arrive at different times: filename
@@ -546,6 +558,9 @@ Postgres `CREATE ROLE` + personal `u_<u>` schema + a profile (first/last/email i
 `/etc/kb/profiles.json`). Deleting reverses it all (incl. dropping the PG schema
 and stripping the user's ACL grants so a recycled uid can't inherit them). Guards
 prevent removing protected accounts or granting privileged groups via the UI.
+`POST /admin/settings` writes the company layer of the settings registry
+(`.os/settings.json`, in place so a write ACL would survive) and is audited as
+`settings.company`; `POST /admin/launchers` replaces the company launcher list.
 
 ## 10. Agents
 
@@ -555,7 +570,7 @@ sessions; they query Postgres as themselves; they schedule work with their own
 `crontab`. Company **skills** in `/srv/kb/.claude/skills/` (root-owned,
 world-readable, admin-write-only) teach them the platform:
 `kb-orientation`, `kb-database`, `kb-automation`, `kb-artifacts`, `kb-todos`,
-`kb-history`, `kb-audit`.
+`kb-history`, `kb-audit`, `kb-settings`.
 
 ## 11. The two trails
 
@@ -574,9 +589,9 @@ permissions.
 
 **Privileged-action audit** — who changed who can see what. `kb-history` tracks
 content and is silent on permissions, which is the question that matters after
-an incident. The hub logs five events to journald as
+an incident. The hub logs six events to journald as
 `hub AUDIT <event> actor=… result=…`: `login` (both outcomes), `share.set`,
-`props.set`, `group.member`, `user.create`. Other privileged actions — user
+`props.set`, `group.member`, `user.create`, `settings.company`. Other privileged actions — user
 deletion, the full↔viewer switch, group create/delete, the launcher list, the
 egress allow-list — write no AUDIT line.
 

@@ -226,7 +226,7 @@ ollsoft-company-os/
 ├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
 ```
 
 **Created on the box by the installer** (not in this repo):
@@ -236,6 +236,7 @@ ollsoft-company-os/
 /opt/kb-venv          the Python venv, world-executable
 /opt/kb-convert-venv  kb-convert's parser venv — heavy deps, kept separate on purpose
 /srv/kb               the knowledgebase: git repo of markdown + attachments
+/srv/kb/.os/          platform config in the repo: launchers, egress allow-list, company settings
 /etc/kb/kb.env        runtime configuration read by the systemd units
 /etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it
 /etc/kb/session.key   HMAC key (root 0600)
@@ -262,6 +263,11 @@ Everything the services need lives in `/etc/kb/kb.env`, written by the installer
 | `KB_ALERT_DEDUP` | `21600` | Seconds an identical alert title stays muted for pushes |
 
 After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer kb-convert`.
+
+Things people choose — the theme, and whatever joins it — are not environment
+variables but **settings**: a company default in `/srv/kb/.os/settings.json`
+that anyone may override in their own `users/<name>/.os/settings.json`, from
+the Settings dialog or by editing the file. See [docs/settings.md](docs/settings.md).
 
 ---
 

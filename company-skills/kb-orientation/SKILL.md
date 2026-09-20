@@ -20,6 +20,8 @@ This is good news: you can act freely and safely. The worst you can do is limite
 ├── company/          shared with everyone — the common knowledgebase
 ├── projects/<name>/  restricted to that project's team (you may not see all of these)
 ├── users/<you>/      your own private space (only you can read it)
+│   └── .os/settings.json   your settings (see the kb-settings skill)
+├── .os/              platform config: launcher buttons, egress allow-list, company settings.json
 └── .git/             version history — 0700 root-only, you cannot read it
 ```
 

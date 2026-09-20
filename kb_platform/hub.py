@@ -35,6 +35,7 @@ import aiohttp
 from aiohttp import WSMsgType, web
 
 from . import common, pam_auth, uploads
+from . import settings as kbsettings
 
 PLATFORM_ROOT = Path(os.environ.get("KB_PLATFORM_ROOT", "/opt/kb-platform"))
 STATIC_DIR = PLATFORM_ROOT / "frontend" / "static"
@@ -2530,6 +2531,29 @@ class Hub:
                                     in_place=False)
         return web.json_response({"ok": True, "buttons": buttons})
 
+    async def admin_settings(self, request: web.Request) -> web.Response:
+        """Company-wide settings: {"set": {key: value}, "unset": [key]}. The
+        file lives in the data repo at .os/settings.json (root:kb-users 0644:
+        everyone reads it, git snapshots it, only an admin — via this root
+        endpoint — writes it). Written in place, like the egress allowlist, so
+        a write-ACL granted on the file would survive."""
+        admin = self._require_admin(request)
+        if not admin:
+            return web.json_response({"error": "admin only"}, status=403)
+        try:
+            data = await request.json()
+        except ValueError:
+            return web.json_response({"error": "expected JSON"}, status=400)
+        change, err = kbsettings.validate_change(data, "company")
+        if err:
+            return web.json_response({"error": err}, status=400)
+        current = kbsettings.load_layer(kbsettings.company_file(), "company")["values"]
+        values = kbsettings.apply_change(current, change)
+        common.write_company_config(kbsettings.FILE_NAME, kbsettings.dumps(values), in_place=True)
+        _audit("settings.company", admin, set=sorted(change["set"]) or None,
+               unset=change["unset"] or None)
+        return web.json_response({"ok": True, "values": values})
+
     async def admin_create_user(self, request: web.Request) -> web.Response:
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
@@ -2866,6 +2890,7 @@ def make_app() -> web.Application:
     app.router.add_post("/admin/groups/member", hub.admin_group_member)
     app.router.add_post("/admin/groups/delete", hub.admin_delete_group)
     app.router.add_post("/admin/launchers", hub.admin_launchers)
+    app.router.add_post("/admin/settings", hub.admin_settings)
     app.router.add_get("/admin/egress", hub.admin_egress_get)
     app.router.add_post("/admin/egress", hub.admin_egress_set)
     app.router.add_post("/egress", hub.egress)

@@ -77,6 +77,12 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
   ("message", …)` handler in `app.js` and a backend endpoint it forwards to. Keep
   it narrow and viewer-scoped — every action an artifact can invoke is one a
   hostile author can invoke against the viewer.
+- **A setting** (company default, personal override, or both): one entry in
+  `REGISTRY` in `kb_platform/settings.py` — key, type, default, which layers may
+  set it, label. The validation, the two files, `/api/settings`,
+  `/admin/settings` and the dialog row follow from it; add a
+  `settings.subscribe(key, fn)` in `app.js` if it has a live effect, and a row
+  in `docs/settings.md` + the `kb-settings` skill (a test checks both).
 - **A company skill**: add a folder under `company-skills/<name>/SKILL.md` (YAML
   frontmatter `name` + `description`, then markdown), then deploy it to
   `/srv/kb/.claude/skills/` (root-owned, 644). Agents discover it automatically.

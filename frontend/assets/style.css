@@ -956,6 +956,35 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .cron-hint { font-size: .74rem; margin: .3rem 0; line-height: 1.6; }
 .cron-err { min-height: 1.1em; font-size: .8rem; }
 
+/* ── Settings — rows generated from the registry ─────────────────────────── */
+.settings-card { width: min(620px, 94vw); }
+.settings-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
+  margin-left: .5rem; flex: 0 0 auto; }
+.settings-tabs button { background: var(--panel); color: var(--muted); border: 0; padding: .22rem .65rem;
+  font-family: var(--sans); font-size: .76rem; font-weight: 500; cursor: pointer; }
+.settings-tabs button.active { background: var(--accent-deep); color: #fff; }
+.set-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: .6rem; align-items: center;
+  padding: .5rem .2rem; border-bottom: 1px solid var(--border); font-size: .84rem; }
+.set-label { font-weight: 500; }
+.set-help { display: block; color: var(--muted); font-size: .74rem; margin-top: .12rem; }
+.set-row input[type=number], .set-row input[type=text], .set-row select { background: var(--panel2);
+  border: 1px solid var(--border); color: var(--ink); border-radius: 6px; padding: .3rem .45rem;
+  font-family: var(--mono); font-size: .8rem; }
+.set-row input[type=number] { width: 4.5rem; }
+.set-row input[type=text] { width: 8rem; }
+.set-row input[type=checkbox] { width: 1rem; height: 1rem; accent-color: var(--accent); }
+/* the pill: where the value came from — violet = yours, blue = company, as the launcher chips */
+.set-src { font-family: var(--mono); font-size: .62rem; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--faint); white-space: nowrap; }
+.set-src.user { color: #CBA9FF; }
+.set-src.company { color: #A9CDFF; }
+.set-reset { visibility: hidden; }              /* keeps the grid columns stable */
+.set-row.resettable .set-reset { visibility: visible; }
+@media (max-width: 880px) {
+  .set-row { grid-template-columns: 1fr auto auto; }
+  .set-src { grid-column: 1 / -1; }
+}
+
 /* ── In-app dialogs (alert / confirm / prompt) ────────────────────────────── */
 .dlg-card { width: min(430px, calc(100vw - 2rem)); gap: .55rem; }
 .dlg-title { font-weight: 600; font-size: .95rem; }
