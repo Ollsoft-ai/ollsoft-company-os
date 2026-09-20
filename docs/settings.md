@@ -53,10 +53,11 @@ exposed as `window.__kbsettings` for tests.
 
 | Key | Type | Default | Scopes | What it does |
 |---|---|---|---|---|
-| `ui.theme` | enum `deep-blue` | `deep-blue` | company, user | Colour theme for the whole app, applied as `data-theme` on `<html>`. One theme today; the theme step adds more. |
+| `ui.theme` | enum `deep-blue` · `dark` · `light` | `deep-blue` | company, user | Colours for the whole app, editor and terminal included, applied as `data-theme` on `<html>` before first paint. Deep blue is the house look; Dark and Light follow Notion's greys and paper. |
 
-Types: `bool`; `int` with `min`/`max`; `enum` with `options`; `string` with an
-optional `pattern` (full match) and `maxlen`, never control characters.
+Types: `bool`; `int` with `min`/`max`; `enum` with `options` and optional
+`labels` (shown in the dialog); `string` with an optional `pattern` (full
+match) and `maxlen`, never control characters.
 
 ## Adding a setting
 

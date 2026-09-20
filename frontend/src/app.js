@@ -20,32 +20,41 @@ import { initDictation, toggleDictation, dictationReady, retryDictation,
 import { settings } from "./settings.js";
 import { connectEvents } from "./events.js";
 
-// Markdown on the Ollsoft palette: content stays ink; the machinery (marks,
-// urls, code) recedes into blues so the words lead.
+// Markdown source view: content stays ink; the machinery (marks, urls, code)
+// recedes. Every colour is a stylesheet token, so a theme change retints the
+// editor live — CodeMirror writes these values into its own CSS rules, and a
+// var() resolves at paint time.
 const mdHighlight = HighlightStyle.define([
-  { tag: t.heading, color: "#BAD7FF", fontWeight: "600" },
-  { tag: t.strong, color: "#E9EFFA", fontWeight: "600" },
-  { tag: t.emphasis, color: "#E9EFFA", fontStyle: "italic" },
-  { tag: t.strikethrough, color: "#8CA1C1", textDecoration: "line-through" },
-  { tag: t.link, color: "#4D9DFF" },
-  { tag: t.url, color: "#3E7FD1" },
-  { tag: t.monospace, color: "#7FD8C4" },
-  { tag: t.quote, color: "#8CA1C1", fontStyle: "italic" },
-  { tag: t.meta, color: "#5E7499" },
-  { tag: t.processingInstruction, color: "#5E7499" },
-  { tag: t.contentSeparator, color: "#4D9DFF" },
+  { tag: t.heading, color: "var(--md-heading)", fontWeight: "600" },
+  { tag: t.strong, color: "var(--ink)", fontWeight: "600" },
+  { tag: t.emphasis, color: "var(--ink)", fontStyle: "italic" },
+  { tag: t.strikethrough, color: "var(--muted)", textDecoration: "line-through" },
+  { tag: t.link, color: "var(--accent)" },
+  { tag: t.url, color: "var(--md-url)" },
+  { tag: t.monospace, color: "var(--md-code)" },
+  { tag: t.quote, color: "var(--muted)", fontStyle: "italic" },
+  { tag: t.meta, color: "var(--faint)" },
+  { tag: t.processingInstruction, color: "var(--faint)" },
+  { tag: t.contentSeparator, color: "var(--accent)" },
 ]);
 
-// One shared terminal look, matched to the app chassis.
-const TERM_THEME = {
-  background: "#071019", foreground: "#DDE7F5", cursor: "#4D9DFF",
-  cursorAccent: "#071019", selectionBackground: "#4D9DFF4D",
-  black: "#1A2942", red: "#F2809C", green: "#2FCE98", yellow: "#E5AE58",
-  blue: "#4D9DFF", magenta: "#B48CF2", cyan: "#5AC8DE", white: "#DDE7F5",
-  brightBlack: "#5E7499", brightRed: "#FF9DB4", brightGreen: "#5FE3B8",
-  brightYellow: "#F5C97E", brightBlue: "#7FB8FF", brightMagenta: "#CBA9FF",
-  brightCyan: "#8ADEEE", brightWhite: "#FFFFFF",
+// The terminal's look comes from the theme's --term-* tokens: xterm takes
+// real colour strings, so they are read from the computed style when a
+// terminal opens and again on every theme change (retintTerminals).
+const TERM_KEYS = {
+  background: "bg", foreground: "fg", cursor: "cursor", cursorAccent: "bg",
+  black: "black", red: "red", green: "green", yellow: "yellow",
+  blue: "blue", magenta: "magenta", cyan: "cyan", white: "white",
+  brightBlack: "bblack", brightRed: "bred", brightGreen: "bgreen", brightYellow: "byellow",
+  brightBlue: "bblue", brightMagenta: "bmagenta", brightCyan: "bcyan", brightWhite: "bwhite",
 };
+function termTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const th = {};
+  for (const [k, v] of Object.entries(TERM_KEYS)) th[k] = cs.getPropertyValue("--term-" + v).trim();
+  th.selectionBackground = th.cursor + "4D";      // the cursor colour at 30%
+  return th;
+}
 const TERM_FONT = '"IBM Plex Mono", ui-monospace, monospace';
 
 // ═══ Rich markdown: live preview on the SAME text document ══════════════════
@@ -1984,7 +1993,7 @@ restoreSidebarWidth();
 // the theme step fills with CSS.
 function applyTheme(t) { document.documentElement.dataset.theme = t || "deep-blue"; }
 applyTheme(settings.get("ui.theme"));
-settings.subscribe("ui.theme", applyTheme);
+settings.subscribe("ui.theme", (t) => { applyTheme(t); retintTerminals(); });
 
 function wireSidebarResize() {
   const bar = $("#sb-resizer");
@@ -3823,7 +3832,7 @@ function renderPresence() {
   for (const [id, st] of states) {
     const u = st.user;
     if (!u || !u.name) continue;
-    const cur = seen.get(u.name) || { name: u.name, color: u.color || "#4D9DFF", self: false };
+    const cur = seen.get(u.name) || { name: u.name, color: u.color || "var(--accent)", self: false };
     if (id === selfId) cur.self = true;
     seen.set(u.name, cur);
   }
@@ -4285,7 +4294,7 @@ function openSettings() {
     } else if (e.type === "enum") {
       el = document.createElement("select");
       if (unsettable) el.appendChild(new Option("— not set —", ""));
-      for (const o of e.options) el.appendChild(new Option(o, o));
+      for (const o of e.options) el.appendChild(new Option((e.labels && e.labels[o]) || o, o));
       el.value = notSet ? "" : value;
       el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value));
     } else if (e.type === "int") {
@@ -6864,6 +6873,12 @@ function wireTermKeys() {
 // the doc). The choice is remembered; ⤢ in the header flips it. On desktop
 // the class is never set and the panel behaves exactly as before.
 // Terminal text size: user-adjustable, remembered, one size for all terminals.
+// every open terminal takes the theme's colours, live
+function retintTerminals() {
+  const th = termTheme();
+  for (const t of terms) if (t.term) t.term.options.theme = th;
+}
+
 function termFontSize() {
   const n = parseInt((() => { try { return localStorage.getItem("kbTermFont"); }
                              catch (e) { return null; } })(), 10);
@@ -7080,7 +7095,7 @@ async function newTerminal(cmd, sid, savedName) {
   // the glyphs on screen are free to be any size.
   const term = new Terminal({
     fontSize: termFontSize(),
-    fontFamily: TERM_FONT, theme: TERM_THEME,
+    fontFamily: TERM_FONT, theme: termTheme(),
                               // deep enough to still hold the start of a long
                               // agent run: a phone terminal is ~48 columns, so
                               // output wraps to several rows per printed line

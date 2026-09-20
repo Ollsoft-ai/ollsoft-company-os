@@ -72,6 +72,12 @@ there is no permission code here to get wrong.
   seconds) that the sidebar prints as a subtle last-modified stamp. Answers with
   an `ETag` and honours `If-None-Match` → 304; `?fresh=1` skips the signature
   hold (see *The tree is cheap to ask for again*, §8).
+- `GET /api/events` — one **server-sent event stream** per tab, piped through
+  the hub: `hello` (the catch-up: current tree ETag, presence) on every
+  connect, `tree` (a delta — `changed` file mtimes to patch in place, or
+  `full` to refetch with the ETag), `presence` when the set changes, `config`
+  when launchers or settings changed on disk, `ping` every 20 s. Nothing in the
+  browser polls any more (see *Nothing polls*, §8).
 - `GET/POST /api/file` — read / create a document (as the user).
 - `POST /api/fs/mkdir`, `POST /api/fs/delete` — create a folder / delete a file
   or folder (recursive), **as the user** — same authority as `mkdir`/`rm -r` in
@@ -393,6 +399,14 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   search and the mic. On a phone the same menu sits at the bottom of the drawer,
   with the launcher chips just above it. New documents come from the tree's
   "New file here", Alt+N, or the palette — there is no button for it.
+- **Themes are token blocks.** `frontend/assets/style.css` names no colour
+  outside `:root` and the `:root[data-theme=…]` blocks; every rule uses a token
+  or a `color-mix()` of one (washes, borders, shadows derive from ~40 base
+  values). `ui.theme` sets `data-theme` on `<html>` from a cached value before
+  first paint; CodeMirror's highlight style reads `--md-*` tokens through CSS
+  variables so it retints live, and xterm is handed a theme built from the
+  `--term-*` tokens when it opens and again on every theme change. The sign-in
+  page has no theme yet and always wears deep blue, on purpose.
 - **Settings** (in the user menu, or "Settings" in the palette) is a dialog
   generated from the registry the backend serves: one row
   per setting, the control from its type, a pill saying which layer the value
@@ -459,8 +473,8 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   immutable. The cost of the hash: `deploy.sh` rsyncs `--delete`, so a page
   from before a deploy asking for its *first* terminal finds nothing at the old
   name and is told to reload rather than shown a blank panel.
-- **The tree is cheap to ask for again.** Every open tab polls `/api/tree`
-  every 4 s, and it was a full permission-checked walk each time — 580 ms of
+- **The tree is cheap to ask for again.** Every open tab used to poll
+  `/api/tree` every 4 s, and it was a full permission-checked walk each time — 580 ms of
   which more than half was `pathlib.relative_to` building objects to compute a
   string `scandir` already provides — run *on* the per-user event loop, so a
   poll froze that user's terminal and every other request for its duration.
@@ -479,9 +493,36 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   executor. Not inotify, deliberately: a recursive `watchfiles` watch over the
   repo as an unprivileged user stayed silent when tried, inotify instances are
   capped per uid (31 of 128 in use here), and inotify drops events under load;
-  the signature never lies and needs no fallback. Cost now scales with change
+  the signature never lies and needs no fallback. Since 2026-09-20 the poll
+  itself is gone (next bullet); this path is the catch-up and the fallback,
+  and stays exactly as cheap. Cost now scales with change
   rate, not users × tabs; the signature is still O(entries), which is the
   hand-off point to a lazy per-folder tree past ~20k files.
+- **Nothing polls.** A tab holds one `GET /api/events` open
+  (`frontend/src/events.js`) and the backend pushes. Server side one walker per
+  backend, alive only while a stream is open: the signature check every 2 s
+  (or at once after a write through this process), presence from syncd over
+  its world-connectable socket every 3 s, fanned out to all of that user's
+  tabs. The `tree` event carries a **delta** built from two path→row indexes:
+  when only file mtimes moved — what typing produces — the client patches
+  those rows and adopts the new ETag; anything structural (added, removed,
+  permissions, audience, >200 rows) is `full`, and the client refetches with
+  its ETag **after typing pauses**, never under a keystroke. That is what
+  removed the 4 s stutter on phones: a 641 KB tree parsed and rebuilt on the
+  main thread every poll while your own saves kept the signature moving.
+  The wire is silent between changes except a `ping` every 20 s — a real
+  event, because SSE comments never reach JavaScript, and short of
+  Cloudflare's 100 s idle cut. The client owns every failure: it closes and
+  reopens with backoff (3 s → 60 s) rather than letting the browser hammer,
+  reopens after 60 s of silence (a half-open socket after a network switch),
+  reopens or catches up on `visibilitychange`/`pageshow`/`online` (a frozen
+  mobile tab's stream dies without an error), probes the session with one
+  ordinary fetch after an error (a 401 is invisible to EventSource; the guard
+  redirects), and after five failures in a row falls back to slow polling
+  (15 s, visible only) while still retrying the stream every minute. Every
+  reconnect's `hello` is the catch-up, so events missed while away never
+  matter. The hub pipes the stream chunk by chunk with no client timeout
+  (`proxy_http`); a reverse proxy in front needs buffering off.
 - **The tab strip is Chrome's, for Chrome's reason.** Every tab in a strip is the
   same width (`flex: 1 1 0`, capped at `--tab-max` so two tabs do not stretch
   across the window, floored at `min-width` so they stop shrinking and the strip

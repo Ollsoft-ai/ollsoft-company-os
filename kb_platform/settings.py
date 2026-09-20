@@ -27,11 +27,13 @@ from . import common
 SCOPES = ("company", "user")
 FILE_NAME = "settings.json"
 
-# type: bool | int (min, max) | enum (options) | string (pattern, maxlen)
+# type: bool | int (min, max) | enum (options, optional labels) | string (pattern, maxlen)
 REGISTRY: list[dict] = [
-    {"key": "ui.theme", "type": "enum", "options": ["deep-blue"], "default": "deep-blue",
+    {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
+     "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
-     "help": "Colour theme for the whole app. More themes arrive with the theme step."},
+     "help": "Colours for the whole app, editor and terminal included. Deep blue is the house look; "
+             "Dark and Light follow Notion's greys and paper."},
 ]
 BY_KEY = {e["key"]: e for e in REGISTRY}
 
