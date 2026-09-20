@@ -340,8 +340,10 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   markdown source stays the single source of truth, so multiplayer, vim/agent
   merges, the indexer and todos are untouched (a rendered checkbox toggle rewrites
   `- [ ]`→`- [x]` in the source, same path as the todos artifact). A formatting
-  **dock** (H1-3, bold/italic/strike/code, lists, task, quote, link, media, hr,
-  mic; Ctrl+B/I) floats at the bottom of the document, near the hand and off
+  **dock** (H1-3, bold/italic/strike/code, lists, task, quote, link, attach,
+  hr, mic; Ctrl+B/I — one Attach button for every file type, since what a file
+  becomes is decided by its type; phones add Photo, whose media-filtered picker
+  is what opens the camera) floats at the bottom of the document, near the hand and off
   the eyeline: 38% opacity until hovered or focused, dimmer while you type,
   back on the next mouse move. On touch it is a keyboard accessory row docked
   to the bottom edge — the top of the keyboard while one is up

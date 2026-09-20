@@ -45,7 +45,7 @@ def test_editor_upload_shows_live_percentage_then_inserts_the_link(browser, tmp_
         _throttle(ctx, page)
         open_doc(page, doc(docname))
         with page.expect_file_chooser() as fc:        # the "Attach file" button
-            page.click('#mdbar button[data-md="file"]')
+            page.click('#mdbar button[data-md="attach"]')
         fc.value.set_files(str(big))
 
         tray = page.locator('[data-testid="upload-tray"] .uprow')

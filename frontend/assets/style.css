@@ -525,8 +525,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .mdbar.typing:not(:hover):not(:focus-within) { opacity: .12; }
 /* the last line never hides under the dock */
 body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
-/* phone-only pieces: the second row and the ⋯ that reveals it */
-.mdbar button.mdb-2, .mdbar button[data-md="more"] { display: none; }
+/* phone-only pieces: the second row, the ⋯ that reveals it, and Photo
+   (a picker filtered to media is what opens the camera on a phone) */
+.mdbar button.mdb-2, .mdbar button[data-md="more"], .mdbar button[data-md="photo"] { display: none; }
 .mdbar button { background: transparent; border: 1px solid transparent; color: var(--muted);
   cursor: pointer; min-width: 1.7rem; height: 1.7rem; padding: 0 .35rem; border-radius: 6px;
   font-family: var(--sans); font-size: .85rem; display: inline-flex; align-items: center; justify-content: center; }
@@ -1283,7 +1284,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
     padding: .28rem .4rem calc(.28rem + env(safe-area-inset-bottom)); justify-content: flex-start; }
   .mdbar button { min-width: 2.3rem; height: 2.3rem; flex: 1 0 auto; }
   .mdbar-sep { display: none; }
-  .mdbar button[data-md="more"] { display: inline-flex; }
+  .mdbar button[data-md="more"], .mdbar button[data-md="photo"] { display: inline-flex; }
   .mdbar.more button.mdb-2 { display: inline-flex; }
   .mdbar.more button[data-md="more"] { color: var(--accent); }
   body.mdbar-on .cm-scroller { padding-bottom: 3rem; }

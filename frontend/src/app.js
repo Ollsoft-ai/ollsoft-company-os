@@ -1569,7 +1569,7 @@ function tbTable() {
 function wireMdBar() {
   $("#mode-rich").addEventListener("click", () => setMode("rich"));
   $("#mode-source").addEventListener("click", () => setMode("source"));
-  const imgInput = $("#up-img"), fileInput = $("#up-file");
+  const mediaInput = $("#up-media"), fileInput = $("#up-file");
   const pickInto = (input) => {
     const v = activeDocView(); if (!v) return;
     input.onchange = () => {
@@ -1585,8 +1585,8 @@ function wireMdBar() {
   // mic at the thumb's end, ⋯ for the rest. The markup order is the desktop
   // order; here the buttons are re-seated once for this device.
   if (window.matchMedia("(pointer: coarse)").matches) {
-    const first = ["mic", "bold", "italic", "h1", "h2", "ul", "task", "link", "code"];
-    const rest = ["h3", "strike", "ol", "quote", "table", "image", "file", "video", "hr"];
+    const first = ["mic", "bold", "italic", "h1", "photo", "attach", "ul", "task", "code"];
+    const rest = ["h2", "link", "h3", "strike", "ol", "quote", "table", "hr"];
     const by = (k) => bar.querySelector(`button[data-md="${k}"]`);
     const more = document.createElement("button");
     more.type = "button"; more.dataset.md = "more"; more.className = "mdb-txt";
@@ -1626,9 +1626,8 @@ function wireMdBar() {
       case "hr": tbHr(); break;
       case "link": tbLink(); break;
       case "table": tbTable(); break;
-      case "image": pickInto(imgInput); break;
-      case "video": pickInto($("#up-video")); break;
-      case "file": pickInto(fileInput); break;
+      case "photo": pickInto(mediaInput); break;     // touch: camera / library
+      case "attach": pickInto(fileInput); break;
       case "mic": toggleDictation(); break;
     }
   });
