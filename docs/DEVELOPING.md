@@ -156,6 +156,13 @@ natural next steps.
   and durable `^block-id` references (the `block_ref` column exists but isn't
   auto-assigned); optionally a block-based (Notion-style) editor instead of
   CodeMirror-on-plaintext.
+- **Unified views (one layout for documents and terminals).** Today the editor
+  panes and the terminal panel are two systems; the design in
+  [unified-views.md](unified-views.md) makes a terminal a tab in a grid of
+  tab groups (columns of stacks) plus a dock that keeps the bottom-panel UX by default,
+  so a terminal can be dragged beside, under or over a document, or full
+  screen, on any screen shape. Five shippable steps, each keeping the suite
+  green; the six decisions to take first are listed at its end.
 - **S3/blob attachments.** Currently local files only (deliberate for a single
   box); an S3 path with signed URLs gated by file permissions is the scale story.
 - **Multi-machine.** Everything assumes one box (OS users, inotify, local files).

@@ -620,7 +620,10 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   names persist in `localStorage`, the processes in the backend). Hiding the
   panel (`▾` / Ctrl+`` ` ``) keeps shells running; killing the last terminal
   hides it too. The panel is in the page flow, not an overlay — closed means
-  the editor gets the space back.
+  the editor gets the space back. The panel is a second, separate system
+  next to the editor panes; the designed successor — one grid of tab groups
+  where a terminal is a tab kind — is in [unified-views.md](unified-views.md)
+  (not built).
 - **Cron panel**: "Cron" in the user menu opens the user's crontab (§2 endpoints):
   list, add (with presets), pause/resume, delete.
 
