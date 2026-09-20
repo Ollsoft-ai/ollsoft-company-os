@@ -201,6 +201,275 @@ def validate_launchers(data) -> tuple[list | None, str | None]:
     return out, None
 
 
+# --- Platform config directory (.os/) ---------------------------------------
+# The platform's own JSON config — launcher buttons, the artifact egress
+# allowlist, settings — lives in <REPO>/.os/ at company level (root:kb-users
+# 2755: everyone reads it, root writes it, or whoever holds a write ACL on a
+# given file) and in users/<name>/.os/ at personal level (0700, the user's
+# own). Neither is knowledge: is_hidden_rel keeps every dot-directory out of
+# the index and the tree hides it unless asked. The company dir IS snapshotted
+# (.gitignore: !.os/*.json) — config changes are auditable history.
+#
+# Until 2026-09 these files sat in .claude/, which is Claude Code's discovery
+# path. CLAUDE.md and skills/ stay there — that is what Claude Code reads; the
+# platform's own state does not belong to one agent. migrate_company_config
+# (root, at hub start) and migrate_user_config (as the user, lazily) move what
+# an older install left behind.
+CONFIG_DIRNAME = ".os"
+LEGACY_CONFIG_DIRNAME = ".claude"
+MIGRATED_CONFIG_FILES = ("launchers.json", "egress.json")
+GITIGNORE_CONFIG_RULE = "!.os/*.json"
+COMPANY_CONFIG_DIR = REPO_ROOT / CONFIG_DIRNAME
+_ACL_XATTRS = ("system.posix_acl_access", "system.posix_acl_default")
+
+
+def company_config(name: str) -> Path:
+    """<REPO>/.os/<name> — a company-wide config file."""
+    return COMPANY_CONFIG_DIR / name
+
+
+def user_config(user: str, name: str) -> Path:
+    """<REPO>/users/<user>/.os/<name> — that person's own config file."""
+    return REPO_ROOT / "users" / user / CONFIG_DIRNAME / name
+
+
+def load_config_json(path) -> object | None:
+    """Tolerant read: a missing, unreadable or malformed file is None. The
+    caller validates the shape — every config file has a validating loader,
+    so a hand-edit can never smuggle a bad shape in."""
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _check_config_name(name: str) -> None:
+    if not name or "/" in name or name.startswith("."):
+        raise ValueError(f"bad config file name: {name!r}")
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    while data:
+        data = data[os.write(fd, data):]
+
+
+def write_company_config(name: str, data: bytes, *, in_place: bool) -> None:
+    """ROOT: write <REPO>/.os/<name>. The directory is reached through
+    opendir_beneath (no symlink component) and the file through O_NOFOLLOW;
+    every mutation acts on an fd, never on a path (the hub runs as root).
+
+    in_place=True  — ftruncate + write on the EXISTING inode. Its ACLs
+                     survive, and for a file whose write-ACL is a delegation
+                     (egress.json) that is the whole point. A crash mid-write
+                     leaves a truncated file, which every validating loader
+                     reads as empty: fail closed, not open.
+    in_place=False — a fresh .<name>.<rand>.kbtmp renamed over the file:
+                     atomic, ACLs reset (right for admin-only files such as
+                     launchers.json).
+    Mode 0644 on create; ownership root:kb-users re-asserted on every write
+    (skipped when not root, so unit tests can exercise the code path)."""
+    _check_config_name(name)
+    dfd = opendir_beneath(CONFIG_DIRNAME)
+    try:
+        if in_place:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+            try:
+                os.ftruncate(fd, 0)
+                _write_all(fd, data)
+                if os.geteuid() == 0:
+                    os.fchown(fd, 0, grp.getgrnam("kb-users").gr_gid)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            return
+        tmp = f".{name}.{os.urandom(6).hex()}.kbtmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+        try:
+            try:
+                _write_all(fd, data)
+                if os.geteuid() == 0:
+                    os.fchown(fd, 0, grp.getgrnam("kb-users").gr_gid)
+                os.fchmod(fd, 0o644)          # umask-proof
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dfd)
+
+
+def _open_user_config_dir(user: str) -> int:
+    """AS THE USER: users/<user>/.os as a dir fd, created 0700 if absent.
+    A home can carry named ACL entries and a default ACL (shared homes do), and
+    a freshly made .os/ would inherit them — personal config is nobody else's,
+    so inherited ACLs are stripped and the mode pinned, on the fd, every time.
+    Idempotent. Raises OSError; the caller maps it to 403/400."""
+    hfd = os.open(REPO_ROOT / "users" / user, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            os.mkdir(CONFIG_DIRNAME, 0o700, dir_fd=hfd)
+        except FileExistsError:
+            pass
+        dfd = os.open(CONFIG_DIRNAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=hfd)
+    finally:
+        os.close(hfd)
+    try:
+        for attr in _ACL_XATTRS:
+            try:
+                os.removexattr(dfd, attr)
+            except OSError:
+                pass                  # no ACL there, or a filesystem without them
+        os.fchmod(dfd, 0o700)
+    except OSError:
+        os.close(dfd)
+        raise
+    return dfd
+
+
+def write_user_config(user: str, name: str, data: bytes) -> None:
+    """AS THE USER: atomically write users/<user>/.os/<name>, 0600. The tmp is
+    a .kbtmp so the tree, syncd, the indexer and kb-convert all skip it."""
+    _check_config_name(name)
+    dfd = _open_user_config_dir(user)
+    try:
+        tmp = f".{name}.{os.urandom(6).hex()}.kbtmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+        try:
+            try:
+                _write_all(fd, data)
+                os.fchmod(fd, 0o600)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(dfd)
+
+
+def migrate_user_config(user: str, name: str, legacy_name: str) -> bool:
+    """AS THE USER, lazily: if users/<user>/.os/<name> is absent and the
+    older install's users/<user>/<legacy_name> is a regular file, move it into
+    place (a rename: same inode, same content). Two lstats when there is
+    nothing to do. Returns True if something moved."""
+    _check_config_name(name)
+    home = REPO_ROOT / "users" / user
+    try:
+        os.lstat(user_config(user, name))
+        return False                          # already there, whatever it is
+    except FileNotFoundError:
+        pass
+    try:
+        if not stat_mod.S_ISREG(os.lstat(home / legacy_name).st_mode):
+            return False
+    except FileNotFoundError:
+        return False
+    hfd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        dfd = _open_user_config_dir(user)
+        try:
+            os.rename(legacy_name, name, src_dir_fd=hfd, dst_dir_fd=dfd)
+        finally:
+            os.close(dfd)
+    finally:
+        os.close(hfd)
+    return True
+
+
+def migrate_company_config() -> list[str]:
+    """ROOT, at hub start, idempotent: create <REPO>/.os and move an older
+    install's .claude/{launchers,egress}.json into it — a rename, so the
+    inode (and the egress file's delegation ACL) travels with it — then
+    un-ignore .os/*.json so git keeps snapshotting the config. Returns what it
+    did, one line each, for the hub to log. Nothing is ever deleted: a legacy
+    file that would collide is left where it is and reported.
+
+    Everything acts on fds. The repo root is group-writable, so a member could
+    pre-plant a `.os` entry — that is refused and reported, never chmod'ed."""
+    done: list[str] = []
+    rfd = opendir_beneath("")
+    try:
+        try:
+            os.mkdir(CONFIG_DIRNAME, 0o755, dir_fd=rfd)
+            done.append(f"created {CONFIG_DIRNAME}/")
+        except FileExistsError:
+            pass
+        try:
+            dfd = os.open(CONFIG_DIRNAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=rfd)
+        except OSError as e:
+            done.append(f"refusing: {CONFIG_DIRNAME} is not a plain directory "
+                        f"({e.strerror}); pre-planted? nothing touched")
+            return done
+        try:
+            if os.geteuid() == 0:
+                st = os.fstat(dfd)
+                gid = grp.getgrnam("kb-users").gr_gid
+                if (st.st_uid, st.st_gid) != (0, gid):
+                    os.fchown(dfd, 0, gid)
+                    done.append(f"chowned {CONFIG_DIRNAME}/ to root:kb-users")
+                if stat_mod.S_IMODE(st.st_mode) != 0o2755:
+                    os.fchmod(dfd, 0o2755)
+                    done.append(f"set {CONFIG_DIRNAME}/ to 2755")
+            try:
+                ofd = os.open(LEGACY_CONFIG_DIRNAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                              dir_fd=rfd)
+            except OSError:
+                ofd = None                    # fresh install: nothing to migrate
+            if ofd is not None:
+                try:
+                    for name in MIGRATED_CONFIG_FILES:
+                        try:
+                            old = os.stat(name, dir_fd=ofd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        if not stat_mod.S_ISREG(old.st_mode):
+                            done.append(f"refusing: {LEGACY_CONFIG_DIRNAME}/{name} is not a regular file")
+                            continue
+                        try:
+                            os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                            done.append(f"both {LEGACY_CONFIG_DIRNAME}/{name} and {CONFIG_DIRNAME}/{name} "
+                                        f"exist; {CONFIG_DIRNAME}/ wins, remove the old one by hand")
+                            continue
+                        except FileNotFoundError:
+                            pass
+                        os.rename(name, name, src_dir_fd=ofd, dst_dir_fd=dfd)
+                        done.append(f"moved {LEGACY_CONFIG_DIRNAME}/{name} -> {CONFIG_DIRNAME}/{name}")
+                finally:
+                    os.close(ofd)
+        finally:
+            os.close(dfd)
+        # git keeps snapshotting the config from its new home. .gitignore is
+        # written by install.sh only when absent, so an upgraded box needs the
+        # rule appended here (the same way syncd appends **/_secrets/).
+        try:
+            fd = os.open(".gitignore", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=rfd)
+        except OSError:
+            fd = None
+        if fd is not None:
+            with os.fdopen(fd) as f:
+                lines = f.read().splitlines()
+            if GITIGNORE_CONFIG_RULE not in lines:
+                fd = os.open(".gitignore", os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, dir_fd=rfd)
+                with os.fdopen(fd, "w") as f:
+                    f.write(f"\n# platform config (launchers, egress, settings) lives in {CONFIG_DIRNAME}/\n"
+                            f"{GITIGNORE_CONFIG_RULE}\n")
+                done.append(f"added {GITIGNORE_CONFIG_RULE} to .gitignore")
+    finally:
+        os.close(rfd)
+    return done
+
+
 def is_versioned_path(rel: str) -> bool:
     """True if this path belongs in git history: documents (.md) and artifacts
     (.html), never secrets. Attachments, binaries and machinery stay out —

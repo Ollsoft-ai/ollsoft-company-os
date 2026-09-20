@@ -2181,14 +2181,14 @@ class Hub:
     # every call. Redirects are refused so an allowlisted host can't bounce
     # the request somewhere else.
 
-    # The allowlist lives IN THE REPO (.claude/egress.json, root:kb-users 644):
+    # The allowlist lives IN THE REPO (.os/egress.json, root:kb-users 644):
     # everyone can read it (transparency), git snapshots it (audit trail), and
     # WRITE access to the file IS the delegation — an admin grants a user rw
     # via the normal permissions UI, and from then on that user (and any agent
     # running as them) may change network access: through these endpoints or by
     # editing the file directly. The kernel is the authority either way; the
     # loader validates every entry so a hand-edit can't smuggle bad shapes in.
-    EGRESS_FILE = common.REPO_ROOT / ".claude" / "egress.json"
+    EGRESS_FILE = common.company_config("egress.json")
     EGRESS_LOG = Path("/var/log/kb/egress.log")
     _DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*(:\d{1,5})?$")
 
@@ -2216,30 +2216,22 @@ class Hub:
     def _egress_save(self, cfg: dict) -> None:
         """In-place write (NOT rename): the file's ACLs carry the delegation,
         and a rename-over would silently drop them."""
-        data = (json.dumps(cfg, indent=2) + "\n").encode()
-        pfd = common.opendir_beneath(".claude")
-        try:
-            fd = os.open("egress.json", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644, dir_fd=pfd)
-            try:
-                os.ftruncate(fd, 0)
-                os.write(fd, data)
-                os.fchown(fd, 0, grp.getgrnam("kb-users").gr_gid)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-        finally:
-            os.close(pfd)
+        common.write_company_config("egress.json", (json.dumps(cfg, indent=2) + "\n").encode(),
+                                    in_place=True)
 
-    def _can_edit_egress(self, user: str) -> bool:
-        """Admins, or anyone the kernel says may WRITE the allowlist file
-        (granted via the normal file-permissions UI). Checked AS the user, so
-        ACLs and group membership all count — 'hard access', not a role list."""
-        if _is_admin(user):
-            return True
+    def _can_write_as(self, user: str, path: Path) -> bool:
+        """Does the kernel say this user may WRITE `path`? Checked AS the user
+        (runuser + test -w), so modes, ACLs and ancestor traversal all count —
+        'hard access', not a role list."""
         r = subprocess.run(["/usr/sbin/runuser", "-u", user, "--",
-                            "/usr/bin/test", "-w", str(self.EGRESS_FILE)],
+                            "/usr/bin/test", "-w", str(path)],
                            capture_output=True, timeout=10)
         return r.returncode == 0
+
+    def _can_edit_egress(self, user: str) -> bool:
+        """Admins, or anyone granted write access to the allowlist file via
+        the normal file-permissions UI."""
+        return _is_admin(user) or self._can_write_as(user, self.EGRESS_FILE)
 
     def _read_as_user(self, user: str, rel: str, cap: int) -> bytes | None:
         """Read a repo file with the USER's authority (runuser + cat): the
@@ -2265,7 +2257,7 @@ class Hub:
         user = self.current_user(request)
         if not user or not self._can_edit_egress(user):
             return web.json_response(
-                {"error": "you need write access to .claude/egress.json (ask an admin to grant it)"},
+                {"error": "you need write access to .os/egress.json (ask an admin to grant it)"},
                 status=403)
         d = await request.json()
         artifact = str(d.get("artifact", "")).strip().strip("/")
@@ -2526,19 +2518,16 @@ class Hub:
 
     async def admin_launchers(self, request: web.Request) -> web.Response:
         """Replace the company-wide launcher buttons. The list lives in the data
-        repo at .claude/launchers.json (root-owned 644 like the agent skills:
+        repo at .os/launchers.json (root-owned 644 like the agent skills:
         everyone reads it, only an admin — via this root endpoint — writes it)."""
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
         buttons, err = common.validate_launchers(await request.json())
         if err:
             return web.json_response({"error": err}, status=400)
-        path = common.REPO_ROOT / ".claude" / "launchers.json"
-        tmp = path.with_name(".launchers.json.tmp")
-        tmp.write_text(json.dumps({"buttons": buttons}, indent=2) + "\n")
-        os.chmod(tmp, 0o644)
-        os.chown(tmp, 0, grp.getgrnam("kb-users").gr_gid)
-        os.replace(tmp, path)
+        common.write_company_config("launchers.json",
+                                    (json.dumps({"buttons": buttons}, indent=2) + "\n").encode(),
+                                    in_place=False)
         return web.json_response({"ok": True, "buttons": buttons})
 
     async def admin_create_user(self, request: web.Request) -> web.Response:
@@ -2826,16 +2815,18 @@ def make_app() -> web.Application:
     # accepts /fs/upload directly AND buffers proxied /api/upload bodies, so
     # the default 1 MiB cap silently rejected any real photo/audio upload.
     hub = Hub()
-    # bootstrap/migrate the egress allowlist into the repo, where its write-ACL
-    # can delegate network administration to non-admins
+    # An older install kept the platform's JSON config in .claude/; move it to
+    # .os/ (idempotent, fd-pinned, nothing deleted — see common).
+    try:
+        for line in common.migrate_company_config():
+            log.warning("config migration: %s", line)
+    except OSError as e:
+        log.error("config migration failed: %s", e)
+    # bootstrap the egress allowlist (deny-all) so its write-ACL can delegate
+    # network administration to non-admins from day one
     try:
         if not hub.EGRESS_FILE.exists():
-            cfg = {}
-            try:
-                cfg = json.loads((common.ETC_DIR / "egress.json").read_text())
-            except (OSError, ValueError):
-                pass
-            hub._egress_save(cfg if isinstance(cfg, dict) else {})
+            hub._egress_save({})
     except OSError:
         pass
     app = web.Application(client_max_size=2 * 1024 * 1024 * 1024,

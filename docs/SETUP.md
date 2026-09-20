@@ -75,8 +75,9 @@ file after your first login.
 ```
 /srv/kb              3775 root:kb-users, sticky   the knowledgebase (a git repo)
 ├── .git             0700 root                     history — root-only, always
-├── .gitignore       0644 root:kb-users            .md, .html and .claude/*.json only
-├── .claude/         0755 root:kb-users            agent context, skills, egress rules
+├── .gitignore       0644 root:kb-users            .md, .html and .os/*.json only
+├── .claude/         0755 root:kb-users            agent context (CLAUDE.md) and skills/
+├── .os/             2755 root:kb-users            platform config: launchers, egress, settings
 ├── AGENTS.md        -> .claude/CLAUDE.md           Codex discovers the same context
 ├── company/         2775 root:kb-users + default ACL   everyone reads and writes
 ├── projects/        3775 root:kb-users, sticky    restricted folders go here
@@ -211,8 +212,17 @@ git pull
 sudo bash scripts/install.sh --admin <your-username>
 ```
 
-Existing accounts, repo content, and `.claude/` config files are left alone.
-Agent skills *are* refreshed, since they document the platform.
+Existing accounts, repo content, the agent context in `.claude/` and the
+platform config in `.os/` are left alone. Agent skills *are* refreshed, since
+they document the platform.
+
+**Upgrading from before 2026-09:** the launcher list and the egress allow-list
+used to live in `.claude/`. The hub moves `.claude/{launchers,egress}.json` into
+`.os/` on its next start and un-ignores `.os/*.json` in the repo's `.gitignore`
+(watch for `config migration:` lines in `journalctl -u kb-hub`). Each person's
+`users/<name>/.launchers.json` moves into `users/<name>/.os/` the first time
+their backend reads it. To roll back to older code, move the two files back
+first: `sudo mv /srv/kb/.os/{egress,launchers}.json /srv/kb/.claude/`.
 
 For a code-only redeploy during development, `sudo bash scripts/deploy.sh` is
 faster — it reads `/etc/kb/kb.env` for your paths.

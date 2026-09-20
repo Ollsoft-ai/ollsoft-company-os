@@ -182,10 +182,11 @@ Be honest about these rather than inferring past them:
   file is outside what any of this can see — say so rather than implying it.
 - **Not every mutation is recorded either.** Deleting a user, flipping an
   account between full and viewer, creating or deleting a group, and editing
-  `.claude/egress.json` write no AUDIT line. The raw hub log shows the
+  `.os/egress.json` write no AUDIT line. The raw hub log shows the
   `POST /admin/...` that did it, but not who sent it — so corroborate with
   `getent`, `/etc/passwd` and, for the allow-list,
-  `sudo git -C /srv/kb log -p -- .claude/egress.json` (`kb-history` covers
+  `sudo git -C /srv/kb log -p --follow -- .os/egress.json` (`--follow`: before
+  2026-09 the file lived at `.claude/egress.json`; `kb-history` covers
   `.md`/`.html` only).
 - **The mutation events start 2026-08-25, the access events 2026-08-29.** There
   is nothing before the log existed, and no way to reconstruct it.

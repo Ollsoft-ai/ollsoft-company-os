@@ -85,7 +85,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 29   # /api/tree: signature cache + ETag/304; whoami carries v
+BACKEND_V = 30   # config in users/<me>/.os/ (lazy move from .launchers.json)
 
 
 def _name_key(name: str):
@@ -1034,7 +1034,7 @@ async def toggle_task(request: web.Request) -> web.Response:
     rel = str(p.relative_to(common.REPO_ROOT.resolve()))
     # Scope exactly like the read side: the (path,line) must be a task the caller
     # can actually SEE in the RLS-governed index. This blocks toggling of
-    # index-excluded trees (.claude/) and non-task lines even if FS-writable.
+    # index-excluded trees (.claude/, .os/) and non-task lines even if FS-writable.
     conn = await _adb()
     if conn is not None:
         try:
@@ -1741,17 +1741,27 @@ def _cron_listing() -> dict:
 
 
 # --- launcher buttons (company list is admin-written via the hub; the
-# --- personal list lives in the user's own private dir, written AS them) -----
-COMPANY_LAUNCHERS = common.REPO_ROOT / ".claude" / "launchers.json"
-MY_LAUNCHERS = common.REPO_ROOT / "users" / ME / ".launchers.json"
+# --- personal list lives in the user's own .os/, written AS them) -----------
+COMPANY_LAUNCHERS = common.company_config("launchers.json")
+MY_LAUNCHERS = common.user_config(ME, "launchers.json")
+
+
+def _my_launchers() -> Path:
+    """Lazy, as me: the first read or write after the upgrade moves an older
+    install's users/<me>/.launchers.json into users/<me>/.os/."""
+    try:
+        common.migrate_user_config(ME, "launchers.json", ".launchers.json")
+    except OSError:
+        pass            # the read side degrades to []; the write side reports
+    return MY_LAUNCHERS
 
 
 def _read_launchers(path) -> list:
-    try:
-        buttons, err = common.validate_launchers(json.loads(path.read_text()))
-        return buttons if not err else []
-    except (OSError, ValueError):
+    raw = common.load_config_json(path)
+    if raw is None:
         return []
+    buttons, err = common.validate_launchers(raw)
+    return buttons if not err else []
 
 
 async def principals(request: web.Request) -> web.Response:
@@ -1770,7 +1780,7 @@ async def principals(request: web.Request) -> web.Response:
 
 async def launchers_get(request: web.Request) -> web.Response:
     return web.json_response({"company": _read_launchers(COMPANY_LAUNCHERS),
-                              "mine": _read_launchers(MY_LAUNCHERS)})
+                              "mine": _read_launchers(_my_launchers())})
 
 
 async def launchers_set(request: web.Request) -> web.Response:
@@ -1778,7 +1788,9 @@ async def launchers_set(request: web.Request) -> web.Response:
     if err:
         return web.json_response({"error": err}, status=400)
     try:
-        MY_LAUNCHERS.write_text(json.dumps({"buttons": buttons}, indent=2) + "\n")
+        _my_launchers()      # never leave a stale legacy copy behind a new write
+        common.write_user_config(ME, "launchers.json",
+                                 (json.dumps({"buttons": buttons}, indent=2) + "\n").encode())
     except PermissionError:
         return web.json_response({"error": "forbidden"}, status=403)
     except OSError as e:

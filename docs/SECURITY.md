@@ -8,9 +8,9 @@ Read this before exposing the platform beyond a trusted single box.
 |----------|-------------|-------|
 | A user can only read/write their own files | **the Linux kernel** | the per-user backend *is* the user (`runuser`); every open/write is kernel-checked |
 | Search / DB queries can't return files you can't read | **Postgres RLS** (`kb.visible_files`) | both policies gate on a materialized (usr, path) set the indexer keeps in sync; `kb.can_read` is the live-computed oracle the parity test checks it against, not the policy |
-| A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component |
+| A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component — the platform config dir `.os/` included: a pre-planted entry of that name is refused, never chowned through |
 | An artifact can't touch the app or exfiltrate | **opaque-origin iframe + CSP** | `sandbox="allow-scripts"` (no same-origin) + `connect-src 'none'` — the artifact itself never reaches the network |
-| An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.claude/egress.json` (root:kb-users 0644 — an admin, or anyone granted write on that file, may change it). Requests are proxied by the hub, so the artifact never holds the credential |
+| An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.os/egress.json` (root:kb-users 0644 — an admin, or anyone granted write on that file, may change it). Requests are proxied by the hub, so the artifact never holds the credential |
 | An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write`/`kb-list`/`kb-mkdir`/`kb-delete` limited to the artifact's own directory — the destructive ones re-checked server-side |
 | An uploaded file can't run script on the app's origin | **CSP + `nosniff` on `/api/attachment`** | `script-src 'none'`, so a planted SVG previews but never executes; a `.html` is classified as an artifact and served sandboxed by `/api/artifact/raw` instead |
 | A session cookie can't be forged | **HMAC-SHA256** with a root-only key | `/etc/kb/session.key`, 12h TTL |
@@ -162,7 +162,7 @@ What it does NOT cover, and should not be relied on for:
 - **Not every privileged action.** Only the five mutation events above.
   Deleting a user, switching an account between full and viewer, creating or
   deleting a group, rewriting the launcher list and editing
-  `.claude/egress.json` all run in the hub as root and write no AUDIT line —
+  `.os/egress.json` all run in the hub as root and write no AUDIT line —
   the raw hub log shows the `POST /admin/...`, but not who sent it.
 - **Access events prove a service call, not a reading.** A `file.download` is
   the server's word that it sent the bytes. It is not proof of attention,

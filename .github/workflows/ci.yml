@@ -56,6 +56,20 @@ jobs:
       - name: Installer is idempotent (second run must succeed)
         run: sudo bash scripts/install.sh --admin ciadmin
 
+      - name: Upgrade path — the hub moves a pre-2026-09 .claude/*.json into .os/
+        run: |
+          sudo mv /srv/kb/.os/launchers.json /srv/kb/.claude/launchers.json
+          sudo mv /srv/kb/.os/egress.json /srv/kb/.claude/egress.json
+          sudo sed -i '/^!\.os\/\*\.json$/d' /srv/kb/.gitignore
+          sudo systemctl restart kb-hub
+          for i in $(seq 1 30); do test -f /srv/kb/.os/egress.json && break; sleep 1; done
+          test -f /srv/kb/.os/launchers.json && test -f /srv/kb/.os/egress.json
+          ! test -e /srv/kb/.claude/launchers.json && ! test -e /srv/kb/.claude/egress.json
+          grep -qxF '!.os/*.json' /srv/kb/.gitignore
+          sudo journalctl -u kb-hub -n 80 --no-pager | grep -q 'config migration: moved' || {
+            echo "::error::no 'config migration: moved' line in the hub journal"
+            sudo journalctl -u kb-hub -n 80 --no-pager; exit 1; }
+
       - name: Seed the test fixtures
         # A fixed namespace rather than letting conftest pick one: pytest runs as
         # a demo account with no passwordless sudo, so it cannot seed for itself.

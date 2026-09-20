@@ -223,7 +223,7 @@ ollsoft-company-os/
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
 ├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-convert units, the
 │                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
-├── defaults/               shipped into <repo>/.claude/ and company/ on install
+├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
 └── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive

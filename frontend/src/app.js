@@ -4179,7 +4179,7 @@ function showLaunchersModal() {
 
 // ---- admin panel (user & group management; admins only) -------------------
 async function openAdmin() {
-  // Admins get the full panel; users with write access to .claude/egress.json
+  // Admins get the full panel; users with write access to .os/egress.json
   // (the delegation) get the network-access section alone.
   let data = { users: [], groups: [], egressOnly: !isAdmin };
   if (isAdmin) {
@@ -4267,7 +4267,7 @@ function showAdminModal(data) {
     <div class="muted lnch-note">Artifacts are sandboxed offline. An entry here lets ONE artifact call
       the listed domains through the hub — with <span class="mono">secret:</span> refs resolved
       server-side and every call audit-logged. Editable by admins and anyone with write access to
-      <span class="mono">.claude/egress.json</span> (grant it via ⚙ on that file).</div>
+      <span class="mono">.os/egress.json</span> (grant it via ⚙ on that file).</div>
     <div class="egress-list" data-testid="egress-tbl">${
       Object.entries(data.egress || {}).map(([a, e]) => `
         <div class="egress-item">
@@ -7182,7 +7182,7 @@ async function boot() {
   }
   $("#cron-btn").addEventListener("click", openCron);
   // Show the Admin panel to platform admins (sudo group) — and, network-section
-  // only, to users delegated write access on .claude/egress.json. Whether a
+  // only, to users delegated write access on .os/egress.json. Whether a
   // button appears is not something the first paint waits two round trips for.
   (async () => {
     try {

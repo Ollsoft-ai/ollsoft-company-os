@@ -160,7 +160,7 @@ there is no permission code here to get wrong.
   (so a file locked to owner and shared with one user via ACL doesn't look
   group-readable), and records named read/traverse grants in
   `acl_users`/`acl_groups`/`acl_x_users`/`acl_x_groups`.
-- Skips symlinks and dot-dirs (`.git`, `.claude`) — config is not knowledge.
+- Skips symlinks and dot-dirs (`.git`, `.claude`, `.os`) — config is not knowledge.
 - Refreshes `kb.user_groups` from `getent` every 5s (so new users / group changes
   reach RLS), and reconciles perms with a cheap ctime/mode signature cache (only
   re-reads ACLs for files that actually changed).

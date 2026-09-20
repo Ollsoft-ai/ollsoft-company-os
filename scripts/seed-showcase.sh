@@ -48,7 +48,7 @@ if [[ $UNDO -eq 1 ]]; then
     rm -rf -- "$path"
   done
   if [[ -f "$STATE/launchers.before.json" ]]; then
-    install -o root -g kb-users -m 664 "$STATE/launchers.before.json" "$REPO/.claude/launchers.json"
+    install -o root -g kb-users -m 644 "$STATE/launchers.before.json" "$REPO/.os/launchers.json"
   fi
   if [[ -f "$STATE/viewer-created" ]] && id "$VIEWER" >/dev/null 2>&1; then
     pkill -KILL -u "$VIEWER" 2>/dev/null || true
@@ -68,9 +68,10 @@ fi
 [[ -d "$TEMPLATES/company" && -d "$TEMPLATES/projects" ]] || {
   echo "showcase templates are missing: $TEMPLATES" >&2; exit 1; }
 
+[[ -d "$REPO/.os" ]] || { echo "run scripts/install.sh first ($REPO/.os is missing)" >&2; exit 1; }
 install -d -o root -g root -m 700 "$STATE"
 if [[ ! -f "$STATE/installed" ]]; then
-  install -o root -g root -m 600 "$REPO/.claude/launchers.json" "$STATE/launchers.before.json"
+  install -o root -g root -m 600 "$REPO/.os/launchers.json" "$STATE/launchers.before.json"
 fi
 
 # v1 placed artifact state and screenshots in ordinary visible paths. Remove
@@ -137,7 +138,7 @@ copy_tree "$TEMPLATES/projects/helios-confidential" "$REPO/projects/helios-confi
 setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/company"
 setfacl -d -m u::rwx,g::rwx,o::- "$REPO/projects/polaris-energy-gateway"
 setfacl -d -m u::rwx,g::rwx,o::- "$REPO/projects/helios-confidential"
-install -o root -g kb-users -m 664 "$SRC/showcase/launchers.json" "$REPO/.claude/launchers.json"
+install -o root -g kb-users -m 644 "$SRC/showcase/launchers.json" "$REPO/.os/launchers.json"
 
 touch "$STATE/installed"
 systemctl restart kb-indexer

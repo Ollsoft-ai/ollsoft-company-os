@@ -154,14 +154,14 @@ chmod 700 "$REPO/.git"
 if [ ! -f "$REPO/.gitignore" ]; then
   cat > "$REPO/.gitignore" <<'IGN'
 # History covers what people write: documents (.md), artifacts (.html), and
-# the platform's auditable config (.claude/*.json). Everything else — uploads,
+# the platform's auditable config (.os/*.json). Everything else — uploads,
 # binaries, machinery — stays out of version history.
 *
 !*/
 !*.md
 !*.html
 !.gitignore
-!.claude/*.json
+!.os/*.json
 # secrets NEVER enter history (belt; the wall is in root-owned syncd code)
 **/_secrets/**
 # kb-convert's derived sidecars (.name.docx.md …) are regenerable machinery
@@ -169,6 +169,11 @@ if [ ! -f "$REPO/.gitignore" ]; then
 IGN
   chown root:kb-users "$REPO/.gitignore"; chmod 644 "$REPO/.gitignore"
 fi
+# An install from before 2026-09 un-ignored .claude/*.json instead; the config
+# now lives in .os/ (the hub moves it on its next start), so make sure git
+# keeps snapshotting it from there. Idempotent.
+grep -qxF '!.os/*.json' "$REPO/.gitignore" || \
+  printf '\n# platform config (launchers, egress, settings) lives in .os/\n!.os/*.json\n' >> "$REPO/.gitignore"
 
 mkdir -p "$REPO/company" "$REPO/projects" "$REPO/users"
 # Shared containers: setgid so children inherit the group.
@@ -199,14 +204,34 @@ chmod +t "$REPO" "$REPO/users" "$REPO/projects"
 
 install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "$REPO/users/$ADMIN_USER"
 
-# --- agent configuration and skills ---------------------------------------
-# .claude/ is root-owned and world-readable: agents read it, only admins write
-# it. The hub writes egress.json through a dir_fd on this directory, so it must
-# exist before the platform starts.
+# --- agent context, platform config, skills --------------------------------
+# .claude/ is Claude Code's discovery path and holds ONLY agent context:
+# CLAUDE.md (below) and skills/ (further down). Root-owned, world-readable.
 install -d -m 0755 -o root -g kb-users "$REPO/.claude"
-for f in CLAUDE.md egress.json launchers.json; do
-  # never clobber a live system's edits
-  [ -e "$REPO/.claude/$f" ] || install -m 0644 -o root -g kb-users "$SRC/defaults/$f" "$REPO/.claude/$f"
+# never clobber a live system's edits
+[ -e "$REPO/.claude/CLAUDE.md" ] || \
+  install -m 0644 -o root -g kb-users "$SRC/defaults/CLAUDE.md" "$REPO/.claude/CLAUDE.md"
+
+# .os/ is the platform's own config dir (launcher buttons, the artifact egress
+# allowlist, settings): everyone reads it, root writes it. The hub reaches it
+# through a dir_fd, so it must exist before the platform starts. The repo root
+# is group-writable, so a member could have pre-planted an entry of that name:
+# refuse anything that is not a root-owned directory rather than chown through
+# it (the sticky bit stops a member swapping it out afterwards).
+if [ -L "$REPO/.os" ]; then
+  echo "refusing: $REPO/.os is a symlink — remove it and re-run" >&2; exit 1
+fi
+[ -d "$REPO/.os" ] || mkdir -m 0755 "$REPO/.os"
+if [ "$(stat -c %u "$REPO/.os")" != 0 ]; then
+  echo "refusing: $REPO/.os is not root-owned — remove it and re-run" >&2; exit 1
+fi
+chown root:kb-users "$REPO/.os"; chmod 2755 "$REPO/.os"
+for f in egress.json launchers.json; do
+  # never clobber a live system's edits — and never shadow a pre-2026-09 copy
+  # still in .claude/, which the hub moves into .os/ on its next start (a
+  # default installed now would silently replace the operator's list)
+  [ -e "$REPO/.os/$f" ] || [ -e "$REPO/.claude/$f" ] || \
+    install -m 0644 -o root -g kb-users "$SRC/defaults/$f" "$REPO/.os/$f"
 done
 # Codex discovers AGENTS.md from the working directory upward. Keep one source
 # of truth by pointing it at the same governed context Claude Code reads.

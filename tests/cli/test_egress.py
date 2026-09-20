@@ -10,7 +10,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
-from kbenv import BASE, CREDS, U, doc
+from kbenv import BASE, CREDS, U, doc, full
+
+EGRESS = ".os/egress.json"        # the allowlist: platform config, in the repo
 
 TAG = str(int(time.time()))
 ART = doc("dashboards/egresstest.html")
@@ -134,7 +136,7 @@ def test_denials(setup):
 
 
 def test_delegated_non_admin_and_agent_can_manage_network(setup):
-    """Delegation = write-ACL on .claude/egress.json, granted with the normal
+    """Delegation = write-ACL on .os/egress.json, granted with the normal
     permissions machinery. A delegated user passes the hub endpoints AND their
     agent can edit the file directly (kernel-checked); the validating loader
     ignores malformed hand-edits."""
@@ -145,7 +147,7 @@ def test_delegated_non_admin_and_agent_can_manage_network(setup):
     assert cl("bob").get("/admin/egress").json()["can_edit"] is False
     assert cl("bob").post("/admin/egress",
                            json={"artifact": art2, "domains": ["x.com"]}).status_code == 403
-    r = k.post("/fs/props", json={"path": ".claude/egress.json",
+    r = k.post("/fs/props", json={"path": EGRESS,
                                   "acl_add": [{"type": "user", "name": U("bob"), "perms": "rw"}]})
     assert r.status_code == 200, r.text
     try:
@@ -154,9 +156,9 @@ def test_delegated_non_admin_and_agent_can_manage_network(setup):
         assert j.post("/admin/egress",
                       json={"artifact": art2, "domains": [f"127.0.0.1:{port}"]}).status_code == 200
         # the AGENT path: edit the file itself, as bob, kernel-enforced
-        cfg = json.loads(open("/srv/kb/.claude/egress.json").read())
+        cfg = json.loads(full(EGRESS).read_text())
         cfg[art2] = {"domains": [f"127.0.0.1:{port}", "api.example.com"]}
-        w = j.post("/api/artifact/write", json={"path": ".claude/egress.json",
+        w = j.post("/api/artifact/write", json={"path": EGRESS,
                                                 "content": json.dumps(cfg)})
         assert w.status_code == 200, w.text
         assert "api.example.com" in k.get("/admin/egress").json()["entries"][art2]["domains"]
@@ -164,12 +166,12 @@ def test_delegated_non_admin_and_agent_can_manage_network(setup):
         cfg["../../etc/passwd"] = {"domains": ["evil.com"]}
         cfg["notes.txt"] = {"domains": ["evil.com"]}
         cfg[art2 + ".broken"] = "garbage"
-        j.post("/api/artifact/write", json={"path": ".claude/egress.json",
+        j.post("/api/artifact/write", json={"path": EGRESS,
                                             "content": json.dumps(cfg)})
         ents = k.get("/admin/egress").json()["entries"]
         assert "../../etc/passwd" not in ents and "notes.txt" not in ents
     finally:
-        k.post("/fs/props", json={"path": ".claude/egress.json",
+        k.post("/fs/props", json={"path": EGRESS,
                                   "acl_remove": [{"type": "user", "name": U("bob")}]})
         k.post("/admin/egress", json={"artifact": art2, "domains": []})
         k.post("/api/fs/delete", json={"path": art2})
