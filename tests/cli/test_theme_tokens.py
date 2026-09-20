@@ -55,7 +55,7 @@ def test_every_theme_redefines_the_same_tokens():
     root = set(re.findall(r"--([a-z][a-z0-9-]*)\s*:", blocks[":root"]))
     non_colour = {"sans", "mono", "r", "r-lg", "tbh", "accent-wash", "selection", "mention-wash", "mention-me-wash",
                   "logo-filter", "font-size", "editor-size", "editor-lh", "rich-lh", "content-x", "content-y",
-                  "content-max", "source-x", "h1", "h2", "h3", "row-y", "row-x", "tab-y", "pad",
+                  "content-max", "content-x-narrow", "source-x", "h1", "h2", "h3", "row-y", "row-x", "tab-y", "pad",
                   "line-y", "h-weight", "h1-top", "h2-top", "h3-top", "pop", "scroll-thumb", "search-bg",
                   "search-border", "link", "quote-border", "quote-bg", "label-font", "label-size", "label-weight",
                   "label-case", "label-tracking", "crumb-font"}

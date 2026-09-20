@@ -90,7 +90,8 @@
   --editor-size: .92rem;   /* the editor's text */
   --editor-lh: 1.62;       /* source view */
   --rich-lh: 1.7;          /* rendered markdown */
-  --content-x: 2.2rem;     /* the written column's side inset… */
+  --content-x: 2.2rem;     /* the written column's side inset on a wide pane… */
+  --content-x-narrow: 1rem;/* …its floor on a narrow one (a phone, a split pane) */
   --content-y: 1.1rem;
   --content-max: 100000px; /* …and its width: a real length centres it; this one means "all of it" */
   --source-x: 1.1rem;
@@ -182,6 +183,7 @@
   --rich-lh: 1.5;
   --line-y: 3px;
   --content-x: 6rem;
+  --content-x-narrow: 1.5rem;
   --content-y: 2rem;
   --content-max: 708px;
   --source-x: 6rem;
@@ -270,6 +272,7 @@
   --rich-lh: 1.5;
   --line-y: 3px;
   --content-x: 6rem;
+  --content-x-narrow: 1.5rem;
   --content-y: 2rem;
   --content-max: 708px;
   --source-x: 6rem;
@@ -656,13 +659,16 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 
 /* ── rich (live-preview) editor: rendered but editable markdown ──────────── */
 .cm-rich .cm-scroller { font-family: var(--sans); line-height: var(--rich-lh); }
-/* The column's width is the theme's call (--content-max): deep blue gives the
-   document the whole editor column — on a 34" screen a fixed 60rem column left
-   two thirds of the window empty — while the Notion-like themes centre a
-   760px column. Centring is done with the line padding, which the theme's
-   inset (--content-x) never drops below. */
+/* The document reads like a page: the column is centred at --content-max on
+   a wide pane (deep blue's "all of it" is a very large length, so it takes
+   the whole editor — on a 34" screen a fixed column left two thirds of the
+   window empty); as the pane narrows — a split, a small window — the gutter
+   follows the pane (8% of it) instead of holding the wide-screen inset, down
+   to --content-x-narrow, which is also what phones get. The rich and source
+   views share the formula through --gutter, computed per pane. */
+.cm-editor { --gutter: max(var(--content-x-narrow), min(var(--content-x), 8%), calc((100% - var(--content-max)) / 2)); }
 .cm-rich .cm-content { padding: var(--content-y) 0 40vh; }
-.cm-rich .cm-line { padding: var(--line-y) max(var(--content-x), calc((100% - var(--content-max)) / 2)); }
+.cm-rich .cm-line { padding: var(--line-y) var(--gutter); }
 .cm-rich .cm-h { font-weight: var(--h-weight); color: var(--heading); line-height: 1.3; }
 .cm-rich .cm-h1 { font-size: var(--h1); padding-top: var(--h1-top); }
 .cm-rich .cm-h2 { font-size: var(--h2); padding-top: var(--h2-top); }
@@ -873,7 +879,7 @@ body.dragging-tab .pane-drop { display: block; }
 .cm-editor.cm-focused { outline: none; }
 .cm-scroller { font-family: var(--mono); line-height: var(--editor-lh); }
 .cm-content { padding: .8rem 0; caret-color: var(--accent); }
-.cm-line { padding: 0 var(--source-x); }
+.cm-line { padding: 0 max(var(--content-x-narrow), min(var(--source-x), 8%), calc((100% - var(--content-max)) / 2)); }
 .cm-gutters { background: var(--bg); color: var(--faint); border-right: 1px solid var(--border);
   font-family: var(--mono); font-size: .72rem; }
 .cm-lineNumbers .cm-gutterElement { padding: 0 .8rem 0 1rem; }
@@ -1434,8 +1440,8 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   :root { --tbh: 54px; }
   input, select, textarea { font-size: 16px !important; }   /* no iOS focus-zoom */
   .cm-editor { font-size: 16px; }
-  .cm-line { padding: 0 .85rem; }
-  .cm-rich .cm-line { padding: var(--line-y) 1rem; }
+  .cm-line { padding: 0 var(--content-x-narrow); }
+  .cm-rich .cm-line { padding: var(--line-y) var(--content-x-narrow); }
   .cm-rich .cm-quoteline { padding-left: 1.7rem !important; }
 
   /* the name stays on phones: the bar has room now that search and the

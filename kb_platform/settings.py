@@ -48,7 +48,7 @@ THEME_TOKENS = {
     "sans": FONT, "mono": FONT,
     "font-size": r"(1[0-9]|2[0-4])px", "editor-size": LEN,
     "editor-lh": r"[12](\.\d{1,2})?", "rich-lh": r"[12](\.\d{1,2})?",
-    "content-x": LEN, "content-y": LEN, "content-max": r"\d{3,6}px", "source-x": LEN,
+    "content-x": LEN, "content-x-narrow": LEN, "content-y": LEN, "content-max": r"\d{3,6}px", "source-x": LEN,
     "row-y": LEN, "tab-y": LEN, "pad": LEN, "r": r"\d{1,2}px",
 }
 REGISTRY: list[dict] = [

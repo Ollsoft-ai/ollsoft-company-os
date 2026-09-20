@@ -100,6 +100,48 @@ def test_overrides_paint_live_and_are_editable_in_the_dialog(browser):
         ctx.close()
 
 
+def _column(page):
+    return page.evaluate("""() => { const l = document.querySelector('.cm-rich .cm-line'); const cs = getComputedStyle(l);
+      const c = document.querySelector('.cm-content').getBoundingClientRect().width;
+      return [Math.round(parseFloat(cs.paddingLeft)), Math.round(c - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight))]; }""")
+
+
+def test_the_document_reads_like_a_page_at_every_width(browser):
+    """Notion's framing: on a wide window the text sits in a 708px column with
+    paper either side; as the pane narrows the gutter follows the pane instead
+    of squeezing the text; a phone gets the floor. Deep blue keeps its inset."""
+    from conftest import open_doc
+    from kbenv import doc as kbdoc
+    b = api("bob")
+    assert b.post("/api/settings", json={"set": {KEY: "light"}}).status_code == 200
+    try:
+        for width, want in ((1900, "wide"), (1300, "wide"), (900, "narrow")):
+            ctx = browser.new_context(viewport={"width": width, "height": 900})
+            page = login(ctx, "bob")
+            page.wait_for_function("() => document.documentElement.dataset.theme === 'light'", timeout=15000)
+            open_doc(page, kbdoc("overview.md"))
+            page.wait_for_selector(".cm-rich .cm-line")
+            gutter, text = _column(page)
+            if want == "wide":
+                assert abs(text - 708) <= 2, (width, gutter, text)             # the column
+                assert gutter >= 96, (width, gutter, text)                     # paper either side
+            else:
+                assert 24 <= gutter < 96, (width, gutter, text)                # follows the pane…
+                assert text > 500, (width, gutter, text)                       # …instead of squeezing the text
+            ctx.close()
+        b.post("/api/settings", json={"unset": [KEY]})
+        ctx = browser.new_context(viewport={"width": 1900, "height": 900})
+        page = login(ctx, "bob")
+        page.wait_for_function("() => document.documentElement.dataset.theme === 'deep-blue'", timeout=15000)
+        open_doc(page, kbdoc("overview.md"))
+        page.wait_for_selector(".cm-rich .cm-line")
+        gutter, text = _column(page)
+        assert gutter == 33 and text > 1400, (gutter, text)                   # deep blue: its 2.2rem inset, the whole width
+        ctx.close()
+    finally:
+        b.post("/api/settings", json={"unset": [KEY]})
+
+
 def test_company_default_theme_applies_to_everyone(browser):
     assert api("alice").post("/admin/settings", json={"set": {KEY: "dark"}}).status_code == 200
     ctx = browser.new_context()
