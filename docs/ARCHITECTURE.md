@@ -339,9 +339,15 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   construct's raw syntax reappears only while the cursor is inside it. The
   markdown source stays the single source of truth, so multiplayer, vim/agent
   merges, the indexer and todos are untouched (a rendered checkbox toggle rewrites
-  `- [ ]`→`- [x]` in the source, same path as the todos artifact). A per-doc
-  toolbar (H1-3, bold/italic/strike/code, lists, task, quote, link, media, hr;
-  Ctrl+B/I) and **drag-drop + screenshot-paste** insert media at the drop point —
+  `- [ ]`→`- [x]` in the source, same path as the todos artifact). A formatting
+  **dock** (H1-3, bold/italic/strike/code, lists, task, quote, link, media, hr,
+  mic; Ctrl+B/I) floats at the bottom of the document, near the hand and off
+  the eyeline: 38% opacity until hovered or focused, dimmer while you type,
+  back on the next mouse move. On touch it is a keyboard accessory row docked
+  to the bottom edge — the top of the keyboard while one is up
+  (`interactive-widget=resizes-content`) — opaque, most-used first, ⋯ for the
+  rest; a tap on it never takes focus, so the keyboard stays. Drag-drop and
+  **screenshot-paste** insert media at the drop point —
   the bytes upload to a `_files/` sibling (as the user, chunked, reporting in the
   upload tray) and render inline; images land on their own block, other files as
   links. Dragging a row *out of the tree*
@@ -574,7 +580,7 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   dragging a tab onto another pane moves it, onto a pane's left/right edge splits
   a new column off. `tabs` stays the one flat list (a tab's `paneId` says which
   column it is in), each pane remembers its own current tab, and the document
-  header + markdown toolbar above the row describe the **active** one. Layout and
+  header and the formatting dock describe the **active** one. Layout and
   column widths persist in `localStorage` with the open tabs. A pane retires when
   its last tab leaves; the leftmost pane keeps the historic `#tabbar`/`#editor`
   ids. Split handles are rebuilt freely, pane elements never are — re-inserting a

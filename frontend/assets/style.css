@@ -471,7 +471,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 
 /* ── Main column: tabs / editor / terminal ────────────────────────────────── */
 .main-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.editor-wrap { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; min-height: 0; }
+.editor-wrap { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; min-height: 0;
+  position: relative; }   /* the formatting dock floats inside it */
 .doc-title-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   padding: .42rem .95rem; border-bottom: 1px solid var(--border); color: var(--muted);
   font-family: var(--mono); font-size: .74rem; background: var(--bg); }
@@ -509,8 +510,23 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .modeswitch button.active { background: var(--accent-deep); color: var(--on-accent); }
 
 /* markdown toolbar */
-.mdbar { display: flex; align-items: center; gap: .12rem; flex-wrap: wrap; flex: 0 0 auto;
-  padding: .3rem .7rem; background: var(--bg); border-bottom: 1px solid var(--border); }
+/* ── Formatting dock ─────────────────────────────────────────────────────────
+   The toolbar floats at the bottom of the document instead of sitting under
+   the title: near the hand, off the eyeline. Quiet until the pointer comes to
+   it or a button has focus; dimmer still while you type, back on the next
+   mouse move. On touch it is a keyboard accessory row (further down). */
+.mdbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .12rem;
+  padding: .3rem .45rem; border-radius: 999px; max-width: calc(100% - 2rem);
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--shadow) 45%, transparent);
+  opacity: .38; transition: opacity .18s ease; }
+.mdbar:hover, .mdbar:focus-within { opacity: 1; }
+.mdbar.typing:not(:hover):not(:focus-within) { opacity: .12; }
+/* the last line never hides under the dock */
+body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
+/* phone-only pieces: the second row and the ⋯ that reveals it */
+.mdbar button.mdb-2, .mdbar button[data-md="more"] { display: none; }
 .mdbar button { background: transparent; border: 1px solid transparent; color: var(--muted);
   cursor: pointer; min-width: 1.7rem; height: 1.7rem; padding: 0 .35rem; border-radius: 6px;
   font-family: var(--sans); font-size: .85rem; display: inline-flex; align-items: center; justify-content: center; }
@@ -1259,7 +1275,18 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .term-tab { padding: .3rem .4rem .3rem .6rem; font-size: .78rem; }
   .term-x { padding: 0 .3rem; }
   .mini { padding: .25rem .55rem; font-size: .85rem; }
-  .mdbar button { min-width: 2.15rem; height: 2.15rem; }
+  /* the formatting dock becomes a keyboard accessory row: docked to the bottom
+     edge — the top of the keyboard while one is up (interactive-widget=
+     resizes-content) — opaque, most-used first, ⋯ for the rest */
+  .mdbar { left: 0; right: 0; bottom: 0; transform: none; max-width: none; border-radius: 0;
+    border-width: 1px 0 0; box-shadow: none; opacity: 1 !important; gap: .15rem;
+    padding: .28rem .4rem calc(.28rem + env(safe-area-inset-bottom)); justify-content: flex-start; }
+  .mdbar button { min-width: 2.3rem; height: 2.3rem; flex: 1 0 auto; }
+  .mdbar-sep { display: none; }
+  .mdbar button[data-md="more"] { display: inline-flex; }
+  .mdbar.more button.mdb-2 { display: inline-flex; }
+  .mdbar.more button[data-md="more"] { color: var(--accent); }
+  body.mdbar-on .cm-scroller { padding-bottom: 3rem; }
   .modeswitch button { padding: .35rem .7rem; }
   .cm-task-toggle { width: 18px; height: 18px; }
   .modal-x { font-size: 1.5rem; padding: .1rem .45rem; }
@@ -1336,10 +1363,6 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .doc-flag { margin-left: .4rem; }
   #doc-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
-  /* markdown toolbar: one row, swipe to reach the rest */
-  .mdbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: .3rem .45rem; }
-  .mdbar::-webkit-scrollbar { display: none; }
-  .mdbar button, .mdbar-sep { flex: 0 0 auto; }
 
   /* modals become bottom sheets */
   .modal-overlay { place-items: end stretch; }

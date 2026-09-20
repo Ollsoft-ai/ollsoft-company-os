@@ -1187,6 +1187,7 @@ function updateModeUI() {
   }
   bar.hidden = !(isDoc && active.mode === "rich" &&
                  active.access && active.access.write);
+  document.body.classList.toggle("mdbar-on", !bar.hidden);   // room under the last line
 }
 
 // ---- markdown toolbar ------------------------------------------------------
@@ -1579,14 +1580,38 @@ function wireMdBar() {
     };
     input.click();
   };
+  const bar = $("#mdbar");
+  // On touch the dock is a keyboard accessory row: the most-used first, the
+  // mic at the thumb's end, ⋯ for the rest. The markup order is the desktop
+  // order; here the buttons are re-seated once for this device.
+  if (window.matchMedia("(pointer: coarse)").matches) {
+    const first = ["mic", "bold", "italic", "h1", "h2", "ul", "task", "link", "code"];
+    const rest = ["h3", "strike", "ol", "quote", "table", "image", "file", "video", "hr"];
+    const by = (k) => bar.querySelector(`button[data-md="${k}"]`);
+    const more = document.createElement("button");
+    more.type = "button"; more.dataset.md = "more"; more.className = "mdb-txt";
+    more.title = "More formatting"; more.textContent = "⋯";
+    for (const k of first) { const b = by(k); if (b) bar.appendChild(b); }
+    bar.appendChild(more);
+    for (const k of rest) { const b = by(k); if (b) { b.classList.add("mdb-2"); bar.appendChild(b); } }
+  }
+  // Quiet while you type: a keystroke in the document dims the dock, the next
+  // mouse move brings it back (touch: opacity is pinned to 1 in the stylesheet).
+  document.addEventListener("keydown", (e) => {
+    if (e.target && e.target.closest && e.target.closest(".cm-content")) bar.classList.add("typing");
+  }, true);
+  document.addEventListener("mousemove", () => {
+    if (bar.classList.contains("typing")) bar.classList.remove("typing");
+  }, { passive: true });
   // Like the terminal keybar: pressing a toolbar button must not take focus.
   // Without this a phone tap on B / mic / any button blurs the editor, which
   // drops the visible selection and closes the soft keyboard mid-edit.
-  $("#mdbar").addEventListener("pointerdown", (e) => e.preventDefault());
-  $("#mdbar").addEventListener("click", (e) => {
+  bar.addEventListener("pointerdown", (e) => e.preventDefault());
+  bar.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-md]");
     if (!b) return;
     switch (b.dataset.md) {
+      case "more": bar.classList.toggle("more"); break;
       case "h1": tbHeading(1); break;
       case "h2": tbHeading(2); break;
       case "h3": tbHeading(3); break;
