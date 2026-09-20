@@ -84,7 +84,8 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
   `settings.subscribe(key, fn)` in `app.js` if it has a live effect, and a row
   in `docs/settings.md` + the `kb-settings` skill (a test checks both).
 - **A theme**: one `:root[data-theme="<name>"]` block in `frontend/assets/style.css`
-  that sets every colour token `:root` defines (`tests/cli/test_theme_tokens.py`
+  that sets every colour token `:root` defines (type and spacing tokens are
+  optional — unset ones inherit deep blue's) (`tests/cli/test_theme_tokens.py`
   fails on a missing one — an unset token silently inherits deep blue), plus the
   name in `ui.theme`'s `options` in `kb_platform/settings.py`. Nothing else: no
   rule in the stylesheet names a colour, the editor's highlight style reads the

@@ -53,7 +53,9 @@ def test_every_theme_redefines_the_same_tokens():
     css = CSS.read_text()
     blocks = dict(_blocks(re.sub(r"/\*.*?\*/", "", css, flags=re.S)))
     root = set(re.findall(r"--([a-z][a-z0-9-]*)\s*:", blocks[":root"]))
-    non_colour = {"sans", "mono", "r", "tbh", "accent-wash", "selection", "mention-wash", "mention-me-wash"}
+    non_colour = {"sans", "mono", "r", "r-lg", "tbh", "accent-wash", "selection", "mention-wash", "mention-me-wash",
+                  "logo-filter", "font-size", "editor-size", "editor-lh", "rich-lh", "content-x", "content-y",
+                  "content-max", "source-x", "h1", "h2", "h3", "row-y", "row-x", "tab-y", "pad"}
     colours = root - non_colour
     themes = {k: v for k, v in blocks.items() if k.startswith(":root[data-theme=")}
     assert len(themes) >= 2, "expected the dark and light themes"
@@ -73,17 +75,25 @@ def test_registry_themes_exist_in_the_stylesheet():
         assert f':root[data-theme="{opt}"]' in css, f"no theme block for {opt}"
 
 
-def test_customisable_tokens_are_plain_hex_in_every_theme():
-    """ui.theme.custom offers a colour picker per token, seeded from the value
-    the theme paints — which only works when that value IS a colour, not a
-    color-mix() of one. Every customisable token must be #rrggbb in :root and
-    in each theme block."""
+def test_customisable_tokens_exist_and_match_their_patterns():
+    """ui.theme.custom seeds each control from the value the theme paints: a
+    colour picker needs a plain #rrggbb (not a color-mix()), a text field
+    shows the painted value as its placeholder. Every customisable token must
+    be defined in :root, and wherever a theme sets it the value must match the
+    pattern a person would be held to."""
     from kb_platform import settings as s
     css = re.sub(r"/\*.*?\*/", "", CSS.read_text(), flags=re.S)
     blocks = {sel: body for sel, body in _blocks(css)
               if sel == ":root" or sel.startswith(":root[data-theme=")}
     for sel, body in blocks.items():
-        for tok in s.THEME_TOKENS:
+        for tok, pat in s.THEME_TOKENS.items():
             m = re.search(r"--" + re.escape(tok) + r"\s*:\s*([^;]+);", body)
-            assert m, f"{sel}: --{tok} is not defined"
-            assert re.fullmatch(r"#[0-9a-fA-F]{6}", m.group(1).strip()), f"{sel}: --{tok} is {m.group(1).strip()!r}, not #rrggbb"
+            if sel == ":root":
+                assert m, f":root: --{tok} is not defined"
+            if not m:
+                continue                                   # a theme may inherit type/space
+            val = m.group(1).strip()
+            if pat == s.HEX:
+                assert re.fullmatch(r"#[0-9a-fA-F]{6}", val), f"{sel}: --{tok} is {val!r}, not #rrggbb"
+            elif tok not in ("sans", "mono"):              # the font stacks are quoted lists; skip
+                assert re.fullmatch(pat, val), f"{sel}: --{tok} is {val!r}, which a person could not set"

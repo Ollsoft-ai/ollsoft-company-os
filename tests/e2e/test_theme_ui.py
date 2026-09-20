@@ -41,6 +41,8 @@ def test_light_theme_lands_before_paint_and_switches_live(browser):
         light_bg = bg(page)
         assert light_bg == "rgb(255, 255, 255)", light_bg          # Notion's paper
         assert token(page, "--term-bg").lower() == "#f7f6f3"
+        assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "16px"       # and Notion's air
+        assert token(page, "--content-max") == "760px"
         # the editor's highlight style follows the tokens
         open_doc(page, doc("overview.md"))
         page.wait_for_selector(".cm-editor")
@@ -59,6 +61,7 @@ def test_light_theme_lands_before_paint_and_switches_live(browser):
         page.wait_for_function("() => document.documentElement.dataset.theme === 'deep-blue'", timeout=10000)
         page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(13, 22, 38)'", timeout=5000)
         assert page.evaluate("() => window.__kbterms[0].term.options.theme.background").lower() == "#071019"
+        assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "15px"       # deep blue keeps its numbers
         # a second load starts light again only if it is set — it is not now
         page.reload(); page.wait_for_selector('[data-testid="tree"] .tree-item')
         assert page.evaluate("() => document.documentElement.dataset.theme") == "deep-blue"
@@ -74,8 +77,9 @@ def test_overrides_paint_live_and_are_editable_in_the_dialog(browser):
         page = login(ctx, "bob")
         page.wait_for_function("() => window.__kbsettings.state() !== null")
         # from the API: the background token is overridden, the page follows
-        assert b.post("/api/settings", json={"set": {K: {"bg": "#123456"}}}).status_code == 200
+        assert b.post("/api/settings", json={"set": {K: {"bg": "#123456", "font-size": "18px"}}}).status_code == 200
         page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)'", timeout=10000)
+        assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "18px"        # the base size follows
         # from the dialog: pick the accent, the token lands on <html>
         user_menu(page); page.click('[data-testid="settings-btn"]')
         page.click('[data-testid="set-ui-theme-custom-input"]')

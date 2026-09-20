@@ -414,7 +414,12 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
 - **Themes are token blocks.** `frontend/assets/style.css` names no colour
   outside `:root` and the `:root[data-theme=…]` blocks; every rule uses a token
   or a `color-mix()` of one (washes, borders, shadows derive from ~40 base
-  values). `ui.theme` sets `data-theme` on `<html>` from a cached value before
+  values). Type and space are tokens too — the base size every rem follows,
+  the editor's size and line heights, the written column's inset and width,
+  heading sizes, row and tab density, the sidebar's padding, two radii — so a
+  theme is a feel, not only a palette: deep blue keeps its numbers, Dark and
+  Light take Notion's air (16px, taller lines, a centred 760px column, softer
+  corners). `ui.theme.custom` overrides any of these per person or company. `ui.theme` sets `data-theme` on `<html>` from a cached value before
   first paint; CodeMirror's highlight style reads `--md-*` tokens through CSS
   variables so it retints live, and xterm is handed a theme built from the
   `--term-*` tokens when it opens and again on every theme change. The sign-in

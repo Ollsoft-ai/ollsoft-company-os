@@ -55,7 +55,11 @@ function termTheme() {
   th.selectionBackground = th.cursor + "4D";      // the cursor colour at 30%
   return th;
 }
-const TERM_FONT = '"IBM Plex Mono", ui-monospace, monospace';
+// the terminal's font is the theme's --mono (read like the colours)
+function termFont() {
+  return getComputedStyle(document.documentElement).getPropertyValue("--mono").trim()
+         || '"IBM Plex Mono", ui-monospace, monospace';
+}
 
 // ═══ Rich markdown: live preview on the SAME text document ══════════════════
 // The rendered mode is a decoration layer over the markdown source — never a
@@ -4416,13 +4420,28 @@ function openSettings() {
       panel.hidden = !_openMaps.has(panelId);
       const cs = getComputedStyle(document.documentElement);
       const save = (m) => onChange(Object.keys(m).length ? m : undefined);
-      for (const k of e.keys || []) {
+      const keys = Array.isArray(e.keys) ? e.keys : Object.keys(e.keys || {});
+      const patOf = (k) => (Array.isArray(e.keys) ? e.pattern : e.keys[k]) || "";
+      for (const k of keys) {
         const name = document.createElement("span"); name.textContent = k;
-        const inp = document.createElement("input"); inp.type = "color";
         const painted = cs.getPropertyValue("--" + k).trim();
-        inp.value = cur[k] || (/^#[0-9a-f]{6}$/i.test(painted) ? painted.toLowerCase() : "#000000");
+        const isColour = patOf(k) === "#[0-9a-f]{6}";
+        const inp = document.createElement("input");
+        if (isColour) {
+          inp.type = "color";
+          inp.value = cur[k] || (/^#[0-9a-f]{6}$/i.test(painted) ? painted.toLowerCase() : "#000000");
+          inp.addEventListener("change", () => save({ ...cur, [k]: inp.value.toLowerCase() }));
+        } else {
+          inp.type = "text"; inp.className = "set-map-text";
+          inp.value = cur[k] || ""; inp.placeholder = painted;
+          inp.addEventListener("change", () => {
+            const v = inp.value.trim();
+            if (v === "") { const m = { ...cur }; delete m[k]; save(m); return; }
+            if (!new RegExp("^(?:" + patOf(k) + ")$").test(v)) { kbToast(`${k}: not a valid value`, "err"); inp.value = cur[k] || ""; return; }
+            save({ ...cur, [k]: v });
+          });
+        }
         inp.setAttribute("data-testid", `set-${tid(e.key)}-${k}${unsettable ? "-co" : ""}`);
-        inp.addEventListener("change", () => save({ ...cur, [k]: inp.value.toLowerCase() }));
         const clr = document.createElement("button");
         clr.type = "button"; clr.className = "mini set-map-x"; clr.textContent = "×";
         clr.title = "Back to the theme's colour"; clr.style.visibility = k in cur ? "visible" : "hidden";
@@ -6553,7 +6572,7 @@ function wireTerminal() {
   // fallback glyphs — poke the font option to re-measure, then refit.
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(() => {
-      for (const t of terms) t.term.options.fontFamily = TERM_FONT;
+      for (const t of terms) t.term.options.fontFamily = termFont();
       fitTerm(activeTerm);
     });
   }
@@ -7035,8 +7054,9 @@ function wireTermKeys() {
 // Terminal text size: user-adjustable, remembered, one size for all terminals.
 // every open terminal takes the theme's colours, live
 function retintTerminals() {
-  const th = termTheme();
-  for (const t of terms) if (t.term) t.term.options.theme = th;
+  const th = termTheme(), font = termFont();
+  for (const t of terms) if (t.term) { t.term.options.theme = th; t.term.options.fontFamily = font; }
+  if (activeTerm) fitTerm(activeTerm);
 }
 
 function termFontSize() {
@@ -7255,7 +7275,7 @@ async function newTerminal(cmd, sid, savedName) {
   // the glyphs on screen are free to be any size.
   const term = new Terminal({
     fontSize: termFontSize(),
-    fontFamily: TERM_FONT, theme: termTheme(),
+    fontFamily: termFont(), theme: termTheme(),
                               // deep enough to still hold the start of a long
                               // agent run: a phone terminal is ~48 columns, so
                               // output wraps to several rows per printed line

@@ -12,12 +12,14 @@ BOOL = {"key": "t.bool", "type": "bool", "default": False, "scopes": ("company",
 ENUM = {"key": "t.enum", "type": "enum", "options": ["a", "b"], "default": "a", "scopes": ("company", "user")}
 MAP = {"key": "t.map", "type": "map", "keys": ("accent", "bg"), "pattern": r"#[0-9a-f]{6}", "default": {},
        "scopes": ("company", "user")}
+MAP2 = {"key": "t.map2", "type": "map", "keys": {"accent": r"#[0-9a-f]{6}", "size": r"\d{2}px"}, "default": {},
+        "scopes": ("user",)}
 
 
 @pytest.fixture(autouse=True)
 def registry(monkeypatch):
     """A synthetic registry, so the tests do not depend on what ships."""
-    reg = [ENTRY, STR, BOOL, ENUM, MAP]
+    reg = [ENTRY, STR, BOOL, ENUM, MAP, MAP2]
     monkeypatch.setattr(s, "REGISTRY", reg)
     monkeypatch.setattr(s, "BY_KEY", {e["key"]: e for e in reg})
 
@@ -42,15 +44,16 @@ def test_every_shipped_entry_is_well_formed():
     ("t.str", "cs", True), ("t.str", "", True), ("t.str", "czech", False), ("t.str", "a\nb", False),
     ("t.map", {"accent": "#FF0000"}, True), ("t.map", {}, True), ("t.map", {"nope": "#ff0000"}, False),
     ("t.map", {"accent": "red"}, False), ("t.map", ["#ff0000"], False),
+    ("t.map2", {"size": "18px"}, True), ("t.map2", {"size": "18"}, False), ("t.map2", {"accent": "#ABCDEF"}, True),
     ("nope", 1, False),
 ])
 def test_validate_value(key, value, ok):
     clean, err = s.validate_value(key, value)
     assert (err is None) is ok, err
-    if ok and key != "t.map":
+    if ok and not key.startswith("t.map"):
         assert clean == value
-    if ok and key == "t.map":
-        assert clean == {k: v.lower() for k, v in value.items()}      # normalised
+    if ok and key.startswith("t.map"):
+        assert clean == {k: (v.lower() if v.startswith("#") else v) for k, v in value.items()}   # hex normalised
 
 
 def test_validate_change_respects_scope_and_shape():
@@ -83,8 +86,8 @@ def test_load_layer_is_tolerant(tmp_path):
 
 def test_resolve_takes_one_layer_per_key():
     eff, src = s.resolve({"t.int": 2, "t.bool": True, "t.map": {"bg": "#000000"}}, {"t.int": 5, "t.str": "cs"})
-    assert eff == {"t.int": 5, "t.str": "cs", "t.bool": True, "t.enum": "a", "t.map": {"bg": "#000000"}}
-    assert src == {"t.int": "user", "t.str": "user", "t.bool": "company", "t.enum": "default", "t.map": "company"}
+    assert eff == {"t.int": 5, "t.str": "cs", "t.bool": True, "t.enum": "a", "t.map": {"bg": "#000000"}, "t.map2": {}}
+    assert src == {"t.int": "user", "t.str": "user", "t.bool": "company", "t.enum": "default", "t.map": "company", "t.map2": "default"}
     eff, src = s.resolve({"t.int": 2}, {})
     assert (eff["t.int"], src["t.int"]) == (2, "company")
 

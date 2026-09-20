@@ -30,15 +30,27 @@ FILE_NAME = "settings.json"
 # type: bool | int (min, max) | enum (options, optional labels) | string (pattern, maxlen)
 #       | image (a file in .os/, set only through its upload endpoint; the value
 #         is the file's name, "" = the built-in default)
-#       | map (an object of allowed `keys` -> values matching `pattern`; a layer
-#         replaces the map whole, it does not merge)
+#       | map (an object of allowed keys -> values: `keys` is a dict key -> pattern,
+#         or a tuple of keys sharing `pattern`; a layer replaces the map whole)
 LOGO_FILES = ("logo.svg", "logo.png")
-# The tokens a theme can be customised on, per person or company-wide: the
-# base colours the stylesheet derives everything else from. Names without
-# the leading "--"; every one must be a plain hex value in style.css.
-THEME_TOKENS = ("bg", "chassis", "panel", "panel2", "border", "ink", "muted", "faint", "heading",
-                "accent", "accent-deep", "ok", "warn", "danger", "code-bg", "code-ink",
-                "term-bg", "term-fg")
+# The tokens a theme can be customised on, per person or company-wide, each
+# with the pattern its value must match. Colours: the base ones the stylesheet
+# derives everything else from (plain hex in style.css, so a picker can start
+# from what the theme paints). Type and space: the dozen dimensions that make
+# the feel. Names without the leading "--".
+HEX = r"#[0-9a-f]{6}"
+LEN = r"(\d{1,3}(\.\d{1,2})?|\.\d{1,2})(px|rem)"
+FONT = r"[A-Za-z0-9 ,\"'._-]{1,120}"
+THEME_TOKENS = {
+    "bg": HEX, "chassis": HEX, "panel": HEX, "panel2": HEX, "border": HEX, "ink": HEX, "muted": HEX,
+    "faint": HEX, "heading": HEX, "accent": HEX, "accent-deep": HEX, "ok": HEX, "warn": HEX,
+    "danger": HEX, "code-bg": HEX, "code-ink": HEX, "term-bg": HEX, "term-fg": HEX,
+    "sans": FONT, "mono": FONT,
+    "font-size": r"(1[0-9]|2[0-4])px", "editor-size": LEN,
+    "editor-lh": r"[12](\.\d{1,2})?", "rich-lh": r"[12](\.\d{1,2})?",
+    "content-x": LEN, "content-y": LEN, "content-max": r"\d{3,6}px", "source-x": LEN,
+    "row-y": LEN, "tab-y": LEN, "pad": LEN, "r": r"\d{1,2}px",
+}
 REGISTRY: list[dict] = [
     {"key": "brand.name", "type": "string", "pattern": r"\s*\S.*", "maxlen": 40, "default": "Company OS",
      "scopes": ("company",), "group": "Brand", "label": "Product name",
@@ -47,10 +59,11 @@ REGISTRY: list[dict] = [
      "scopes": ("company",), "group": "Brand", "label": "Logo",
      "help": "SVG or PNG, up to 512 KB. Replaces the mark in the app and on the sign-in page; "
              "the built-in Ollsoft mark when unset."},
-    {"key": "ui.theme.custom", "type": "map", "keys": THEME_TOKENS, "pattern": r"#[0-9a-f]{6}", "default": {},
+    {"key": "ui.theme.custom", "type": "map", "keys": THEME_TOKENS, "default": {},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Customize the theme",
-     "help": "Override single colours of the chosen theme — the accent, the background, the ink… "
-             "Your set replaces the company's; empty means the theme as shipped."},
+     "help": "Override single colours, fonts and spacing of the chosen theme — the accent, the "
+             "background, the base size, the column width… Your set replaces the company's; "
+             "empty means the theme as shipped."},
     {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
      "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
@@ -62,7 +75,9 @@ BY_KEY = {e["key"]: e for e in REGISTRY}
 
 def public_schema() -> list[dict]:
     """What the browser receives: every field, scopes (and keys) as lists."""
-    return [dict(e, scopes=list(e["scopes"]), **({"keys": list(e["keys"])} if "keys" in e else {}))
+    return [dict(e, scopes=list(e["scopes"]),
+                 **({"keys": (dict(e["keys"]) if isinstance(e["keys"], dict) else list(e["keys"]))}
+                    if "keys" in e else {}))
             for e in REGISTRY]
 
 
@@ -93,13 +108,19 @@ def validate_value(key: str, value) -> tuple[object | None, str | None]:
     elif t == "map":
         if not isinstance(value, dict):
             return None, f"{key}: expected an object"
+        pats = e["keys"] if isinstance(e["keys"], dict) else {k: e["pattern"] for k in e["keys"]}
         clean = {}
         for k, v in value.items():
-            if k not in e["keys"]:
+            if k not in pats:
                 return None, f"{key}: unknown entry {k}"
-            if not isinstance(v, str) or not re.fullmatch(e["pattern"], v.strip().lower()):
-                return None, f"{key}: {k} must match {e['pattern']}"
-            clean[k] = v.strip().lower()
+            if not isinstance(v, str):
+                return None, f"{key}: {k} must be text"
+            v = v.strip()
+            if pats[k] == HEX:
+                v = v.lower()
+            if not re.fullmatch(pats[k], v):
+                return None, f"{key}: {k} must match {pats[k]}"
+            clean[k] = v
         return clean, None
     elif t == "string":
         maxlen = e.get("maxlen", 200)

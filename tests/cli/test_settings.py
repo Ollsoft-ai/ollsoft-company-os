@@ -141,6 +141,11 @@ def test_theme_overrides_replace_whole_not_merge():
         assert j["effective"][K] == {"ink": "#ffffff"}                 # the user's map replaces, no merge
         assert b.post("/api/settings", json={"set": {K: {"shadow": "#000000"}}}).status_code == 400   # not customisable
         assert b.post("/api/settings", json={"set": {K: {"accent": "blue"}}}).status_code == 400
+        # type and space: validated per key, no CSS smuggling
+        assert b.post("/api/settings", json={"set": {K: {"font-size": "18px", "content-max": "720px", "sans": "Inter, system-ui"}}}).status_code == 200
+        assert b.post("/api/settings", json={"set": {K: {"font-size": "180px"}}}).status_code == 400
+        assert b.post("/api/settings", json={"set": {K: {"sans": "x; background: url(evil)"}}}).status_code == 400
+        assert b.post("/api/settings", json={"set": {K: {"r": "10"}}}).status_code == 400
         assert b.post("/api/settings", json={"unset": [K]}).status_code == 200
         assert b.get("/api/settings").json()["source"][K] == "company"
     finally:
