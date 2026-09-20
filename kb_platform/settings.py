@@ -28,7 +28,17 @@ SCOPES = ("company", "user")
 FILE_NAME = "settings.json"
 
 # type: bool | int (min, max) | enum (options, optional labels) | string (pattern, maxlen)
+#       | image (a file in .os/, set only through its upload endpoint; the value
+#         is the file's name, "" = the built-in default)
+LOGO_FILES = ("logo.svg", "logo.png")
 REGISTRY: list[dict] = [
+    {"key": "brand.name", "type": "string", "pattern": r"\s*\S.*", "maxlen": 40, "default": "Company OS",
+     "scopes": ("company",), "group": "Brand", "label": "Product name",
+     "help": "Shown next to the logo in the app and on the sign-in page."},
+    {"key": "brand.logo", "type": "image", "default": "",
+     "scopes": ("company",), "group": "Brand", "label": "Logo",
+     "help": "SVG or PNG, up to 512 KB. Replaces the mark in the app and on the sign-in page; "
+             "the built-in Ollsoft mark when unset."},
     {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
      "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
@@ -64,6 +74,9 @@ def validate_value(key: str, value) -> tuple[object | None, str | None]:
     elif t == "enum":
         if value not in e["options"]:
             return None, f"{key}: must be one of {', '.join(e['options'])}"
+    elif t == "image":
+        if value != "" and value not in LOGO_FILES:
+            return None, f"{key}: not a logo file"
     elif t == "string":
         maxlen = e.get("maxlen", 200)
         if (not isinstance(value, str) or len(value) > maxlen
@@ -91,6 +104,8 @@ def validate_change(data, scope: str) -> tuple[dict | None, str | None]:
     for k, v in sets.items():
         if k not in BY_KEY or scope not in BY_KEY[k]["scopes"]:
             return None, f"{k}: not a {scope} setting"
+        if BY_KEY[k]["type"] == "image":
+            return None, f"{k}: upload it in Settings (it is a file, not a value)"
         clean, err = validate_value(k, v)
         if err:
             return None, err
@@ -169,6 +184,17 @@ def user_file(user: str) -> Path:
     return common.user_config(user, FILE_NAME)
 
 
+def logo_rev() -> int:
+    """A number that changes whenever the custom logo file does (its mtime),
+    0 without one — the cache-buster for /brand/logo."""
+    for name in LOGO_FILES:
+        try:
+            return int(common.company_config(name).stat().st_mtime)
+        except OSError:
+            continue
+    return 0
+
+
 def snapshot(user: str) -> dict:
     """The GET /api/settings body, computed AS `user` (the company file is
     group-readable; the user file is theirs)."""
@@ -178,4 +204,4 @@ def snapshot(user: str) -> dict:
     return {"schema": public_schema(), "defaults": defaults(),
             "company": {"values": co["values"], "rejected": co["rejected"], "error": co["error"]},
             "user": {"values": us["values"], "rejected": us["rejected"], "error": us["error"]},
-            "effective": eff, "source": src}
+            "effective": eff, "source": src, "logoRev": logo_rev()}

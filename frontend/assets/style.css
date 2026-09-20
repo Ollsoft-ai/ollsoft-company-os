@@ -243,6 +243,9 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 /* the mark: the Ollsoft O in a tile */
 .logo-word { height: 14px; width: auto; display: block; filter: var(--logo-filter); }
 .login-logo { height: 26px; width: auto; display: block; }
+/* an uploaded logo is whatever colour it is: no inversion, a little more room */
+.logo-word.custom { filter: none; height: 20px; max-width: 160px; object-fit: contain; }
+.login-logo.custom { height: 34px; max-width: 220px; object-fit: contain; }
 
 /* ── App chrome ───────────────────────────────────────────────────────────── */
 .topbar { display: flex; align-items: center; gap: .55rem; height: var(--tbh);
@@ -1144,6 +1147,8 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   color: var(--faint); white-space: nowrap; }
 .set-src.user { color: var(--personal); }
 .set-src.company { color: var(--company); }
+.set-upload { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; }
+.set-upload .set-help { margin: 0; }
 .set-reset { visibility: hidden; }              /* keeps the grid columns stable */
 .set-row.resettable .set-reset { visibility: visible; }
 @media (max-width: 880px) {

@@ -620,7 +620,12 @@ and stripping the user's ACL grants so a recycled uid can't inherit them). Guard
 prevent removing protected accounts or granting privileged groups via the UI.
 `POST /admin/settings` writes the company layer of the settings registry
 (`.os/settings.json`, in place so a write ACL would survive) and is audited as
-`settings.company`; `POST /admin/launchers` replaces the company launcher list.
+`settings.company`; `POST /admin/brand/logo` uploads or resets the company
+logo (`.os/logo.svg|png`, SVG or PNG ≤ 512 KB, an SVG with script refused),
+same audit event; `POST /admin/launchers` replaces the company launcher list.
+`GET /brand/logo` is public — the sign-in page needs it — and serves the
+uploaded file or the built-in mark with a no-script CSP; `GET /login` has the
+company's `brand.name` substituted on the way out.
 
 ## 10. Agents
 

@@ -1396,8 +1396,109 @@ class Hub:
         "X-Frame-Options": "SAMEORIGIN",
     }
 
+    def _brand(self) -> dict:
+        """The company's product name and logo, from the company settings
+        layer (root reads the file directly; no session needed — the sign-in
+        page shows them before anyone is signed in)."""
+        vals = kbsettings.load_layer(kbsettings.company_file(), "company")["values"]
+        return {"name": vals.get("brand.name") or kbsettings.BY_KEY["brand.name"]["default"],
+                "logo": vals.get("brand.logo") or ""}
+
     async def login_page(self, request: web.Request) -> web.Response:
-        return web.FileResponse(STATIC_DIR / "login.html", headers=self.NO_STORE)
+        # The sign-in page wears the company's name: substituted on the way out
+        # (the page is no-store), so a rename is visible on the next load.
+        try:
+            html = (STATIC_DIR / "login.html").read_text()
+        except OSError:
+            return web.Response(status=500, text="login page missing")
+        name = self._brand()["name"]
+        esc = (name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        html = re.sub(r'(<small data-brand="name">)[^<]*(</small>)', lambda m: m.group(1) + esc + m.group(2), html, count=1)
+        html = re.sub(r"<title>[^<]*</title>", f"<title>{esc} · Sign in</title>", html, count=1)
+        return web.Response(text=html, content_type="text/html", headers=self.NO_STORE)
+
+    _LOGO_HEADERS = {
+        # an uploaded SVG is a document if opened directly: give it no script,
+        # no fetch, no frame — it is an image and nothing else
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "inline",
+        "Cache-Control": "no-cache",
+    }
+
+    async def brand_logo(self, request: web.Request) -> web.StreamResponse:
+        """The logo, for everyone (the sign-in page needs it): the company's
+        uploaded file when there is one, else the built-in mark."""
+        logo = self._brand()["logo"]
+        if logo in kbsettings.LOGO_FILES:
+            p = common.company_config(logo)
+            if p.is_file():
+                ctype = "image/svg+xml" if logo.endswith(".svg") else "image/png"
+                return web.FileResponse(p, headers={**self._LOGO_HEADERS, "Content-Type": ctype})
+        return web.FileResponse(STATIC_DIR / "logo.svg",
+                                headers={**self._LOGO_HEADERS, "Content-Type": "image/svg+xml"})
+
+    LOGO_MAX = 512 * 1024
+
+    async def admin_brand_logo(self, request: web.Request) -> web.Response:
+        """Upload the company logo (multipart `file`, SVG or PNG, <= 512 KB) or
+        remove it (JSON {"reset": true}). Admin only; the file lands in .os/ and
+        the `brand.logo` setting names it, both audited as settings.company."""
+        admin = self._require_admin(request)
+        if not admin:
+            return web.json_response({"error": "admin only"}, status=403)
+        cur = kbsettings.load_layer(kbsettings.company_file(), "company")["values"]
+
+        def save(values: dict) -> None:
+            common.write_company_config(kbsettings.FILE_NAME, kbsettings.dumps(values), in_place=True)
+
+        if request.content_type == "application/json":
+            try:
+                body = await request.json()
+            except ValueError:
+                body = {}
+            if not (isinstance(body, dict) and body.get("reset")):
+                return web.json_response({"error": "expected a multipart upload or {\"reset\": true}"}, status=400)
+            for name in kbsettings.LOGO_FILES:
+                common.remove_company_config(name)
+            cur.pop("brand.logo", None)
+            save(cur)
+            _audit("settings.company", admin, unset=["brand.logo"])
+            return web.json_response({"ok": True, "values": cur})
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+        except Exception:
+            return web.json_response({"error": "expected a multipart upload"}, status=400)
+        if field is None:
+            return web.json_response({"error": "no file"}, status=400)
+        data = bytearray()
+        while True:
+            chunk = await field.read_chunk()
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > self.LOGO_MAX:
+                return web.json_response({"error": "logo too large (max 512 KB)"}, status=413)
+        data = bytes(data)
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            name = "logo.png"
+        else:
+            head = data[:4096].decode("utf-8", "replace").lower()
+            if "<svg" not in head:
+                return web.json_response({"error": "SVG or PNG only"}, status=400)
+            low = data.decode("utf-8", "replace").lower()
+            if "<script" in low or "javascript:" in low or "onload=" in low or "onerror=" in low:
+                return web.json_response({"error": "an SVG logo must not contain scripts"}, status=400)
+            name = "logo.svg"
+        common.write_company_config(name, data, in_place=False)
+        for other in kbsettings.LOGO_FILES:
+            if other != name:
+                common.remove_company_config(other)
+        cur["brand.logo"] = name
+        save(cur)
+        _audit("settings.company", admin, set=["brand.logo"], logo=name, bytes=len(data))
+        return web.json_response({"ok": True, "values": cur, "logoRev": kbsettings.logo_rev()})
 
     async def do_login(self, request: web.Request) -> web.Response:
         data = await request.post()
@@ -2919,6 +3020,8 @@ def make_app() -> web.Application:
     app.router.add_post("/admin/groups/delete", hub.admin_delete_group)
     app.router.add_post("/admin/launchers", hub.admin_launchers)
     app.router.add_post("/admin/settings", hub.admin_settings)
+    app.router.add_post("/admin/brand/logo", hub.admin_brand_logo)
+    app.router.add_get("/brand/logo", hub.brand_logo)
     app.router.add_get("/admin/egress", hub.admin_egress_get)
     app.router.add_post("/admin/egress", hub.admin_egress_set)
     app.router.add_post("/egress", hub.egress)

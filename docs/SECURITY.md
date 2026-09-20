@@ -14,6 +14,7 @@ Read this before exposing the platform beyond a trusted single box.
 | An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write`/`kb-list`/`kb-mkdir`/`kb-delete` limited to the artifact's own directory — the destructive ones re-checked server-side |
 | An uploaded file can't run script on the app's origin | **CSP + `nosniff` on `/api/attachment`** | `script-src 'none'`, so a planted SVG previews but never executes; a `.html` is classified as an artifact and served sandboxed by `/api/artifact/raw` instead |
 | A session cookie can't be forged | **HMAC-SHA256** with a root-only key | `/etc/kb/session.key`, 12h TTL |
+| An uploaded logo can't run script on the app's origin | **CSP sandbox on `/brand/logo`** + a refusal at upload | admin-only upload; an SVG containing `<script`, `javascript:` or event handlers is refused, and the served file carries `default-src 'none'; sandbox` so even a hostile SVG opened directly is inert |
 | A read-only viewer can't mutate a doc | **`kb-syncd` drops their CRDT writes** | they still see content + live updates |
 | Only admins can manage users/groups | **admin-group check** on every `/admin/*` call (membership of `KB_ADMIN_GROUP`, default `sudo`) | |
 

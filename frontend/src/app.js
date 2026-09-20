@@ -2050,6 +2050,27 @@ function applyTheme(t) { document.documentElement.dataset.theme = t || "deep-blu
 applyTheme(settings.get("ui.theme"));
 settings.subscribe("ui.theme", (t) => { applyTheme(t); retintTerminals(); });
 
+// The brand is a company setting too: the product name next to the mark (and
+// the tab's title), and the logo — /brand/logo serves the uploaded file or the
+// built-in mark, so the markup never changes; a custom one just gets a fresh
+// cache-buster and loses the light-theme inversion meant for the white mark.
+function applyBrand() {
+  const name = settings.get("brand.name") || "Company OS";
+  for (const el of document.querySelectorAll('[data-brand="name"]')) el.textContent = name;
+  document.title = name;
+  const st = settings.state();
+  const custom = !!settings.get("brand.logo");
+  for (const img of document.querySelectorAll(".logo-word, .login-logo")) {
+    img.classList.toggle("custom", custom);
+    const want = "/brand/logo" + (custom ? "?v=" + encodeURIComponent((st && st.logoRev) || 0) : "");
+    if (img.getAttribute("src") !== want) img.setAttribute("src", want);
+  }
+}
+applyBrand();
+settings.subscribe("brand.name", applyBrand);
+settings.subscribe("brand.logo", applyBrand);
+settings.subscribe("*", (k) => { if (k === null) applyBrand(); });   // a re-upload moves logoRev only
+
 function wireSidebarResize() {
   const bar = $("#sb-resizer");
   if (!bar) return;   // cached older app.html
@@ -4365,6 +4386,26 @@ function openSettings() {
       for (const o of e.options) el.appendChild(new Option((e.labels && e.labels[o]) || o, o));
       el.value = notSet ? "" : value;
       el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value));
+    } else if (e.type === "image") {
+      // a file, not a value: the control uploads it (admin, company layer)
+      el = document.createElement("label");
+      el.className = "set-upload";
+      el.innerHTML = '<span class="mini">Upload…</span><input type="file" accept=".svg,.png,image/svg+xml,image/png" hidden>';
+      const input = el.querySelector("input");
+      input.setAttribute("data-testid", `set-${tid(e.key)}-file`);
+      input.addEventListener("change", async () => {
+        if (!input.files.length) return;
+        const fd = new FormData(); fd.append("file", input.files[0]);
+        const r = await fetch("/admin/brand/logo", { method: "POST", body: fd });
+        const j = await r.json().catch(() => ({}));
+        input.value = "";
+        if (!r.ok) { kbToast(j.error || "could not upload the logo", "err"); return; }
+        await settings.fetch();
+      });
+      const cur = document.createElement("span");
+      cur.className = "set-help";
+      cur.textContent = notSet || value === "" ? "the built-in mark" : "custom (" + value + ")";
+      el.appendChild(cur);
     } else if (e.type === "int") {
       el = document.createElement("input"); el.type = "number";
       el.min = e.min; el.max = e.max; el.step = 1;
@@ -4418,7 +4459,16 @@ function openSettings() {
       pill.textContent = cur === undefined ? "not set" : "company default";
       x.title = "Clear the company default";
       x.setAttribute("data-testid", `set-${tid(e.key)}-co-reset`);
-      x.addEventListener("click", () => settings.unset(e.key, "company").then(fail));
+      x.addEventListener("click", () => {
+        if (e.type === "image") {
+          fetch("/admin/brand/logo", { method: "POST", headers: { "content-type": "application/json" },
+                                       body: JSON.stringify({ reset: true }) })
+            .then(async (r) => { if (!r.ok) fail({ ok: false, error: (await r.json().catch(() => ({}))).error });
+                                 else settings.fetch(); });
+          return;
+        }
+        settings.unset(e.key, "company").then(fail);
+      });
       if (cur !== undefined) r.classList.add("resettable");
     } else {
       const src = settings.source(e.key) || "default";

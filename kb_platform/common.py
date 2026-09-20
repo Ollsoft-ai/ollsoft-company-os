@@ -304,6 +304,21 @@ def write_company_config(name: str, data: bytes, *, in_place: bool) -> None:
         os.close(dfd)
 
 
+def remove_company_config(name: str) -> bool:
+    """ROOT: delete <REPO>/.os/<name> if present (fd-pinned like the writer).
+    Returns whether something was removed."""
+    _check_config_name(name)
+    dfd = opendir_beneath(CONFIG_DIRNAME)
+    try:
+        try:
+            os.unlink(name, dir_fd=dfd)
+            return True
+        except FileNotFoundError:
+            return False
+    finally:
+        os.close(dfd)
+
+
 def _open_user_config_dir(user: str) -> int:
     """AS THE USER: users/<user>/.os as a dir fd, created 0700 if absent.
     A home can carry named ACL entries and a default ACL (shared homes do), and

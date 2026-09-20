@@ -53,7 +53,7 @@ def _clean_slate():
 
 def test_shape_and_defaults():
     j = cl("bob").get("/api/settings").json()
-    assert set(j) == {"schema", "defaults", "company", "user", "effective", "source"}
+    assert set(j) == {"schema", "defaults", "company", "user", "effective", "source", "logoRev"}
     keys = [e["key"] for e in j["schema"]]
     assert KEY in keys
     for k in keys:
