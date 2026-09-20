@@ -15,7 +15,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, CREDS, login, open_doc
+from conftest import BASE, CREDS, login, open_doc, user_menu
 from kbenv import U, doc
 
 LAT = 1200          # ms added to every request while a slow phase is under test
@@ -219,7 +219,7 @@ def test_boot_restores_tabs_and_terminal_before_the_tree_arrives(browser, scratc
     try:
         page.wait_for_selector(f'.tree-item[data-path="{path}"]', timeout=30000)
         open_doc(page, path)
-        page.click('[data-testid="toggle-term"]')
+        user_menu(page); page.click('[data-testid="toggle-term"]')
         page.wait_for_selector("#terminal .xterm-rows", timeout=10000)
         page.wait_for_timeout(500)              # let saveSession() record both
 
@@ -322,7 +322,7 @@ def test_terminal_restores_without_waiting_for_the_documents(browser, scratch_do
     try:
         page.wait_for_selector(f'.tree-item[data-path="{path}"]', timeout=30000)
         open_doc(page, path)
-        page.click('[data-testid="toggle-term"]')
+        user_menu(page); page.click('[data-testid="toggle-term"]')
         page.wait_for_selector("#terminal .xterm-rows", timeout=10000)
         page.wait_for_timeout(500)
         held = _hold(page, "**/fs/props*")        # mountDoc awaits this first
@@ -349,7 +349,7 @@ def test_xterm_is_fetched_only_when_a_terminal_opens(browser):
     try:
         page.wait_for_timeout(800)
         assert not chunks, f"xterm was fetched before any terminal was opened: {chunks}"
-        page.click('[data-testid="toggle-term"]')
+        user_menu(page); page.click('[data-testid="toggle-term"]')
         page.wait_for_selector("#terminal .xterm-rows", timeout=10000)
         assert any("term-" in u for u in chunks), f"no terminal chunk was fetched: {chunks}"
     finally:

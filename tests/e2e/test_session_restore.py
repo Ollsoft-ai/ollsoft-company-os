@@ -4,7 +4,7 @@ environment, recent output replayed). Plus desktop-style terminal copy."""
 import re
 import time
 
-from conftest import BASE, CREDS, login, wait_path
+from conftest import BASE, CREDS, login, wait_path, user_menu
 from kbenv import doc
 
 
@@ -25,7 +25,7 @@ def test_tabs_and_terminal_survive_reload(browser):
     # a doc tab + a live shell with state in it
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     wait_prompt(page)
     page.keyboard.type("MARK=persist_$$; echo set_$MARK")
@@ -70,7 +70,7 @@ def test_terminal_survives_connection_drop(browser):
     on its own, come back to the SAME process, and never duplicate output."""
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     wait_prompt(page)
     page.keyboard.type("DROPMARK=drop_$$; echo set_$DROPMARK")
@@ -124,7 +124,7 @@ def test_ctrl_c_copies_selection_but_still_interrupts(browser):
     tag = f"cptest_{int(time.time())}"
     ctx = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
     page = login(ctx, "alice")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     wait_prompt(page)
     page.keyboard.type(f"echo {tag}")

@@ -29,7 +29,7 @@ Use `/opt/kb-venv/bin/python` — it has the platform's Python packages (psycopg
 # Step 2 — schedule it with your crontab
 
 Your personal crontab runs jobs as you. Edit it with `crontab -e`, list it with
-`crontab -l` — or use the **Cron** button in the web UI's topbar, which
+`crontab -l` — or use **Cron** in the web UI's user menu (bottom left), which
 lists/adds/pauses/deletes entries in the same crontab (it calls
 `GET/POST /api/cron*` on your backend, which runs `crontab(1)` as you):
 

@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, CREDS, login, open_doc, doc_text, insert_at, insert_at_end
+from conftest import BASE, CREDS, login, open_doc, doc_text, insert_at, insert_at_end, user_menu
 from kbenv import U, doc
 
 COLLAB = doc("collab.md")
@@ -55,7 +55,7 @@ def test_web_mirror_tree_and_identity(browser):
 def test_terminal_runs_as_user(browser):
     ctx = browser.new_context()
     page = login(ctx, "carol")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector('#terminal .xterm-rows')
     time.sleep(1.2)
     page.keyboard.type("whoami\n")

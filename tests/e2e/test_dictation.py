@@ -19,7 +19,7 @@ import uuid
 import httpx
 import pytest
 
-from conftest import BASE, CREDS, login
+from conftest import BASE, CREDS, login, user_menu
 from kbenv import U, doc as kbdoc
 
 SPOKEN = "the sync daemon owns the merge"
@@ -497,7 +497,7 @@ def test_transcript_lands_in_history(page, doc):
     not_recording(page)
     page.wait_for_function(
         "t => window.__kbview.state.doc.toString().includes(t)", arg=phrase, timeout=15000)
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] .dh-item', timeout=6000)
     assert phrase in page.locator('[data-testid="dh-list"]').inner_text()
 
@@ -513,7 +513,7 @@ def test_failed_transcription_keeps_the_audio_and_history_rescues_it(page, doc):
     page.wait_for_selector('[data-testid="toast"]', timeout=15000)
     assert doc_text(page) == before, "a failed transcription must insert nothing"
 
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] .dh-rec', timeout=6000)
     row = page.locator('[data-testid="dh-list"] .dh-rec').first
     assert "not transcribed" in row.inner_text()
@@ -526,7 +526,7 @@ def test_failed_transcription_keeps_the_audio_and_history_rescues_it(page, doc):
     page.wait_for_function("t => window.__kbview.state.doc.toString().includes(t)",
                            arg=phrase, timeout=15000)
     # And once transcribed, it is no longer listed as stranded.
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] .dh-item', timeout=6000)
     assert phrase in page.locator('[data-testid="dh-list"]').inner_text()
 
@@ -551,7 +551,7 @@ def test_a_recording_survives_the_tab_dying_mid_recording(page):
     page.reload()                           # the "crash": no finish, no upload
     page.wait_for_selector('[data-testid="tree"] .tree-item', timeout=15000)
 
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] .dh-rec', timeout=6000)
     row = page.locator('[data-testid="dh-list"] .dh-rec').first
     assert "not transcribed" in row.inner_text()
@@ -573,7 +573,7 @@ def test_the_original_audio_of_a_transcript_is_downloadable(page, doc):
     dictate(page)
     page.wait_for_function("t => window.__kbview.state.doc.toString().includes(t)",
                            arg=phrase, timeout=15000)
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] .dh-item', timeout=6000)
     rows = page.locator('[data-testid="dh-list"] .dh-item')
     assert phrase in rows.first.inner_text() or phrase in page.locator('[data-testid="dh-list"]').inner_text()
@@ -587,7 +587,7 @@ def test_deleting_a_kept_recording_is_permanent(page):
     """The ✕ on a stranded recording removes it from the vault, not just the
     modal — reopening the history must not resurrect it."""
     leave_terminal(page)
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     # The list is filled asynchronously (the vault is IndexedDB) — wait for the
     # render, not just the modal: rows and the empty-state note are appended in
     # one synchronous pass, so any child means the list is complete.
@@ -598,7 +598,7 @@ def test_deleting_a_kept_recording_is_permanent(page):
         page.wait_for_timeout(150)
     page.locator(".modal-close").click()
     page.wait_for_timeout(800)              # let the IndexedDB deletes commit
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] > *', timeout=6000)
     assert page.locator('[data-testid="dh-list"] .dh-rec').count() == 0
 
@@ -610,7 +610,7 @@ def test_history_expires_after_a_day(page):
       {t: Date.now() - 1000, text: 'fresh entry'},
       {t: Date.now() - 25 * 3600 * 1000, text: 'stale entry'}]))""")
     leave_terminal(page)
-    page.click('[data-testid="dict-hist-btn"]')
+    user_menu(page); page.click('[data-testid="dict-hist-btn"]')
     page.wait_for_selector('[data-testid="dh-list"] > *', timeout=6000)
     body = page.locator('[data-testid="dh-list"]').inner_text()
     assert "fresh entry" in body

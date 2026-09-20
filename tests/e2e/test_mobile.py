@@ -4,7 +4,7 @@ toggle, and modals become full-width bottom sheets. Every desktop feature must
 stay reachable with a finger."""
 import time
 
-from conftest import BASE, CREDS, dlg_fill, dlg_ok, wait_path
+from conftest import BASE, CREDS, dlg_fill, dlg_ok, wait_path, user_menu
 from kbenv import AREA, U, doc
 
 MOBILE = dict(viewport={"width": 390, "height": 844}, is_mobile=True,
@@ -60,8 +60,7 @@ def rows_for(page, px):
 
 
 def open_terminal(page):
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal-panel:not([hidden])")
     deadline = time.time() + 8
     while time.time() < deadline and "$" not in page.inner_text("#terminal"):
@@ -97,15 +96,15 @@ def test_drawer_boots_open_and_closes_on_file_open(browser):
     ctx.close()
 
 
-def test_topbar_menu_holds_the_actions(browser):
+def test_user_menu_holds_the_actions(browser):
     ctx, page = m_login(browser)
-    menu = page.locator("#topbar-actions")
-    assert not menu.is_visible()                          # collapsed behind ⋯
-    page.click("#more-btn")
+    menu = page.locator('[data-testid="user-menu"]')
+    assert not menu.is_visible()                          # collapsed behind the person
+    user_menu(page)
     assert menu.is_visible()
     assert page.locator("#cron-btn").is_visible()
     assert page.locator(".logout").is_visible()
-    assert "alice" in page.inner_text("#whoami-m")      # identity moved into the menu
+    assert "alice" in page.inner_text("#whoami")          # identity heads the menu
     page.click("#cron-btn")                               # choosing an action closes the menu
     page.wait_for_selector('[data-testid="cron-jobs"]')
     assert not menu.is_visible()
@@ -142,8 +141,7 @@ def test_tree_actions_via_row_toggle(browser):
 
 def test_terminal_open_from_menu(browser):
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal-panel:not([hidden])")
     assert not nav_open(page)                             # drawer got out of the way
     # the panel fits the phone viewport
@@ -157,8 +155,7 @@ def test_terminal_keybar_sends_keys(browser):
     """Touch keybar: visible on a phone, and its keys really reach the pty —
     ↑ recalls shell history, ^C cancels the recalled line."""
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal-panel:not([hidden])")
     bar = page.locator('[data-testid="term-keys"]')
     assert bar.is_visible()
@@ -321,8 +318,7 @@ def test_drawer_never_traps_a_full_screen_terminal(browser):
     still be dismissable — and a restored terminal must not get one on top of it
     in the first place."""
     ctx, page = m_login(browser)
-    page.click("#more-btn")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal-panel:not([hidden])")
     assert page.evaluate("() => document.body.classList.contains('term-max')")
     # the drawer opened the way "reveal in tree" opens it, over the terminal
@@ -460,11 +456,11 @@ def test_toolbar_tap_keeps_editor_focus_and_selection(browser):
 
 def test_mic_is_one_tap_away_and_steals_no_focus(browser):
     """Dictation's point is reaching it without leaving what you're typing in:
-    the mic sits in the topbar (not behind ⋯), and pressing it must not blur
-    the editor — that closed the phone keyboard and dropped the selection."""
+    the mic sits in the topbar (not behind the user menu), and pressing it must
+    not blur the editor — that closed the phone keyboard and dropped the selection."""
     ctx, page = m_login(browser)
-    assert page.locator("#mic-btn").is_visible()       # no ⋯ menu needed
-    assert not page.locator("#topbar-actions").is_visible()
+    assert page.locator("#mic-btn").is_visible()       # no menu needed
+    assert not page.locator('[data-testid="user-menu"]').is_visible()
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
     page.click(".cm-content")

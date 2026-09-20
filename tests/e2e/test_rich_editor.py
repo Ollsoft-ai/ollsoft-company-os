@@ -27,7 +27,7 @@ def api(user):
 
 
 def new_doc(page, path):
-    page.click('[data-testid="newdoc"]')
+    page.keyboard.press("Alt+N")
     dlg_fill(page, path)
     page.wait_for_function(f"() => window.__kbview && window.__kbpath === '{path}'", timeout=10000)
 

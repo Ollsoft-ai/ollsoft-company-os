@@ -34,7 +34,7 @@ def caret_names(page):
 def open_shared(browser, cleanup_paths, doc):
     """alice creates+seeds `doc`; bob opens it. Returns (ctxs, k_page, j_page)."""
     ck = browser.new_context(); k = login(ck, "alice")
-    k.click('[data-testid="newdoc"]')
+    k.keyboard.press("Alt+N")
     dlg_fill(k, doc)
     k.wait_for_function(f"() => window.__kbview && window.__kbpath === '{doc}'", timeout=10000)
     k.evaluate("() => window.__kbview.dispatch({changes:{from:0,"

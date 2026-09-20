@@ -1917,7 +1917,7 @@ function kbToast(msg, kind) {
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 350); }, 4200);
 }
 
-// ---- mobile chrome: file-tree drawer + topbar ⋯ menu ----------------------
+// ---- chrome: the mobile file-tree drawer, and the user menu (bottom left) ---
 // Same DOM on every screen size — CSS turns the sidebar into a drawer and the
 // action buttons into a dropdown below 880px, so nothing here forks by device.
 function closeNav() { document.body.classList.remove("nav-open"); }
@@ -1929,18 +1929,26 @@ function wireNav() {
     if (open) revealActiveInTree(true);
   });
   $("#scrim").addEventListener("click", closeNav);
-  const menu = $("#topbar-actions"), more = $("#more-btn");
-  more.addEventListener("click", (e) => {
-    e.stopPropagation();
-    menu.classList.toggle("open");
-  });
+  // The user menu, bottom left of the sidebar: everything that is not a file
+  // or the search lives one click behind the person. Hidden until asked, gone
+  // again the moment an action is chosen (each opens its own surface) — and
+  // on a phone the drawer goes with it, so the surface is what you see next.
+  const menu = $("#user-menu"), who = $("#user-btn");
+  const setOpen = (on) => {
+    menu.hidden = !on;
+    who.setAttribute("aria-expanded", on ? "true" : "false");
+    who.classList.toggle("open", on);
+  };
+  who.addEventListener("click", (e) => { e.stopPropagation(); setOpen(menu.hidden); });
   document.addEventListener("click", (e) => {
-    if (menu.classList.contains("open") && !menu.contains(e.target)) menu.classList.remove("open");
+    if (!menu.hidden && !menu.contains(e.target)) setOpen(false);
   });
-  // choosing any action closes the menu (the action opens its own surface)
   menu.addEventListener("click", (e) => {
-    if (e.target.closest("button, a")) menu.classList.remove("open");
+    if (e.target.closest("button, a")) { setOpen(false); closeNav(); }
   });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !menu.hidden) { e.stopPropagation(); setOpen(false); who.focus(); }
+  }, true);
 }
 
 // ---- sidebar width: dragged, and remembered ------------------------------
@@ -2031,7 +2039,8 @@ async function loadWhoami() {
   // /api/cron answer reattached the old way, a hard reset instead of replay.
   if (typeof j.v === "number") { backendV = j.v; _bvAt = Date.now(); }
   $("#whoami").textContent = j.user + " · uid " + j.uid;
-  $("#whoami-m").textContent = j.user + " · uid " + j.uid;
+  $("#user-name").textContent = j.user;
+  $("#user-avatar").textContent = (j.user || "?").slice(0, 1).toUpperCase();
   $("#term-user").textContent = j.user;
   window.__kbuser = j.user;
   // Tabs restored before this answer announced themselves as "user"; tell the
@@ -4058,7 +4067,7 @@ function launcherChip(b, cls) {
 }
 
 function renderLaunchbar() {
-  // Two hosts, one source of truth: the bar (desktop) and the ⋯ menu section
+  // Two hosts, one source of truth: the bar (desktop) and the drawer section
   // (mobile, where a permanent bar would cost a whole row of screen).
   for (const [sel, testid] of [["#launchbar", "launcher-manage"],
                                ["#menu-launchers", "launcher-manage-m"]]) {
@@ -5429,7 +5438,7 @@ const BINDINGS = [
 
   // — Documents —
   { id: "newdoc", keys: ["Alt+N"], group: "Documents", label: "New document",
-    run: () => $("#newdoc").click() },
+    run: newDocument },
   { id: "mode", keys: ["Alt+M"], group: "Documents", when: hasDoc,
     label: "Switch Rich ⇄ Source", run: () => setMode(active.mode === "rich" ? "source" : "rich") },
   { id: "find", keys: ["Mod+F"], group: "Documents", when: hasDoc,
@@ -6271,12 +6280,12 @@ function wireSearch() {
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 // ---- new doc + upload -----------------------------------------------------
-function wireNewDoc() {
-  $("#newdoc").addEventListener("click", async () => {
-    const path = await kbPrompt("Path for the new document:", "company/untitled.md",
-                                { title: "New document", ok: "Create", placeholder: "company/notes.md" });
-    if (path) createAndOpen(path.trim());
-  });
+// Alt+N, or "New document" in the palette. (The top bar had a button for this
+// once; the tree's "New file here" and the palette cover it without the chrome.)
+async function newDocument() {
+  const path = await kbPrompt("Path for the new document:", "company/untitled.md",
+                              { title: "New document", ok: "Create", placeholder: "company/notes.md" });
+  if (path) createAndOpen(path.trim());
 }
 // Prevent the browser from navigating away if a file is dropped OUTSIDE an
 // editor (inside one, mediaExtension already handles it). Otherwise the drop
@@ -7340,7 +7349,7 @@ async function boot() {
   // Tabs come back NOW, before we even know who you are (see restoreTabs).
   const restoring = restoreTabs();
   await whoamiP; await settingsP;
-  wireSearch(); wireNewDoc(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
+  wireSearch(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
   wireTabStrip();
   wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();
   // null-guarded: a browser holding a cached older app.html must not lose the
@@ -7382,9 +7391,10 @@ async function boot() {
     if (lbl) lbl.textContent = "Search files and contents…  " + comboLabel("Mod+K");
   }
   $("#cron-btn").addEventListener("click", openCron);
-  // Show the Admin panel to platform admins (sudo group) — and, network-section
-  // only, to users delegated write access on .os/egress.json. Whether a
-  // button appears is not something the first paint waits two round trips for.
+  // Show the Admin entry (in the user menu) to platform admins (sudo group) —
+  // and, network-section only, to users delegated write access on
+  // .os/egress.json. Whether it appears is not something the first paint waits
+  // two round trips for.
   (async () => {
     try {
       const me = await (await fetch("/admin/me")).json();
@@ -7397,7 +7407,7 @@ async function boot() {
       if (show) {
         const b = $("#admin-btn");
         b.hidden = false;
-        if (!isAdmin) b.textContent = "Network";
+        if (!isAdmin) b.querySelector(".btn-label").textContent = "Network";
         b.addEventListener("click", openAdmin);
       }
     } catch (e) { /* not admin */ }

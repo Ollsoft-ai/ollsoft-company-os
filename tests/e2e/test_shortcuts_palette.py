@@ -11,7 +11,7 @@ import os
 import httpx
 import pytest
 
-from conftest import BASE, CREDS, login, wait_path
+from conftest import BASE, CREDS, login, wait_path, user_menu
 from kbenv import NS, U, doc, proj
 
 SCRATCH = doc(f"kbtest_keys_{os.getpid()}.md")
@@ -279,9 +279,8 @@ def test_question_mark_opens_the_shortcut_sheet(page):
 
 
 def test_the_menu_button_opens_it_too(page):
-    # on a wide screen .topbar-actions is display:contents, so the button is
-    # right there in the topbar; below 880px it lives inside the ⋯ menu
-    page.click('[data-testid="keys-btn"]')
+    # the button lives in the user menu (bottom left of the sidebar) at every width
+    user_menu(page); page.click('[data-testid="keys-btn"]')
     page.wait_for_selector('[data-testid="shortcuts"]', timeout=4000)
     page.keyboard.press("Escape")
     page.wait_for_selector('[data-testid="shortcuts"]', state="detached", timeout=4000)

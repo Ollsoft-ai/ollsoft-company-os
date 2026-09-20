@@ -48,6 +48,21 @@ def login(context, user):
     return page
 
 
+def user_menu(page):
+    """Open the user menu — the person at the bottom left of the sidebar, where
+    the actions live: settings, admin, cron, terminal, dictation history,
+    shortcuts, sign out. On a phone the sidebar is a drawer, so open that
+    first. Choosing an action closes the menu again, so call this before each
+    click on one of those buttons."""
+    if page.locator('[data-testid="user-menu"]').is_visible():
+        return
+    if not page.locator('[data-testid="user-btn"]').is_visible():
+        page.click('[data-testid="nav-btn"]')
+        page.wait_for_selector('[data-testid="user-btn"]', state="visible")
+    page.click('[data-testid="user-btn"]')
+    page.wait_for_selector('[data-testid="user-menu"]', state="visible")
+
+
 def dlg_fill(page, text):
     """Fill the app's own prompt dialog (replaced native prompt()) and confirm."""
     page.fill('[data-testid="dlg-input"]', text)

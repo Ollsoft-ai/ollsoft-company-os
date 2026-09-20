@@ -4,7 +4,7 @@ import time
 
 import httpx
 import pytest
-from conftest import BASE, CREDS, wait_path
+from conftest import BASE, CREDS, user_menu, wait_path
 from kbenv import U, doc
 
 VU = f"vwui{int(time.time()) % 100000}"
@@ -43,7 +43,8 @@ def test_viewer_browser_experience(browser, viewer):
         page.click('button[type="submit"]')
         page.wait_for_url(BASE + "/")
         page.wait_for_selector('[data-testid="tree"] .tree-item')
-        # no execution affordances anywhere
+        # no execution affordances anywhere — not even inside the user menu
+        user_menu(page)
         assert page.locator('[data-testid="toggle-term"]').is_hidden()
         assert page.locator('[data-testid="cron-btn"]').is_hidden()
         page.wait_for_selector('.launchbar .lchip.company')          # file chip shows

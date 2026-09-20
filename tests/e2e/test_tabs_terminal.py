@@ -3,7 +3,7 @@ tabbed terminals in a docked panel that actually disappears when closed,
 and the cron panel."""
 import time
 
-from conftest import BASE, dlg_ok, login, open_doc, wait_path
+from conftest import BASE, dlg_ok, login, open_doc, wait_path, user_menu
 from kbenv import CREDS, U, doc
 
 
@@ -54,7 +54,7 @@ def test_terminal_panel_tabs_and_close_reclaims_space(browser):
     page = login(ctx, "alice")
 
     # open the panel: one terminal appears and the panel is really visible
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     assert page.locator("#term-tabs .term-tab").count() == 1
 
@@ -84,7 +84,7 @@ def test_terminal_panel_tabs_and_close_reclaims_space(browser):
 def test_terminal_panel_hide_keeps_shell_running(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     page.click("#terminal")
     page.keyboard.type("MARKER=alive_$$; echo start_$MARKER")
@@ -94,7 +94,7 @@ def test_terminal_panel_hide_keeps_shell_running(browser):
     page.click('[data-testid="term-hide"]')
     page.wait_for_selector("#terminal-panel", state="hidden")
     # re-open: same terminal, same shell state
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     page.click("#terminal")
     page.keyboard.type("echo again_$MARKER")
@@ -118,7 +118,7 @@ def test_cron_panel_add_and_remove(browser):
     marker = "kb-e2e-cron-marker"
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('[data-testid="cron-btn"]')
+    user_menu(page); page.click('[data-testid="cron-btn"]')
     page.wait_for_selector('[data-testid="cron-jobs"]')
 
     page.fill('[data-testid="cron-schedule"]', "*/30 * * * *")
@@ -135,7 +135,7 @@ def test_cron_panel_add_and_remove(browser):
 
 
 def _open_terminal(page):
-    page.click('[data-testid="toggle-term"]')
+    user_menu(page); page.click('[data-testid="toggle-term"]')
     page.wait_for_selector("#terminal .xterm-rows")
     page.click("#terminal")
     page.wait_for_timeout(800)

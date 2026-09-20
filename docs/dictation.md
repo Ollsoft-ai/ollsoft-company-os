@@ -2,7 +2,7 @@
 
 Speak, and the words land wherever you were already typing — a document, a
 terminal, the command palette, any text field. `F9` (or `Alt+K`, or the mic button
-in the topbar).
+in the top bar).
 
 Two gestures, one key, no mode to remember:
 
@@ -49,8 +49,8 @@ The recording is the one part of a dictation that cannot be re-created — the
 transcript can be re-requested, but five minutes of speech cannot be re-spoken.
 So the audio is written to the browser's IndexedDB (`kbDictAudio`) **while
 recording**, one one-second opus slice at a time. From the first second on,
-every failure mode leaves the audio recoverable in **Dictation history** (topbar,
-inside the ⋯ menu on phones, or the command palette):
+every failure mode leaves the audio recoverable in **Dictation history** (in the
+user menu at the bottom of the sidebar, or the command palette):
 
 | what went wrong | what you see |
 |---|---|

@@ -5,7 +5,7 @@ every browser. The one shipped setting has a single option today, so the
 value itself is driven through the store hook where a select could not fire."""
 import httpx
 import pytest
-from conftest import BASE, CREDS, login
+from conftest import BASE, CREDS, login, user_menu
 from kbenv import U
 
 KEY, ROW = "ui.theme", "set-ui-theme"
@@ -54,7 +54,7 @@ def test_your_setting_persists_roams_and_resets(browser):
         page = login(ctx, "bob")
         page.wait_for_function("() => window.__kbsettings.state() !== null")
         assert page.evaluate("() => document.documentElement.dataset.theme") == VAL
-        page.click('[data-testid="settings-btn"]')
+        user_menu(page); page.click('[data-testid="settings-btn"]')
         page.wait_for_selector(f'[data-testid="{ROW}"]')
         assert pill(page, f"{ROW}-src") == "default"
         assert not page.is_visible(f'[data-testid="{ROW}-reset"]')
@@ -70,7 +70,7 @@ def test_your_setting_persists_roams_and_resets(browser):
         page2 = login(ctx2, "bob")
         page2.wait_for_function(f"() => window.__kbsettings.source('{KEY}') === 'user'")
         # × clears your layer; the other browser learns on its next fetch
-        page.click('[data-testid="settings-btn"]')
+        user_menu(page); page.click('[data-testid="settings-btn"]')
         page.wait_for_selector(f'[data-testid="{ROW}-reset"]')
         page.click(f'[data-testid="{ROW}-reset"]')
         wait_pill(page, f"{ROW}-src", "default")
@@ -86,8 +86,8 @@ def test_admin_company_tab_sets_the_shared_default(browser):
     ctx = browser.new_context()
     try:
         page = login(ctx, "alice")
-        page.wait_for_selector('[data-testid="admin-btn"]', state="visible")     # isAdmin is known
-        page.click('[data-testid="settings-btn"]')
+        page.wait_for_function("() => !document.querySelector('#admin-btn').hidden")   # isAdmin is known
+        user_menu(page); page.click('[data-testid="settings-btn"]')
         page.click('[data-testid="settings-tab-company"]')
         page.wait_for_selector(f'[data-testid="{ROW}-co"]')
         assert pill(page, f"{ROW}-co-src") == "not set"
@@ -105,7 +105,7 @@ def test_non_admin_has_no_company_tab(browser):
     ctx = browser.new_context()
     try:
         page = login(ctx, "bob")
-        page.click('[data-testid="settings-btn"]')
+        user_menu(page); page.click('[data-testid="settings-btn"]')
         page.wait_for_selector(f'[data-testid="{ROW}"]')
         assert page.locator('[data-testid="settings-tab-company"]').count() == 0
     finally:

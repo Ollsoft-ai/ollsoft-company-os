@@ -120,23 +120,13 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 .topbar { display: flex; align-items: center; gap: .55rem; height: var(--tbh);
   padding: 0 max(.8rem, env(safe-area-inset-right)) 0 max(.8rem, env(safe-area-inset-left));
   background: var(--chassis); border-bottom: 1px solid var(--border); }
-/* mobile-only chrome (hamburger, ⋯ menu) — hidden on wide layouts */
-.navbtn, .morebtn { display: none; }
-.menu-id { display: none; }
+/* mobile-only chrome (hamburger) — hidden on wide layouts */
+.navbtn { display: none; }
 .scrim { display: none; }
-/* the actions live inline in the bar on desktop; on mobile the same nodes
-   become a dropdown panel (display swaps, the DOM — and testids — don't) */
-.topbar-actions { display: contents; }
 .brand { display: flex; align-items: center; gap: .55rem; }
 .brand-word { display: inline-flex; align-items: center; gap: .5rem;
   font-size: .88rem; white-space: nowrap; }
 .brand-word small { color: var(--muted); font-weight: 400; }
-.topbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 .3rem; flex: 0 0 auto; }
-.who { font-family: var(--mono); font-size: .72rem; color: var(--muted);
-  display: inline-flex; align-items: center; gap: .45rem; padding: .28rem .6rem;
-  border: 1px solid var(--border); border-radius: 20px; background: var(--panel); white-space: nowrap; }
-.who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
-  box-shadow: 0 0 6px rgba(47, 206, 152, .8); animation: live 2.4s ease-in-out infinite; }
 @keyframes live { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 /* the topbar search is a BUTTON that opens the palette — it never takes text */
 .search { flex: 0 1 360px; margin-left: auto; padding: .42rem .7rem; border-radius: 7px;
@@ -150,19 +140,17 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
   padding: .38rem .7rem; border-radius: 7px; cursor: pointer; text-decoration: none;
   font-family: var(--sans); font-size: .8rem; font-weight: 500; white-space: nowrap; }
 .topbar button:hover, .topbar .logout:hover { color: var(--ink); background: var(--panel2); border-color: #2C4166; }
-/* Cron / Terminal / Shortcuts / Sign out are icon-only in the bar — the label
-   stays in the DOM (a11y + the ⋯ menu on phones), the title is the tooltip */
+/* The mic is icon-only in the bar — the label stays in the DOM (a11y), the
+   title is the tooltip */
 .topbar .icon-btn { display: inline-flex; align-items: center; gap: .45rem; }
 @media (min-width: 881px) {
   .topbar .icon-btn { padding: .42rem .55rem; }
   .topbar .icon-btn .btn-label { display: none; }
 }
-/* the one primary action in the chrome: create something */
-#newdoc { background: var(--accent-deep); border-color: transparent; color: #fff; font-weight: 600; }
-#newdoc:hover { background: var(--accent); color: #fff; }
 
 /* interaction feel: quick, quiet transitions — never mushy */
-.topbar button, .topbar .logout, .tree-item, .tab, .term-tab, .mini, .tbtn, .sr-item,
+.topbar button, .user-btn, .user-menu button, .user-menu .logout, .tree-item, .tab, .term-tab,
+  .mini, .tbtn, .sr-item,
 .modal-foot button, .admin-form button, .chip-preset, .tab-x, .term-x {
   transition: background-color .1s ease, color .1s ease, border-color .1s ease; }
 
@@ -220,7 +208,41 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .menu-launchers { display: none; }
 
 /* ── Sidebar / file tree ──────────────────────────────────────────────────── */
-.sidebar { background: var(--panel); border-right: 1px solid var(--border); overflow: auto; padding: .45rem; }
+.sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: .45rem;
+  display: flex; flex-direction: column; min-height: 0; }
+/* the tree scrolls on its own so the person stays pinned at the bottom */
+#tree { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.menu-launchers { display: none; }
+/* ── the person, bottom left — and the menu that hides behind them ────────── */
+.sb-foot { flex: 0 0 auto; position: relative; margin-top: .35rem; padding-top: .35rem;
+  border-top: 1px solid var(--border); }
+.user-btn { display: flex; align-items: center; gap: .55rem; width: 100%; padding: .42rem .5rem;
+  border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--ink);
+  cursor: pointer; font-family: var(--sans); font-size: .84rem; text-align: left; }
+.user-btn:hover, .user-btn.open { background: var(--panel2); border-color: var(--border); }
+.avatar { width: 24px; height: 24px; border-radius: 50%; flex: 0 0 auto; position: relative;
+  background: linear-gradient(145deg, var(--accent-deep), #164FA8); color: #fff;
+  font-weight: 600; font-size: .72rem; display: inline-flex; align-items: center; justify-content: center; }
+/* the live dot the old identity pill carried: this account is signed in and running */
+.avatar::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--ok); border: 2px solid var(--panel);
+  box-shadow: 0 0 6px rgba(47, 206, 152, .8); animation: live 2.4s ease-in-out infinite; }
+.user-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 500; }
+.user-more { color: var(--faint); font-size: 1rem; line-height: 1; }
+.user-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + .3rem); z-index: 70;
+  display: flex; flex-direction: column; gap: .1rem; padding: .4rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(3, 8, 18, .6); animation: rise .12s ease-out; }
+.menu-id { font-family: var(--mono); font-size: .72rem; color: var(--muted);
+  padding: .35rem .6rem .55rem; border-bottom: 1px solid var(--border); margin-bottom: .2rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-menu button, .user-menu .logout { display: flex; align-items: center; gap: .55rem; width: 100%;
+  text-align: left; border: 0; background: transparent; color: var(--muted); padding: .48rem .6rem;
+  border-radius: 8px; cursor: pointer; text-decoration: none;
+  font-family: var(--sans); font-size: .84rem; font-weight: 500; }
+.user-menu button:hover, .user-menu .logout:hover { color: var(--ink); background: var(--panel2); }
+.user-menu .logout { margin-top: .15rem; border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; }
 .pane-title { font-family: var(--mono); text-transform: uppercase; font-size: .64rem; font-weight: 600;
   letter-spacing: .14em; color: var(--faint); margin: .7rem .35rem .35rem;
   display: flex; align-items: center; gap: .4rem; }
@@ -1131,36 +1153,21 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .cm-rich .cm-line { padding: .05rem 1rem; }
   .cm-rich .cm-quoteline { padding-left: 1.7rem !important; }
 
-  .brand-word, .topbar-sep, #whoami { display: none; }
+  .brand-word { display: none; }
   .topbar { gap: .45rem; }
-  .navbtn, .morebtn { display: inline-flex; align-items: center; justify-content: center;
+  .navbtn { display: inline-flex; align-items: center; justify-content: center;
     font-size: 1.05rem; padding: .45rem .6rem; line-height: 1; }
   .search { flex: 1 1 auto; min-width: 0; margin-left: .15rem; }
-  #newdoc .btn-label { display: none; }
-  #newdoc::before { content: "＋"; font-size: 1rem; line-height: 1; }
-  /* the mic sits in the bar itself (not the ⋯ menu): icon-only, finger-sized */
+  /* the mic sits in the bar itself: icon-only, finger-sized */
   #mic-btn { padding: .45rem .6rem; }
   #mic-btn .btn-label { display: none; }
 
-  /* the topbar actions become a dropdown menu under ⋯ */
-  .topbar-actions { display: none; position: fixed; top: calc(var(--tbh) + .4rem);
-    right: max(.55rem, env(safe-area-inset-right)); z-index: 70; min-width: 210px;
-    flex-direction: column; align-items: stretch; gap: .15rem; padding: .45rem;
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    box-shadow: 0 18px 48px rgba(3, 8, 18, .6); animation: rise .14s ease-out; }
-  .topbar-actions.open { display: flex; }
-  /* direct children only — the launcher chips nested in .menu-launchers keep
-     their pill styling (color = scope) instead of becoming menu rows */
-  .topbar-actions > button, .topbar-actions > .logout { width: 100%; text-align: left;
-    border: 0; padding: .6rem .7rem; font-size: .92rem; border-radius: 8px; background: transparent; }
-  .menu-id { display: block; font-family: var(--mono); font-size: .72rem; color: var(--muted);
-    padding: .45rem .7rem .55rem; border-bottom: 1px solid var(--border); margin-bottom: .25rem;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* screen space: no permanent bar on phones — launchers live in this menu */
+  /* screen space: no permanent bar on phones — the launcher chips sit in the
+     drawer, just above the person */
   .launchbar { display: none; }
-  .topbar-actions { max-width: min(340px, calc(100vw - 1.1rem)); }
   .menu-launchers { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
-    padding: .1rem .25rem .55rem; border-bottom: 1px solid var(--border); margin-bottom: .25rem; }
+    padding: .55rem .25rem .2rem; border-top: 1px solid var(--border); margin-top: .35rem; }
+  .user-menu button, .user-menu .logout { padding: .6rem .7rem; font-size: .92rem; }
 
   /* No side-by-side on a phone: two 180px editors are worse than one. Panes
      opened on a desktop stay open — they just stack until the window grows. */
@@ -1234,8 +1241,8 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 
 @media (prefers-reduced-motion: reduce) {
   .login-card::before { animation: none; }
-  .who::before { animation: none; }
-  .modal-overlay, .modal-card, .topbar-actions, .toast, .ctx-menu { animation: none; }
+  .avatar::after { animation: none; }
+  .modal-overlay, .modal-card, .user-menu, .toast, .ctx-menu { animation: none; }
   .caret .icon { transition: none; }
   /* The dot stops pulsing and the level meter stops moving — dictation.js also
      skips the rAF loop entirely rather than just hiding its output. The label

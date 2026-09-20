@@ -386,8 +386,15 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   needs no special case. Destinations are read from the syntax tree via
   `linkTarget()` (which also unwraps the `<…>` form), never by regex over the
   source: a regex stops at the space and yields a truncated path.
-- **Settings** (the sliders button in the top bar, or "Settings" in the
-  palette) is a dialog generated from the registry the backend serves: one row
+- **The person, bottom left.** The sidebar ends in the signed-in user; one
+  click opens the user menu with everything that is not a file or the search:
+  Settings, Admin (admins and network delegates), Cron, Terminal, Dictation
+  history, Keyboard shortcuts, Sign out. The top bar keeps only the brand, the
+  search and the mic. On a phone the same menu sits at the bottom of the drawer,
+  with the launcher chips just above it. New documents come from the tree's
+  "New file here", Alt+N, or the palette — there is no button for it.
+- **Settings** (in the user menu, or "Settings" in the palette) is a dialog
+  generated from the registry the backend serves: one row
   per setting, the control from its type, a pill saying which layer the value
   came from, × to clear that layer; admins get a Company tab over the same rows.
   `frontend/src/settings.js` holds the resolved values, refetches at boot,
@@ -547,7 +554,7 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   panel (`▾` / Ctrl+`` ` ``) keeps shells running; killing the last terminal
   hides it too. The panel is in the page flow, not an overlay — closed means
   the editor gets the space back.
-- **Cron panel**: the topbar's "Cron" opens the user's crontab (§2 endpoints):
+- **Cron panel**: "Cron" in the user menu opens the user's crontab (§2 endpoints):
   list, add (with presets), pause/resume, delete.
 
 ## 9. Admin — user & group management
