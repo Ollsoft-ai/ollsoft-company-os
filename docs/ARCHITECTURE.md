@@ -347,7 +347,8 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   the eyeline: 38% opacity until hovered or focused, dimmer while you type,
   back on the next mouse move. On touch it is a keyboard accessory row docked
   to the bottom edge — the top of the keyboard while one is up
-  (`interactive-widget=resizes-content`) — opaque, most-used first, ⋯ for the
+  (`interactive-widget=resizes-content`) — present only while the document has
+  focus, so reading gets the whole screen; opaque, most-used first, ⋯ for the
   rest; a tap on it never takes focus, so the keyboard stays. Drag-drop and
   **screenshot-paste** insert media at the drop point —
   the bytes upload to a `_files/` sibling (as the user, chunked, reporting in the

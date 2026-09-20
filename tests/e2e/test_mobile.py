@@ -386,7 +386,13 @@ def test_doc_header_shows_filename_only(browser):
         assert not crumbs.nth(i).is_visible()
     assert crumbs.nth(len(segments) - 1).is_visible()
     assert page.locator("#modeswitch").is_visible()
-    assert page.locator('[data-testid="mdbar"]').is_visible()
+    # the formatting row belongs to the keyboard: absent while reading, present
+    # while the document has focus, gone again when it loses it
+    assert not page.locator('[data-testid="mdbar"]').is_visible()
+    page.evaluate("() => window.__kbview.focus()")
+    page.wait_for_selector('[data-testid="mdbar"]', state="visible", timeout=4000)
+    page.evaluate("() => document.activeElement.blur()")
+    page.wait_for_selector('[data-testid="mdbar"]', state="hidden", timeout=4000)
     ctx.close()
 
 

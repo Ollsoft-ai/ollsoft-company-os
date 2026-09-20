@@ -1595,6 +1595,17 @@ function wireMdBar() {
     bar.appendChild(more);
     for (const k of rest) { const b = by(k); if (b) { b.classList.add("mdb-2"); bar.appendChild(b); } }
   }
+  // On touch the row belongs to the keyboard: it exists while the document has
+  // focus (the keyboard is up) and leaves with it, so reading gets the whole
+  // screen. A tap on the row never blurs the editor (pointerdown below), so
+  // using it keeps it. The class is set everywhere; only the touch stylesheet
+  // reads it.
+  const inDoc = (el) => !!(el && el.closest && el.closest(".cm-content"));
+  document.addEventListener("focusin", (e) => { if (inDoc(e.target)) bar.classList.add("kb"); });
+  document.addEventListener("focusout", (e) => {
+    if (!inDoc(e.target)) return;
+    setTimeout(() => { if (!inDoc(document.activeElement)) bar.classList.remove("kb"); }, 60);
+  });
   // Quiet while you type: a keystroke in the document dims the dock, the next
   // mouse move brings it back (touch: opacity is pinned to 1 in the stylesheet).
   document.addEventListener("keydown", (e) => {
