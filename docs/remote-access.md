@@ -120,7 +120,9 @@ location / {
 }
 ```
 
-(`$connection_upgrade` comes from the usual `map $http_upgrade` block.)
+(`$connection_upgrade` comes from the usual `map $http_upgrade` block.
+`proxy_buffering off` is not optional: `/api/events` is a server-sent event
+stream, and a buffering proxy would deliver it only when it ends — never.)
 
 ---
 

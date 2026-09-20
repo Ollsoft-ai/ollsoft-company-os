@@ -252,17 +252,23 @@ def test_boot_restores_tabs_and_terminal_before_the_tree_arrives(browser, scratc
         ctx.close()
 
 
-def test_the_tree_poll_is_conditional(browser):
-    """After the first full answer every poll carries the ETag back and, with
-    nothing changed, is a 304 — no body to parse, every 4 s, per tab."""
+def test_the_tree_is_pushed_not_polled(browser):
+    """Nothing polls: with the event stream up, an idle tab asks for the tree
+    zero times. And when a catch-up IS asked for (here: the `online` wake), it
+    carries the ETag back and, with nothing changed, is a 304 — no body."""
     ctx = browser.new_context()
     page = login(ctx, USER)
     try:
+        page.wait_for_function("() => window.__kbevents && window.__kbevents.mode === 'sse'",
+                               timeout=15000)
+        n = page.evaluate("() => window.__kbtreefetches || 0")
+        page.wait_for_timeout(9000)                       # two old poll periods
+        assert page.evaluate("() => window.__kbtreefetches || 0") == n, "the tree was polled"
         with page.expect_response(lambda r: "/api/tree" in r.url and r.status == 304,
-                                  timeout=12000) as got:
-            pass
+                                  timeout=8000) as got:
+            page.evaluate("() => window.dispatchEvent(new Event('online'))")
         req = got.value.request
-        assert req.headers.get("if-none-match"), "the poll did not send the ETag back"
+        assert req.headers.get("if-none-match"), "the catch-up did not send the ETag back"
         assert got.value.headers.get("etag") == req.headers.get("if-none-match")
     finally:
         ctx.close()

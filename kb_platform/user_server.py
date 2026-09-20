@@ -13,6 +13,7 @@ import asyncio
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import grp
 import pty
@@ -30,6 +31,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 from . import common, uploads
@@ -40,6 +42,7 @@ try:
 except Exception:  # pragma: no cover
     psycopg = None
 
+log = logging.getLogger("kb.user")
 ME = pwd.getpwuid(os.geteuid()).pw_name
 MY_SHELL = pwd.getpwuid(os.geteuid()).pw_shell
 # "viewer" accounts (nologin shell) get the full webapp but no execution: the
@@ -86,7 +89,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 31   # /api/settings; config in users/<me>/.os/ (lazy move from .launchers.json)
+BACKEND_V = 32   # /api/events (SSE: tree deltas, presence, config); /api/settings
 
 
 def _name_key(name: str):
@@ -301,13 +304,14 @@ def _build_tree(root: str) -> dict:
 
 
 class _TreeCache:
-    __slots__ = ("sig", "sig_at", "etag", "body", "lock")
+    __slots__ = ("sig", "sig_at", "etag", "body", "index", "lock")
 
     def __init__(self) -> None:
         self.sig = None          # signature the cached body was built from
         self.sig_at = 0.0        # when the signature was last checked (monotonic)
         self.etag = None         # a hash of `body`, quoted for the header
         self.body = None         # the JSON bytes
+        self.index = None        # path -> what a row shows (for the event delta)
         self.lock = asyncio.Lock()
 
 
@@ -315,8 +319,42 @@ _TREE = _TreeCache()
 
 
 def _tree_dirty() -> None:
-    """Something changed through this backend: re-check on the very next poll."""
+    """Something changed through this backend: re-check on the very next poll
+    — and right now for anyone listening on /api/events."""
     _TREE.sig_at = 0.0
+    _EVENTS.kick.set()
+
+
+def _tree_index(nodes: list, out: dict) -> dict:
+    """path -> the tuple of everything a tree row shows. Two indexes diff into
+    the delta /api/events sends instead of the tree."""
+    for n in nodes:
+        acc = n.get("access") or {}
+        out[n["path"]] = (bool(n.get("dir")), n.get("mtime"), bool(acc.get("read")),
+                          bool(acc.get("write")), n.get("aud"))
+        if n.get("dir"):
+            _tree_index(n.get("children") or [], out)
+    return out
+
+
+async def _refresh_tree() -> None:
+    """Bring _TREE up to date: a signature check at most once per TREE_SIG_TTL,
+    a rebuild only when the signature moved. Single flight: N tabs (and the
+    event loop below) share one walk."""
+    root = os.fspath(common.REPO_ROOT)
+    loop = asyncio.get_running_loop()
+    async with _TREE.lock:
+        if _TREE.body is None or time.monotonic() - _TREE.sig_at >= TREE_SIG_TTL:
+            sig = await loop.run_in_executor(None, _tree_signature, root)
+            _TREE.sig_at = time.monotonic()
+            if _TREE.body is None or sig != _TREE.sig:
+                data = await loop.run_in_executor(None, _build_tree, root)
+                body = json.dumps(data).encode()
+                _TREE.sig, _TREE.body = sig, body
+                # Hash of the BYTES, not the signature: a rebuild that produced
+                # the same tree (a spool that came and went) is still a 304.
+                _TREE.etag = '"' + hashlib.blake2b(body, digest_size=8).hexdigest() + '"'
+                _TREE.index = _tree_index(data["tree"], {})
 
 
 @web.middleware
@@ -332,25 +370,170 @@ async def _tree_dirty_on_write(request: web.Request, handler):
 
 
 async def tree(request: web.Request) -> web.Response:
-    root = os.fspath(common.REPO_ROOT)
-    loop = asyncio.get_running_loop()
     if request.query.get("fresh") == "1":      # "Reload the file tree": no hold
         _tree_dirty()
-    async with _TREE.lock:                      # single flight: N tabs, one walk
-        if _TREE.body is None or time.monotonic() - _TREE.sig_at >= TREE_SIG_TTL:
-            sig = await loop.run_in_executor(None, _tree_signature, root)
-            _TREE.sig_at = time.monotonic()
-            if _TREE.body is None or sig != _TREE.sig:
-                data = await loop.run_in_executor(None, _build_tree, root)
-                body = json.dumps(data).encode()
-                _TREE.sig, _TREE.body = sig, body
-                # Hash of the BYTES, not the signature: a rebuild that produced
-                # the same tree (a spool that came and went) is still a 304.
-                _TREE.etag = '"' + hashlib.blake2b(body, digest_size=8).hexdigest() + '"'
-        etag, body = _TREE.etag, _TREE.body
+    await _refresh_tree()
+    etag, body = _TREE.etag, _TREE.body
     if request.headers.get("If-None-Match") == etag:
         return web.Response(status=304, headers={"ETag": etag})
     return web.Response(body=body, content_type="application/json", headers={"ETag": etag})
+
+
+# --- live events: the tree, presence and config PUSHED over one SSE stream ---
+# The browser used to poll the tree every 4 s per tab (641 KB on a real
+# knowledgebase, parsed and rebuilt on the main thread — a stutter on a phone
+# every 4 s while typing, because your own saves move the signature). Now a
+# tab holds one GET /api/events open and receives:
+#   hello     {etag, presence, v}        on every (re)connect — the catch-up
+#   tree      {etag, full, changed:[{path, mtime}]}
+#             full=false: only file mtimes moved (what typing produces); the
+#             client patches those rows. full=true: anything structural —
+#             refetch with the ETag, deferred until typing pauses.
+#   presence  {presence}                 only when the set changed
+#   config    {paths}                    launchers/settings on disk changed
+#   ping      {}                         every 20 s: keeps Cloudflare (100 s
+#             idle cut) and the client's dead-link watchdog fed. A real event,
+#             not an SSE comment: comments never reach JavaScript.
+# One walker per BACKEND, alive only while a stream is open: the signature
+# check every 2 s (or at once after a write through this process), presence
+# from syncd's world-connectable socket every 3 s. Zero work with no listener.
+EVENTS_TREE_PERIOD = 2.0
+EVENTS_PRESENCE_PERIOD = 3.0
+EVENTS_HEARTBEAT = 20.0
+EVENTS_MAX_CHANGED = 200        # more rows than this: send full, not a delta
+EVENTS_QUEUE_LIMIT = 64         # a client that stopped reading is dropped, not buffered
+
+
+class _Events:
+    def __init__(self) -> None:
+        self.subs: set[asyncio.Queue] = set()
+        self.task: asyncio.Task | None = None
+        self.kick = asyncio.Event()
+        self.presence = None            # last presence map, or None if unavailable
+        self.presence_at = 0.0
+        self.vc: aiohttp.ClientSession | None = None
+
+
+_EVENTS = _Events()
+
+
+def _tree_delta(old: dict | None, new: dict) -> dict:
+    """What moved between two indexes. `changed` lists files whose ONLY
+    difference is the mtime; anything else — added, removed, a directory,
+    permissions, audience — is `full`, and `paths` names what moved."""
+    if old is None:
+        return {"full": True, "paths": []}
+    paths, changed, structural = [], [], False
+    for p in old.keys() - new.keys():
+        paths.append(p); structural = True
+    for p, t in new.items():
+        o = old.get(p)
+        if o is None:
+            paths.append(p); structural = True
+        elif o != t:
+            paths.append(p)
+            if not o[0] and not t[0] and o[2:] == t[2:]:     # a file, mtime only
+                changed.append({"path": p, "mtime": t[1]})
+            else:
+                structural = True
+    if structural or len(changed) > EVENTS_MAX_CHANGED:
+        return {"full": True, "paths": paths[:200]}
+    return {"full": False, "changed": changed, "paths": paths[:200]}
+
+
+def _config_touched(paths: list) -> bool:
+    mine = f"users/{ME}/.os/"
+    return any(p.startswith(common.CONFIG_DIRNAME + "/") or p.startswith(mine) for p in paths)
+
+
+def _events_broadcast(event: str, data: dict) -> None:
+    msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    for q in list(_EVENTS.subs):
+        if q.qsize() < EVENTS_QUEUE_LIMIT:
+            q.put_nowait(msg)
+
+
+async def _fetch_presence():
+    """Who has which doc open, permission-filtered for me — from syncd over
+    its world-connectable socket, where the kernel says who is asking. None
+    when unavailable (an older syncd): the client then keeps a slow poll."""
+    try:
+        if _EVENTS.vc is None or _EVENTS.vc.closed:
+            _EVENTS.vc = aiohttp.ClientSession(
+                connector=aiohttp.UnixConnector(path=str(common.VC_SOCK)),
+                timeout=aiohttp.ClientTimeout(total=3))
+        async with _EVENTS.vc.get("http://kb/presence") as r:
+            if r.status != 200:
+                return None
+            j = await r.json()
+            return j.get("presence") if isinstance(j, dict) else None
+    except Exception:
+        return None
+
+
+async def _events_loop() -> None:
+    # Baseline first: the loop's "last seen" must be the tree the first hello
+    # announced, or the first turn would report a change that never happened.
+    await _refresh_tree()
+    last_etag, last_index = _TREE.etag, _TREE.index
+    while _EVENTS.subs:
+        try:
+            await asyncio.wait_for(_EVENTS.kick.wait(), EVENTS_TREE_PERIOD)
+        except asyncio.TimeoutError:
+            pass
+        _EVENTS.kick.clear()
+        if not _EVENTS.subs:
+            break
+        try:
+            await _refresh_tree()
+            if _TREE.etag != last_etag:
+                delta = _tree_delta(last_index, _TREE.index)
+                last_etag, last_index = _TREE.etag, _TREE.index
+                delta["etag"] = _TREE.etag
+                _events_broadcast("tree", delta)
+                if _config_touched(delta.get("paths", [])):
+                    _events_broadcast("config", {"paths": delta["paths"]})
+            now = time.monotonic()
+            if now - _EVENTS.presence_at >= EVENTS_PRESENCE_PERIOD:
+                _EVENTS.presence_at = now
+                p = await _fetch_presence()
+                if p is not None and p != _EVENTS.presence:
+                    _EVENTS.presence = p
+                    _events_broadcast("presence", {"presence": p})
+        except Exception as e:                       # never let one bad turn end the stream
+            log.warning("events loop: %s", e)
+            await asyncio.sleep(1)
+
+
+async def events(request: web.Request) -> web.StreamResponse:
+    resp = web.StreamResponse(status=200, headers={
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+    })
+    await resp.prepare(request)
+    q: asyncio.Queue = asyncio.Queue()
+    _EVENTS.subs.add(q)
+    try:
+        await _refresh_tree()                  # before the loop baselines itself
+        if _EVENTS.task is None or _EVENTS.task.done():
+            _EVENTS.task = asyncio.create_task(_events_loop())
+        if _EVENTS.presence is None:
+            _EVENTS.presence = await _fetch_presence()
+            _EVENTS.presence_at = time.monotonic()
+        hello = {"etag": _TREE.etag, "presence": _EVENTS.presence, "v": BACKEND_V}
+        await resp.write(f"retry: 3000\nevent: hello\ndata: {json.dumps(hello)}\n\n".encode())
+        while True:
+            try:
+                msg = await asyncio.wait_for(q.get(), EVENTS_HEARTBEAT)
+            except asyncio.TimeoutError:
+                msg = "event: ping\ndata: {}\n\n"
+            await asyncio.wait_for(resp.write(msg.encode()), 10)   # a stalled reader is dropped
+    except (ConnectionResetError, asyncio.CancelledError, asyncio.TimeoutError, RuntimeError):
+        pass
+    finally:
+        _EVENTS.subs.discard(q)
+    return resp
 
 
 async def read_file(request: web.Request) -> web.Response:
@@ -2251,6 +2434,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/launchers", launchers_get)
     app.router.add_post("/api/launchers", launchers_set)
     app.router.add_get("/api/settings", settings_get)
+    app.router.add_get("/api/events", events)
     app.router.add_post("/api/settings", settings_set)
     app.router.add_get("/api/cron", cron_list)
     app.router.add_post("/api/cron/add", _cron_guard(cron_add))

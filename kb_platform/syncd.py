@@ -1104,16 +1104,33 @@ class SyncDaemon:
             self._presence_drop(rel, id(channel))
         return ws
 
+    def _presence_identity(self, request: web.Request) -> tuple[int, list[int]] | None:
+        """uid + gids of the caller: the hub's signed token (web UI), or
+        SO_PEERCRED on the world-connectable vc socket (a user's own backend
+        feeding /api/events, the CLI) — the kernel's word on who is asking."""
+        token = request.headers.get("X-KB-Auth")
+        if token:
+            ident = common.read_token(self.key, token)
+            if not ident:
+                return None
+            return int(ident["uid"]), [int(g) for g in ident["gids"]]
+        name = self._vc_identity(request)
+        if not name or name == "root":
+            return None
+        try:
+            pw = pwd.getpwnam(name)
+        except KeyError:
+            return None
+        return pw.pw_uid, list(os.getgrouplist(name, pw.pw_gid))
+
     async def presence_handler(self, request: web.Request) -> web.Response:
         """Who has which doc open — filtered to docs the REQUESTING user can
         read (same fs_can gate as joining the room), so presence never leaks
         the existence or audience of files outside their permissions."""
-        token = request.headers.get("X-KB-Auth")
-        ident = common.read_token(self.key, token) if token else None
+        ident = self._presence_identity(request)
         if not ident:
             return web.Response(status=403, text="no identity")
-        uid = int(ident["uid"])
-        gids = [int(g) for g in ident["gids"]]
+        uid, gids = ident
         out = {}
         for rel, members in list(self.presence.items()):
             if not members:
@@ -1524,6 +1541,9 @@ def make_app() -> web.Application:
         vc_app.router.add_get("/vc/show", daemon.vc_show)
         vc_app.router.add_get("/vc/diff", daemon.vc_diff)
         vc_app.router.add_get("/vc/activity", daemon.vc_activity)
+        # presence too: a user's backend pushes it to their browser over
+        # /api/events, identified by peer credentials like the /vc reads
+        vc_app.router.add_get("/presence", daemon.presence_handler)
         if os.path.exists(common.VC_SOCK):
             os.unlink(common.VC_SOCK)
         vc_runner = web.AppRunner(vc_app)

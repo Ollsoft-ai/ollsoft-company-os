@@ -1498,9 +1498,37 @@ class Hub:
                    if k.lower() not in _HOP and k.lower() not in _ASSERTED}
         headers["X-KB-User"] = user
         body = await request.read()
+        # /api/events is a server-sent event stream: it never ends on its own,
+        # so it gets no client timeout and is PIPED chunk by chunk instead of
+        # buffered — a buffered body would reach the browser only when the
+        # backend closed the stream, i.e. never.
+        stream = request.path == "/api/events"
+        extra = {"timeout": aiohttp.ClientTimeout(total=None, sock_read=None)} if stream else {}
+        # …but never past the session: the cookie was checked once, on the way
+        # in, and a stream that outlived it would keep an expired tab looking
+        # alive. Ending it at `exp` makes the client reconnect, meet a 401, and
+        # bounce to login by itself — what the 4 s poll used to do.
+        ttl = None
+        if stream:
+            tok = common.read_token(self.key, request.cookies.get(common.COOKIE_NAME, ""))
+            ttl = max(1.0, float((tok or {}).get("exp", 0)) - time.time())
         try:
             async with sess.request(request.method, url, headers=headers, data=body,
-                                    allow_redirects=False) as resp:
+                                    allow_redirects=False, **extra) as resp:
+                if stream and resp.headers.get("Content-Type", "").startswith("text/event-stream"):
+                    sr = web.StreamResponse(status=resp.status, headers={
+                        k: v for k, v in resp.headers.items() if k.lower() not in _HOP})
+                    await sr.prepare(request)
+
+                    async def pipe():
+                        async for chunk in resp.content.iter_any():
+                            await sr.write(chunk)
+                    try:
+                        await asyncio.wait_for(pipe(), timeout=ttl)
+                    except (asyncio.TimeoutError, ConnectionResetError, asyncio.CancelledError,
+                            RuntimeError):
+                        pass
+                    return sr
                 out_body = await resp.read()
                 out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP}
                 # After the status is known, and after the body is already

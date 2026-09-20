@@ -36,12 +36,31 @@ def ctx(browser):
 
 
 def test_expired_session_redirects_to_login_on_its_own(ctx):
-    """No user action at all: the 4s tree poll notices and bounces."""
+    """No user action at all. Nothing polls any more; the two things that
+    notice are the event stream — the hub ends it when the cookie it was
+    opened with expires, and the reconnect meets a 401 — and any request a
+    returning tab makes. A cookie cleared under a live stream is the browser's
+    12 h expiry in miniature, except that the stream is still up: nudge the
+    tab the way coming back does (`online`), and the bounce must follow at
+    once — with no user action and no reload."""
     page = login(ctx)
     ctx.clear_cookies()
+    page.evaluate("() => window.dispatchEvent(new Event('online'))")
     page.wait_for_url("**/login", timeout=20000)
     assert page.locator('input[name="username"]').count() == 1, \
         "must land on a usable login form, not a dead app"
+
+
+def test_a_stream_error_probes_the_session_and_bounces(ctx):
+    """The path the real expiry takes: the stream drops (here: closed from the
+    page, as the hub does at `exp`), the client reconnects, the reconnect is a
+    401 — which EventSource cannot see — so it probes with one ordinary fetch
+    and the session guard sends it to login."""
+    page = login(ctx)
+    page.wait_for_function("() => window.__kbevents && window.__kbevents.mode === 'sse'", timeout=15000)
+    ctx.clear_cookies()
+    page.evaluate("() => window.__kbevents.reopen()")
+    page.wait_for_url("**/login", timeout=20000)
 
 
 def test_returning_to_the_tab_checks_immediately(ctx):
@@ -61,6 +80,7 @@ def test_can_sign_back_in_after_being_bounced(ctx):
     from where it lands, with no manual reload."""
     page = login(ctx)
     ctx.clear_cookies()
+    page.evaluate("() => window.dispatchEvent(new Event('online'))")
     page.wait_for_url("**/login", timeout=20000)
     page.fill('input[name="username"]', U(USER))
     page.fill('input[name="password"]', CREDS[USER])

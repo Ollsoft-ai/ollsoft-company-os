@@ -18,6 +18,7 @@ import { initDictation, toggleDictation, dictationReady, retryDictation,
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
+import { connectEvents } from "./events.js";
 
 // Markdown on the Ollsoft palette: content stays ink; the machinery (marks,
 // urls, code) recedes into blues so the words lead.
@@ -2126,6 +2127,7 @@ function applyDefaultCollapse(nodes) {
 let _treeEtag = null;
 
 async function fetchTree(fresh) {
+  window.__kbtreefetches = (window.__kbtreefetches || 0) + 1;   // test hook
   const headers = _treeEtag ? { "If-None-Match": _treeEtag } : {};
   const r = await fetch("/api/tree" + (fresh ? "?fresh=1" : ""), { headers, cache: "no-store" });
   if (r.status === 304) return null;              // what we have is current
@@ -2139,6 +2141,53 @@ async function loadTree(force) {
   try { j = await fetchTree(!!force); } catch (e) { return; }
   applyTree(j, force);
 }
+
+// ---- live tree updates (from /api/events; see events.js) -----------------
+// A full tree waits for a pause in typing: rebuilding 2,600 rows under a
+// keystroke is exactly the stutter this replaces. The document and the
+// terminal count; a dialog's input does not — the name you just typed into
+// "New file" is the very row you are waiting to see.
+let _lastKey = 0, _treeRefreshTimer = null;
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && t.closest && t.closest(".cm-content, .xterm-helper-textarea")) _lastKey = Date.now();
+}, true);
+function refreshTreeWhenIdle() {
+  const wait = 1500 - (Date.now() - _lastKey);
+  if (wait > 0) {
+    clearTimeout(_treeRefreshTimer);
+    _treeRefreshTimer = setTimeout(refreshTreeWhenIdle, wait);
+    return;
+  }
+  _treeRefreshTimer = null;
+  loadTree(false);
+}
+function findTreeNode(nodes, path) {
+  for (const n of nodes || []) {
+    if (n.path === path) return n;
+    if (n.dir && path.startsWith(n.path + "/")) {
+      const hit = findTreeNode(n.children, path);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+// Only file timestamps moved (someone typed): patch those rows in place and
+// adopt the server's new ETag, so the next catch-up is a 304. No rebuild.
+function patchTreeMtimes(changed, etag) {
+  for (const c of changed) {
+    const node = findTreeNode(_lastTreeData, c.path);
+    if (node) node.mtime = c.mtime;
+    const el = document.querySelector('.tree-item[data-path="' + cssEsc(c.path) + '"] .tmtime');
+    if (el) {
+      el.textContent = fmtMtime(c.mtime);
+      el.title = "Last modified " + new Date(c.mtime * 1000).toLocaleString();
+    }
+  }
+  if (etag) _treeEtag = etag;
+  _lastTreeJson = null;      // the next full tree must repaint, whatever it hashes to
+}
+let _presencePoll = null;
 
 function applyTree(j, force) {
   if (j === null) {                                // 304, or the fetch failed
@@ -7327,7 +7376,7 @@ async function boot() {
   // once a minute, so the poll alone can feel slow at exactly the moment you
   // are looking at it).
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && !_sessionGone) { loadTree(false); settings.fetch(); }
+    if (!document.hidden && !_sessionGone) settings.fetch();   // the tree: events.js wake()
   });
   // Everything the first paint needs leaves NOW, together. The tree is the
   // slow one — a permission-checked walk of the whole repo — and it used to
@@ -7457,12 +7506,31 @@ async function boot() {
   window.addEventListener("blur", closeCtxMenu);
   syncTestHooks();
   window.__kbrerender = rerenderTree;   // test hook: force a tree repaint
-  // Live filesystem: newly created or newly shared files appear on their own.
-  setInterval(() => loadTree(false), 4000);
-  // Presence: who has which doc open, painted onto the tree rows.
+  // Live filesystem, presence and config arrive over one event stream (no
+  // polling): a new or newly shared file appears within ~2 s, a colleague's
+  // cursor within ~3 s, an admin's launcher button as soon as it is saved.
+  connectEvents({
+    hello: (d) => {
+      // the catch-up: the stream's first event says where the server is now
+      if (_treeEtag && d.etag && d.etag !== _treeEtag) refreshTreeWhenIdle();
+      if (d.presence) {
+        _treePresence = d.presence; updateTreePresence();
+        if (_presencePoll) { clearInterval(_presencePoll); _presencePoll = null; }
+      } else if (!_presencePoll) {
+        // an older syncd cannot feed presence into the stream: poll it, slowly
+        _presencePoll = setInterval(() => { if (!document.hidden) loadPresence(); }, 10000);
+      }
+    },
+    tree: (d) => { if (d.full) refreshTreeWhenIdle(); else patchTreeMtimes(d.changed || [], d.etag); },
+    presence: (d) => {
+      _treePresence = d.presence || {}; updateTreePresence();
+      if (_presencePoll) { clearInterval(_presencePoll); _presencePoll = null; }
+    },
+    config: () => { loadLaunchers(); settings.fetch(); },
+    catchUp: () => { refreshTreeWhenIdle(); loadPresence(); },
+    poll: () => { refreshTreeWhenIdle(); loadPresence(); },
+    probe: () => fetch("/api/whoami").catch(() => {}),
+  });
   loadPresence();
-  setInterval(loadPresence, 4000);
-  // Company launcher buttons added by an admin show up without a reload.
-  setInterval(loadLaunchers, 30000);
 }
 boot();

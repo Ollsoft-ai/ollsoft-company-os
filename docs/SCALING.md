@@ -27,9 +27,11 @@ guessed; re-measure before trusting them at a different scale.
    JSON's hash is an `ETag` the client sends back — an unchanged poll is a 304
    with no body. One signature per backend per 2 s at most, so N tabs of one
    user cost one; everything blocking in the executor. Cost now follows change
-   rate, not users × tabs. Still O(entries) per signature: past ~20k files the
-   next step is a lazy per-folder tree (§ ARCHITECTURE, *The tree is cheap to
-   ask for again*).
+   rate, not users × tabs. **2026-09-20:** the poll itself is gone — one
+   `/api/events` stream per tab, one walker per backend while anyone listens,
+   deltas instead of the tree (§ ARCHITECTURE, *Nothing polls*). Still
+   O(entries) per signature: past ~20k files the next step is a lazy
+   per-folder tree (*The tree is cheap to ask for again*).
 4. ~~**RLS flat tax grows with file count.**~~ **Fixed 2026-08-07.** Was
    `kb.can_read()` over all of `kb.files` once per statement — measured
    **0.34 s at 655 files**, linear, paid by every search keystroke, task list
