@@ -30,7 +30,15 @@ FILE_NAME = "settings.json"
 # type: bool | int (min, max) | enum (options, optional labels) | string (pattern, maxlen)
 #       | image (a file in .os/, set only through its upload endpoint; the value
 #         is the file's name, "" = the built-in default)
+#       | map (an object of allowed `keys` -> values matching `pattern`; a layer
+#         replaces the map whole, it does not merge)
 LOGO_FILES = ("logo.svg", "logo.png")
+# The tokens a theme can be customised on, per person or company-wide: the
+# base colours the stylesheet derives everything else from. Names without
+# the leading "--"; every one must be a plain hex value in style.css.
+THEME_TOKENS = ("bg", "chassis", "panel", "panel2", "border", "ink", "muted", "faint", "heading",
+                "accent", "accent-deep", "ok", "warn", "danger", "code-bg", "code-ink",
+                "term-bg", "term-fg")
 REGISTRY: list[dict] = [
     {"key": "brand.name", "type": "string", "pattern": r"\s*\S.*", "maxlen": 40, "default": "Company OS",
      "scopes": ("company",), "group": "Brand", "label": "Product name",
@@ -39,6 +47,10 @@ REGISTRY: list[dict] = [
      "scopes": ("company",), "group": "Brand", "label": "Logo",
      "help": "SVG or PNG, up to 512 KB. Replaces the mark in the app and on the sign-in page; "
              "the built-in Ollsoft mark when unset."},
+    {"key": "ui.theme.custom", "type": "map", "keys": THEME_TOKENS, "pattern": r"#[0-9a-f]{6}", "default": {},
+     "scopes": ("company", "user"), "group": "Appearance", "label": "Customize the theme",
+     "help": "Override single colours of the chosen theme — the accent, the background, the ink… "
+             "Your set replaces the company's; empty means the theme as shipped."},
     {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
      "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
@@ -49,8 +61,9 @@ BY_KEY = {e["key"]: e for e in REGISTRY}
 
 
 def public_schema() -> list[dict]:
-    """What the browser receives: every field, scopes as a list."""
-    return [dict(e, scopes=list(e["scopes"])) for e in REGISTRY]
+    """What the browser receives: every field, scopes (and keys) as lists."""
+    return [dict(e, scopes=list(e["scopes"]), **({"keys": list(e["keys"])} if "keys" in e else {}))
+            for e in REGISTRY]
 
 
 def defaults() -> dict:
@@ -77,6 +90,17 @@ def validate_value(key: str, value) -> tuple[object | None, str | None]:
     elif t == "image":
         if value != "" and value not in LOGO_FILES:
             return None, f"{key}: not a logo file"
+    elif t == "map":
+        if not isinstance(value, dict):
+            return None, f"{key}: expected an object"
+        clean = {}
+        for k, v in value.items():
+            if k not in e["keys"]:
+                return None, f"{key}: unknown entry {k}"
+            if not isinstance(v, str) or not re.fullmatch(e["pattern"], v.strip().lower()):
+                return None, f"{key}: {k} must match {e['pattern']}"
+            clean[k] = v.strip().lower()
+        return clean, None
     elif t == "string":
         maxlen = e.get("maxlen", 200)
         if (not isinstance(value, str) or len(value) > maxlen

@@ -42,6 +42,7 @@ Rules when editing a file yourself:
 |---|---|---|---|---|
 | `brand.name` | any text up to 40 characters | `Company OS` | company | The product name next to the logo, in the tab title and on the sign-in page. |
 | `brand.logo` | `logo.svg` · `logo.png` · `""` (the built-in Ollsoft mark) | `""` | company | The logo in the app and on the sign-in page. A file, not a value: an admin uploads it in Settings → Company (SVG or PNG, ≤ 512 KB) or with `POST /admin/brand/logo`; `{"reset": true}` there removes it. Do not write the value into `settings.json` by hand. |
+| `ui.theme.custom` | an object of token → `#rrggbb`; tokens: `bg`, `chassis`, `panel`, `panel2`, `border`, `ink`, `muted`, `faint`, `heading`, `accent`, `accent-deep`, `ok`, `warn`, `danger`, `code-bg`, `code-ink`, `term-bg`, `term-fg` | `{}` | company, user | Single colours changed on top of the chosen theme (`{"accent": "#ff6600"}`). Your map replaces the company's whole; remove the key to get the theme as shipped. |
 | `ui.theme` | `deep-blue` · `dark` · `light` | `deep-blue` | company, user | Colours for the whole app, editor and terminal included. Deep blue is the house look; Dark and Light follow Notion's greys and paper. |
 
 `GET /api/settings` (as you, with your session) returns the full picture:

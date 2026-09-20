@@ -17,10 +17,10 @@ def api(user):
 
 @pytest.fixture(autouse=True)
 def _reset():
-    api("alice").post("/admin/settings", json={"unset": [KEY]})
-    api("bob").post("/api/settings", json={"unset": [KEY]})
+    api("alice").post("/admin/settings", json={"unset": [KEY, "ui.theme.custom"]})
+    api("bob").post("/api/settings", json={"unset": [KEY, "ui.theme.custom"]})
     yield
-    api("bob").post("/api/settings", json={"unset": [KEY]})
+    api("bob").post("/api/settings", json={"unset": [KEY, "ui.theme.custom"]})
 
 
 def bg(page):
@@ -63,6 +63,31 @@ def test_light_theme_lands_before_paint_and_switches_live(browser):
         page.reload(); page.wait_for_selector('[data-testid="tree"] .tree-item')
         assert page.evaluate("() => document.documentElement.dataset.theme") == "deep-blue"
     finally:
+        ctx.close()
+
+
+def test_overrides_paint_live_and_are_editable_in_the_dialog(browser):
+    K = "ui.theme.custom"
+    b = api("bob")
+    ctx = browser.new_context()
+    try:
+        page = login(ctx, "bob")
+        page.wait_for_function("() => window.__kbsettings.state() !== null")
+        # from the API: the background token is overridden, the page follows
+        assert b.post("/api/settings", json={"set": {K: {"bg": "#123456"}}}).status_code == 200
+        page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)'", timeout=10000)
+        # from the dialog: pick the accent, the token lands on <html>
+        user_menu(page); page.click('[data-testid="settings-btn"]')
+        page.click('[data-testid="set-ui-theme-custom-input"]')
+        page.fill('[data-testid="set-ui-theme-custom-accent"]', "#00ff00")
+        page.wait_for_function("() => (window.__kbsettings.get('ui.theme.custom') || {}).accent === '#00ff00'", timeout=10000)
+        assert page.evaluate("() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()") == "#00ff00"
+        assert page.evaluate("() => getComputedStyle(document.body).backgroundColor") == "rgb(18, 52, 86)"   # kept
+        # reset the whole thing: the theme as shipped
+        page.click('[data-testid="set-ui-theme-custom-reset"]')
+        page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(13, 22, 38)'", timeout=10000)
+    finally:
+        b.post("/api/settings", json={"unset": [K]})
         ctx.close()
 
 

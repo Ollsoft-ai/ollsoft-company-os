@@ -129,6 +129,25 @@ def test_agents_edit_the_file_and_bad_edits_are_reported_not_fatal():
     assert j["user"]["error"] is None and j["source"][KEY] == "user"
 
 
+def test_theme_overrides_replace_whole_not_merge():
+    a, b = cl("alice"), cl("bob")
+    K = "ui.theme.custom"
+    try:
+        assert a.post("/admin/settings", json={"set": {K: {"accent": "#FF0000", "bg": "#101010"}}}).status_code == 200
+        j = b.get("/api/settings").json()
+        assert j["effective"][K] == {"accent": "#ff0000", "bg": "#101010"} and j["source"][K] == "company"
+        assert b.post("/api/settings", json={"set": {K: {"ink": "#ffffff"}}}).status_code == 200
+        j = b.get("/api/settings").json()
+        assert j["effective"][K] == {"ink": "#ffffff"}                 # the user's map replaces, no merge
+        assert b.post("/api/settings", json={"set": {K: {"shadow": "#000000"}}}).status_code == 400   # not customisable
+        assert b.post("/api/settings", json={"set": {K: {"accent": "blue"}}}).status_code == 400
+        assert b.post("/api/settings", json={"unset": [K]}).status_code == 200
+        assert b.get("/api/settings").json()["source"][K] == "company"
+    finally:
+        a.post("/admin/settings", json={"unset": [K]})
+        b.post("/api/settings", json={"unset": [K]})
+
+
 def test_docs_and_skill_name_every_setting():
     from kb_platform import settings as s
     root = Path(__file__).resolve().parents[2]

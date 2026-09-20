@@ -55,13 +55,15 @@ exposed as `window.__kbsettings` for tests.
 |---|---|---|---|---|
 | `brand.name` | string, up to 40 chars | `Company OS` | company | The product name next to the logo in the app, the tab title, and the sign-in page (substituted by the hub on the way out, so it shows before sign-in). |
 | `brand.logo` | image (`logo.svg` or `logo.png` in `.os/`) | `""` = the built-in Ollsoft mark | company | Set only through `POST /admin/brand/logo` (multipart `file`, SVG or PNG, ≤ 512 KB; `{"reset": true}` removes it). Served to everyone at `GET /brand/logo` with a no-script CSP; an SVG with script is refused. |
+| `ui.theme.custom` | map of token → `#rrggbb` (tokens: bg, chassis, panel, panel2, border, ink, muted, faint, heading, accent, accent-deep, ok, warn, danger, code-bg, code-ink, term-bg, term-fg) | `{}` | company, user | Single colours overridden on top of the chosen theme, as inline custom properties on `<html>`; the stylesheet derives the rest. A layer's map replaces the other's whole, it does not merge. The dialog's "Customize…" shows one picker per token. |
 | `ui.theme` | enum `deep-blue` · `dark` · `light` | `deep-blue` | company, user | Colours for the whole app, editor and terminal included, applied as `data-theme` on `<html>` before first paint. Deep blue is the house look; Dark and Light follow Notion's greys and paper. |
 
 Types: `bool`; `int` with `min`/`max`; `enum` with `options` and optional
 `labels` (shown in the dialog); `string` with an optional `pattern` (full
 match) and `maxlen`, never control characters; `image`, a file in `.os/`
 whose value is the file's name — set only through its upload endpoint, never
-through `set`.
+through `set`; `map`, an object of allowed `keys` to values matching a
+`pattern` (a layer replaces the map whole).
 
 ## Adding a setting
 

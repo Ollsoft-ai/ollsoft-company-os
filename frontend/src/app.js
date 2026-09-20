@@ -2050,6 +2050,20 @@ function applyTheme(t) { document.documentElement.dataset.theme = t || "deep-blu
 applyTheme(settings.get("ui.theme"));
 settings.subscribe("ui.theme", (t) => { applyTheme(t); retintTerminals(); });
 
+// Per-token overrides on top of the chosen theme (ui.theme.custom): inline
+// custom properties on <html>, before first paint from the cache and live
+// after. Only the registry's whitelist of base tokens ever lands here; the
+// stylesheet derives the rest.
+let _overrideKeys = [];
+function applyThemeOverrides(map) {
+  const root = document.documentElement.style;
+  for (const k of _overrideKeys) root.removeProperty("--" + k);
+  _overrideKeys = [];
+  for (const [k, v] of Object.entries(map || {})) { root.setProperty("--" + k, v); _overrideKeys.push(k); }
+}
+applyThemeOverrides(settings.get("ui.theme.custom"));
+settings.subscribe("ui.theme.custom", (m) => { applyThemeOverrides(m); retintTerminals(); });
+
 // The brand is a company setting too: the product name next to the mark (and
 // the tab's title), and the logo — /brand/logo serves the uploaded file or the
 // built-in mark, so the markup never changes; a custom one just gets a fresh
@@ -4348,6 +4362,7 @@ function showLaunchersModal() {
 // edits the shared layer with the same rows. Nothing here knows any setting by
 // name: adding one is a registry entry on the server, and the row appears.
 const SET_SOURCE_LABEL = { default: "default", company: "company default", user: "your setting" };
+const _openMaps = new Set();   // which "Customize…" panels are open, across re-renders
 
 function openSettings() {
   const ov = document.createElement("div");
@@ -4386,6 +4401,39 @@ function openSettings() {
       for (const o of e.options) el.appendChild(new Option((e.labels && e.labels[o]) || o, o));
       el.value = notSet ? "" : value;
       el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value));
+    } else if (e.type === "map") {
+      // one colour picker per token, starting from what the theme paints now;
+      // a change saves the whole map, × on a token drops it, an empty map unsets
+      el = document.createElement("div"); el.className = "set-map";
+      const cur = value && typeof value === "object" ? value : {};
+      const n = Object.keys(cur).length;
+      const toggle = document.createElement("button");
+      toggle.type = "button"; toggle.className = "mini";
+      toggle.textContent = n ? `Customize… (${n})` : "Customize…";
+      toggle.setAttribute("data-testid", `set-${tid(e.key)}-${unsettable ? "co" : "input"}`);
+      const panelId = `${e.key}:${unsettable ? "company" : "user"}`;
+      const panel = document.createElement("div"); panel.className = "set-map-panel";
+      panel.hidden = !_openMaps.has(panelId);
+      const cs = getComputedStyle(document.documentElement);
+      const save = (m) => onChange(Object.keys(m).length ? m : undefined);
+      for (const k of e.keys || []) {
+        const name = document.createElement("span"); name.textContent = k;
+        const inp = document.createElement("input"); inp.type = "color";
+        const painted = cs.getPropertyValue("--" + k).trim();
+        inp.value = cur[k] || (/^#[0-9a-f]{6}$/i.test(painted) ? painted.toLowerCase() : "#000000");
+        inp.setAttribute("data-testid", `set-${tid(e.key)}-${k}${unsettable ? "-co" : ""}`);
+        inp.addEventListener("change", () => save({ ...cur, [k]: inp.value.toLowerCase() }));
+        const clr = document.createElement("button");
+        clr.type = "button"; clr.className = "mini set-map-x"; clr.textContent = "×";
+        clr.title = "Back to the theme's colour"; clr.style.visibility = k in cur ? "visible" : "hidden";
+        clr.addEventListener("click", () => { const m = { ...cur }; delete m[k]; save(m); });
+        panel.append(name, inp, clr);
+      }
+      toggle.addEventListener("click", () => {
+        if (_openMaps.has(panelId)) _openMaps.delete(panelId); else _openMaps.add(panelId);
+        panel.hidden = !_openMaps.has(panelId);
+      });
+      el.append(toggle, panel);
     } else if (e.type === "image") {
       // a file, not a value: the control uploads it (admin, company layer)
       el = document.createElement("label");
@@ -4472,7 +4520,8 @@ function openSettings() {
       if (cur !== undefined) r.classList.add("resettable");
     } else {
       const src = settings.source(e.key) || "default";
-      r.appendChild(control(e, settings.get(e.key), (v) => settings.set(e.key, v, "user").then(fail), false));
+      r.appendChild(control(e, settings.get(e.key), (v) => (v === undefined
+        ? settings.unset(e.key, "user") : settings.set(e.key, v, "user")).then(fail), false));
       pill.className = "set-src " + src;
       pill.setAttribute("data-testid", `set-${tid(e.key)}-src`);
       pill.textContent = SET_SOURCE_LABEL[src] || src;
