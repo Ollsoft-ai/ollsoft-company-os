@@ -71,3 +71,19 @@ def test_registry_themes_exist_in_the_stylesheet():
         if opt == entry["default"]:
             continue                                   # the default is :root itself
         assert f':root[data-theme="{opt}"]' in css, f"no theme block for {opt}"
+
+
+def test_customisable_tokens_are_plain_hex_in_every_theme():
+    """ui.theme.custom offers a colour picker per token, seeded from the value
+    the theme paints — which only works when that value IS a colour, not a
+    color-mix() of one. Every customisable token must be #rrggbb in :root and
+    in each theme block."""
+    from kb_platform import settings as s
+    css = re.sub(r"/\*.*?\*/", "", CSS.read_text(), flags=re.S)
+    blocks = {sel: body for sel, body in _blocks(css)
+              if sel == ":root" or sel.startswith(":root[data-theme=")}
+    for sel, body in blocks.items():
+        for tok in s.THEME_TOKENS:
+            m = re.search(r"--" + re.escape(tok) + r"\s*:\s*([^;]+);", body)
+            assert m, f"{sel}: --{tok} is not defined"
+            assert re.fullmatch(r"#[0-9a-fA-F]{6}", m.group(1).strip()), f"{sel}: --{tok} is {m.group(1).strip()!r}, not #rrggbb"
