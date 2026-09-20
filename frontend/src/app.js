@@ -1595,17 +1595,37 @@ function wireMdBar() {
     bar.appendChild(more);
     for (const k of rest) { const b = by(k); if (b) { b.classList.add("mdb-2"); bar.appendChild(b); } }
   }
-  // On touch the row belongs to the keyboard: it exists while the document has
-  // focus (the keyboard is up) and leaves with it, so reading gets the whole
-  // screen. A tap on the row never blurs the editor (pointerdown below), so
-  // using it keeps it. The class is set everywhere; only the touch stylesheet
-  // reads it.
+  // On touch the row belongs to the keyboard. Focus alone lies: Android's back
+  // button hides the keyboard and leaves the editor focused, so a focus-keyed
+  // row stayed up over nothing. The keyboard itself is measurable — the visual
+  // viewport loses a keyboard's worth of height when it opens and gets it back
+  // when it closes, on Android (the page resizes) and on iOS (the keyboard
+  // overlays, the visual viewport still shrinks). So: focus in the document AND
+  // a viewport shorter, by more than any browser chrome, than the tallest it
+  // has been at this width. The same numbers lift the row above an overlaying
+  // keyboard (iOS), where bottom:0 of the layout would sit beneath it. A tap on
+  // the row never blurs the editor (pointerdown below), so using it keeps it.
+  // The class is set everywhere; only the touch stylesheet reads it.
+  const vv = window.visualViewport;
   const inDoc = (el) => !!(el && el.closest && el.closest(".cm-content"));
-  document.addEventListener("focusin", (e) => { if (inDoc(e.target)) bar.classList.add("kb"); });
-  document.addEventListener("focusout", (e) => {
-    if (!inDoc(e.target)) return;
-    setTimeout(() => { if (!inDoc(document.activeElement)) bar.classList.remove("kb"); }, 60);
-  });
+  let tallest = 0, tallestW = 0;
+  function keyboardGap() {
+    const h = vv ? vv.height : window.innerHeight, w = vv ? vv.width : window.innerWidth;
+    if (w !== tallestW) { tallestW = w; tallest = 0; }        // rotated: measure afresh
+    tallest = Math.max(tallest, h);
+    const gap = tallest - h;
+    return gap > 150 ? gap : 0;                                // the URL bar is ~60, a keyboard 250+
+  }
+  function syncKb() {
+    const up = inDoc(document.activeElement) && keyboardGap() > 0;
+    bar.classList.toggle("kb", up);
+    const lift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    bar.style.setProperty("--kb-lift", up ? lift + "px" : "0px");
+  }
+  document.addEventListener("focusin", (e) => { if (inDoc(e.target)) { syncKb(); setTimeout(syncKb, 350); } });
+  document.addEventListener("focusout", (e) => { if (inDoc(e.target)) setTimeout(syncKb, 60); });
+  if (vv) { vv.addEventListener("resize", syncKb); vv.addEventListener("scroll", syncKb); }
+  window.addEventListener("resize", syncKb);
   // Quiet while you type: a keystroke in the document dims the dock, the next
   // mouse move brings it back (touch: opacity is pinned to 1 in the stylesheet).
   document.addEventListener("keydown", (e) => {

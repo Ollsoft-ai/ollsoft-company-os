@@ -386,13 +386,20 @@ def test_doc_header_shows_filename_only(browser):
         assert not crumbs.nth(i).is_visible()
     assert crumbs.nth(len(segments) - 1).is_visible()
     assert page.locator("#modeswitch").is_visible()
-    # the formatting row belongs to the keyboard: absent while reading, present
-    # while the document has focus, gone again when it loses it
+    # the formatting row belongs to the KEYBOARD, not to focus: absent while
+    # reading; present once the document has focus and the viewport has lost a
+    # keyboard's height (the emulator has no keyboard — shrinking the viewport
+    # is what one does); gone when the keyboard goes even though focus stays,
+    # which is what Android's back button does
     assert not page.locator('[data-testid="mdbar"]').is_visible()
     page.evaluate("() => window.__kbview.focus()")
+    page.wait_for_timeout(200)
+    assert not page.locator('[data-testid="mdbar"]').is_visible()      # focus alone is not a keyboard
+    page.set_viewport_size({"width": 390, "height": 500})
     page.wait_for_selector('[data-testid="mdbar"]', state="visible", timeout=4000)
-    page.evaluate("() => document.activeElement.blur()")
+    page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_selector('[data-testid="mdbar"]', state="hidden", timeout=4000)
+    assert page.evaluate("() => document.activeElement.closest('.cm-content') !== null")   # still focused
     ctx.close()
 
 
@@ -434,6 +441,8 @@ def test_toolbar_tap_keeps_editor_focus_and_selection(browser):
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
     page.click(".cm-content")
+    page.set_viewport_size({"width": 390, "height": 520})       # the keyboard is up
+    page.wait_for_selector('[data-testid="mdbar"]', state="visible", timeout=4000)
     # select the first word of the document body programmatically
     start, end = page.evaluate("""() => {
       const doc = window.__kbview.state.doc.toString();

@@ -1280,7 +1280,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
      edge — the top of the keyboard while one is up (interactive-widget=
      resizes-content) — opaque, most-used first, ⋯ for the rest */
   .mdbar:not(.kb) { display: none; }          /* only while the keyboard is up */
-  .mdbar { left: 0; right: 0; bottom: 0; transform: none; max-width: none; border-radius: 0;
+  .mdbar { left: 0; right: 0; bottom: var(--kb-lift, 0px); transform: none; max-width: none; border-radius: 0;
     border-width: 1px 0 0; box-shadow: none; opacity: 1 !important; gap: .15rem;
     padding: .28rem .4rem calc(.28rem + env(safe-area-inset-bottom)); justify-content: flex-start; }
   .mdbar button { min-width: 2.3rem; height: 2.3rem; flex: 1 0 auto; }
