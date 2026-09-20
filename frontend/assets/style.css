@@ -98,129 +98,199 @@
   --row-y: .26rem; --row-x: .45rem;   /* tree rows */
   --tab-y: .4rem;          /* the tab strip */
   --pad: .45rem;           /* the sidebar's inner padding */
+  --line-y: .05rem;        /* a rendered line's vertical padding (Notion: 3px blocks) */
+  --h-weight: 600;
+  --h1-top: .5rem; --h2-top: .45rem; --h3-top: 0rem;
+  /* surfaces and small parts a theme may want unlike the rest */
+  --pop: var(--panel);                 /* menus, modals, the palette, toasts */
+  --scroll-thumb: var(--panel2);
+  --search-bg: var(--bg);
+  --search-border: var(--border);
+  --link: var(--accent);
+  --quote-border: var(--accent);
+  --quote-bg: color-mix(in srgb, var(--accent) 5%, transparent);
+  --label-font: var(--mono);           /* section labels: "Files", dialog headings */
+  --label-size: .64rem;
+  --label-weight: 600;
+  --label-case: uppercase;
+  --label-tracking: .14em;
+  --crumb-font: var(--mono);           /* the document's path in the title bar */
 }
 
-/* ── Theme: classic dark (Notion's greys) ──────────────────────────────────── */
+/* ── Theme: dark (Notion's night) ─────────────────────────────────────────────
+   Measured, not remembered. Page #191919 and sidebar #202020 with a #2c2c2b
+   hairline are what Notion's own app shell paints before its JavaScript
+   runs; body text is white at 81% (#d3d3d3) and secondary text #9b9b9b, the
+   hover wash white at 5.5%, borders #2f2f2f and popovers #252525, from the
+   values the notion-enhancer project extracts from the live app; the blue
+   button #2383e2 (hover #0075d3), blue text #529cca, purple #9a6dd7, red
+   #ff7369 and green #4dab9a are Notion's published palette. */
 :root[data-theme="dark"] {
   --chassis: #191919;
   --bg: #191919;
   --panel: #202020;
-  --panel2: #2C2C2C;
-  --border: #373737;
-  --border-hover: #4A4A4A;
-  --ink: #D4D4D4;
+  --panel2: #262626;
+  --pop: #252525;
+  --border: #2F2F2F;
+  --border-hover: #3F3F3F;
+  --ink: #D3D3D3;
   --muted: #9B9B9B;
   --faint: #6F6F6F;
-  --heading: #FFFFFF;
+  --heading: #F0EFED;
   --ink-inverse: #191919;
   --on-accent: #FFFFFF;
   --accent: #529CCA;
   --accent-deep: #2383E2;
-  --accent-deeper: #1A6BBF;
+  --accent-deeper: #0075D3;
   --ok: #4DAB9A;
-  --warn: #C29343;
-  --danger: #DF5452;
-  --danger-deep: #B83E3C;
-  --danger-hover: #C94846;
-  --company: #7FB6E6;
-  --personal: #B08FE0;
+  --warn: #FFA344;
+  --danger: #FF7369;
+  --danger-deep: #C94846;
+  --danger-hover: #E05B52;
+  --company: #529CCA;
+  --personal: #9A6DD7;
   --personal-deep: #9A6DD7;
-  --mention: #B08FE0;
-  --mention-me: #E2B93B;
-  --code-bg: #262626;
-  --code-ink: #E0E0E0;
-  --diff-add: #6FCF97;
-  --diff-del: #EB7A7A;
-  --shadow: #000000;
-  --overlay: #000000;
+  --mention: #9A6DD7;
+  --mention-me: #FFDC49;
+  --code-bg: #252525;
+  --code-ink: #E3E2E0;
+  --diff-add: #4DAB9A;
+  --diff-del: #FF7369;
+  --shadow: rgba(0, 0, 0, .8);
+  --overlay: #0F0F0F;
   --login-glow: #2A2A2A;
   --logo-filter: none;
+  --scroll-thumb: #474C50;
   --term-bg: #191919;
-  --term-fg: #D4D4D4;
+  --term-fg: #D3D3D3;
   --term-cursor: #529CCA;
-  --term-black: #2C2C2C;   --term-red: #DF5452;     --term-green: #4DAB9A;   --term-yellow: #C29343;
-  --term-blue: #529CCA;    --term-magenta: #9A6DD7; --term-cyan: #5BB8C9;    --term-white: #D4D4D4;
-  --term-bblack: #6F6F6F;  --term-bred: #EB7A7A;    --term-bgreen: #6FCF97;  --term-byellow: #E2B93B;
-  --term-bblue: #7FB6E6;   --term-bmagenta: #B08FE0; --term-bcyan: #8AD3E0;  --term-bwhite: #FFFFFF;
-  --md-heading: #FFFFFF;
-  --md-url: #4A8BC2;
+  --term-black: #2C2C2C;   --term-red: #FF7369;     --term-green: #4DAB9A;   --term-yellow: #FFDC49;
+  --term-blue: #529CCA;    --term-magenta: #9A6DD7; --term-cyan: #5AC8DE;    --term-white: #D3D3D3;
+  --term-bblack: #6F6F6F;  --term-bred: #FFA39A;    --term-bgreen: #6FD0BF;  --term-byellow: #FFE680;
+  --term-bblue: #7FB8FF;   --term-bmagenta: #B892E8; --term-bcyan: #8ADEEE;  --term-bwhite: #FFFFFF;
+  --md-heading: #F0EFED;
+  --md-url: #529CCA;
   --md-code: #FF7369;
-  /* Notion's air: a larger base, taller lines, a centred column, softer corners */
+  /* Notion's type and rhythm: the system face, 16px, 1.5 lines with 3px
+     blocks, a 708px column behind 96px gutters, bold 700 headings at
+     1.875 / 1.5 / 1.25em, 14px sidebar rows, 6px corners (10px popovers) */
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  --mono: SFMono-Regular, Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
   --font-size: 16px;
   --editor-size: 1rem;
-  --editor-lh: 1.7;
-  --rich-lh: 1.85;
-  --content-x: 3rem;
+  --editor-lh: 1.5;
+  --rich-lh: 1.5;
+  --line-y: 3px;
+  --content-x: 6rem;
   --content-y: 2rem;
-  --content-max: 760px;
-  --source-x: 1.6rem;
-  --h1: 1.9rem; --h2: 1.5rem; --h3: 1.22rem;
-  --row-y: .34rem; --row-x: .55rem;
+  --content-max: 708px;
+  --source-x: 6rem;
+  --h1: 1.875rem; --h2: 1.5rem; --h3: 1.25rem;
+  --h-weight: 700;
+  --h1-top: 1.6rem; --h2-top: 1.2rem; --h3-top: .9rem;
+  --row-y: .32rem; --row-x: .5rem;
   --tab-y: .5rem;
-  --pad: .65rem;
-  --r: 10px; --r-lg: 14px;
+  --pad: .5rem;
+  --r: 6px; --r-lg: 10px;
+  --label-font: var(--sans);
+  --label-size: .75rem;
+  --label-weight: 500;
+  --label-case: none;
+  --label-tracking: 0;
+  --crumb-font: var(--sans);
+  --search-bg: transparent;
+  --search-border: transparent;
+  --link: var(--ink);
+  --quote-border: var(--ink);
+  --quote-bg: transparent;
 }
 
-/* ── Theme: light (Notion's paper) ─────────────────────────────────────────── */
+/* ── Theme: light (Notion's paper) ────────────────────────────────────────────
+   Same sources. Page white and sidebar #f9f8f7 with a #f0efed hairline from
+   the app shell; text #37352f, secondary #787774 (near-black at 60%), the
+   divider #e9e9e7, hover #37352f at 8%, overlay #0f0f0f at 60%, shadows
+   #0f0f0f at 10–20%, from the extraction; code blocks #f7f6f3, inline code
+   #eb5757, blue text #337ea9, purple #9065b0, green #448361, yellow #cb912f
+   from the palette. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --chassis: #F7F7F5;
+  --chassis: #FFFFFF;
   --bg: #FFFFFF;
-  --panel: #F7F7F5;
-  --panel2: #EFEFED;
+  --panel: #F9F8F7;
+  --panel2: #EDEDEB;
+  --pop: #FFFFFF;
   --border: #E9E9E7;
-  --border-hover: #D3D1CB;
+  --border-hover: #D9D8D6;
   --ink: #37352F;
   --muted: #787774;
-  --faint: #A5A29B;
+  --faint: #A4A29E;
   --heading: #37352F;
   --ink-inverse: #FFFFFF;
   --on-accent: #FFFFFF;
   --accent: #2383E2;
-  --accent-deep: #1B6FC2;
-  --accent-deeper: #155A9E;
-  --ok: #0F7B6C;
-  --warn: #D9730D;
-  --danger: #E03E3E;
-  --danger-deep: #B82E2E;
-  --danger-hover: #C53535;
-  --company: #1B6FC2;
-  --personal: #6940A5;
+  --accent-deep: #0075D3;
+  --accent-deeper: #005FAD;
+  --ok: #448361;
+  --warn: #CB912F;
+  --danger: #EB5757;
+  --danger-deep: #C93D3D;
+  --danger-hover: #D64545;
+  --company: #337EA9;
+  --personal: #9065B0;
   --personal-deep: #9065B0;
-  --mention: #6940A5;
-  --mention-me: #C77D0A;
+  --mention: #9065B0;
+  --mention-me: #CB912F;
   --code-bg: #F7F6F3;
   --code-ink: #37352F;
-  --diff-add: #0F7B6C;
-  --diff-del: #E03E3E;
-  --shadow: #8A8A8A;
-  --overlay: #37352F;
+  --diff-add: #448361;
+  --diff-del: #D44C47;
+  --shadow: rgba(15, 15, 15, .4);
+  --overlay: #0F0F0F;
   --login-glow: #E3E2DE;
   --logo-filter: invert(1) opacity(.85);
+  --scroll-thumb: #D3D1CB;
   --term-bg: #F7F6F3;
   --term-fg: #37352F;
   --term-cursor: #2383E2;
-  --term-black: #37352F;   --term-red: #E03E3E;     --term-green: #0F7B6C;   --term-yellow: #D9730D;
-  --term-blue: #2383E2;    --term-magenta: #6940A5; --term-cyan: #0B6E99;    --term-white: #E9E9E7;
-  --term-bblack: #787774;  --term-bred: #C53535;    --term-bgreen: #0B8F7C;  --term-byellow: #C77D0A;
-  --term-bblue: #1B6FC2;   --term-bmagenta: #9065B0; --term-bcyan: #1E90B8;  --term-bwhite: #FFFFFF;
+  --term-black: #37352F;   --term-red: #D44C47;     --term-green: #448361;   --term-yellow: #CB912F;
+  --term-blue: #337EA9;    --term-magenta: #9065B0; --term-cyan: #2383E2;    --term-white: #E9E9E7;
+  --term-bblack: #787774;  --term-bred: #EB5757;    --term-bgreen: #0F7B6C;  --term-byellow: #D9730D;
+  --term-bblue: #2383E2;   --term-bmagenta: #6940A5; --term-bcyan: #0B6E99;  --term-bwhite: #FFFFFF;
   --md-heading: #37352F;
-  --md-url: #1B6FC2;
+  --md-url: #337EA9;
   --md-code: #EB5757;
-  /* Notion's air: a larger base, taller lines, a centred column, softer corners */
+  /* Notion's type and rhythm: the system face, 16px, 1.5 lines with 3px
+     blocks, a 708px column behind 96px gutters, bold 700 headings at
+     1.875 / 1.5 / 1.25em, 14px sidebar rows, 6px corners (10px popovers) */
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  --mono: SFMono-Regular, Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
   --font-size: 16px;
   --editor-size: 1rem;
-  --editor-lh: 1.7;
-  --rich-lh: 1.85;
-  --content-x: 3rem;
+  --editor-lh: 1.5;
+  --rich-lh: 1.5;
+  --line-y: 3px;
+  --content-x: 6rem;
   --content-y: 2rem;
-  --content-max: 760px;
-  --source-x: 1.6rem;
-  --h1: 1.9rem; --h2: 1.5rem; --h3: 1.22rem;
-  --row-y: .34rem; --row-x: .55rem;
+  --content-max: 708px;
+  --source-x: 6rem;
+  --h1: 1.875rem; --h2: 1.5rem; --h3: 1.25rem;
+  --h-weight: 700;
+  --h1-top: 1.6rem; --h2-top: 1.2rem; --h3-top: .9rem;
+  --row-y: .32rem; --row-x: .5rem;
   --tab-y: .5rem;
-  --pad: .65rem;
-  --r: 10px; --r-lg: 14px;
+  --pad: .5rem;
+  --r: 6px; --r-lg: 10px;
+  --label-font: var(--sans);
+  --label-size: .75rem;
+  --label-weight: 500;
+  --label-case: none;
+  --label-tracking: 0;
+  --crumb-font: var(--sans);
+  --search-bg: transparent;
+  --search-border: transparent;
+  --link: var(--ink);
+  --quote-border: var(--ink);
+  --quote-bg: transparent;
 }
 
 * { box-sizing: border-box; }
@@ -241,9 +311,9 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
 ::selection { background: var(--selection); }
 
-* { scrollbar-width: thin; scrollbar-color: var(--panel2) transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 *::-webkit-scrollbar { width: 9px; height: 9px; }
-*::-webkit-scrollbar-thumb { background: var(--panel2); border-radius: 8px;
+*::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 8px;
   border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-track { background: transparent; }
 
@@ -305,14 +375,14 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 /* the search: a button that opens the palette, at the top of the sidebar —
    it never takes text (opening on focus would make it untraversable) */
 .search { display: flex; align-items: center; gap: .5rem; width: 100%; margin: .3rem 0 .1rem;
-  padding: .5rem .65rem; border-radius: var(--r); border: 1px solid var(--border); background: var(--bg);
+  padding: .5rem .65rem; border-radius: var(--r); border: 1px solid var(--search-border); background: var(--search-bg);
   color: var(--faint); font-family: var(--sans); font-size: .82rem; text-align: left; cursor: pointer;
   overflow: hidden; white-space: nowrap; flex: 0 0 auto; }
 .search .icon { width: 15px; height: 15px; color: var(--muted); }
 .search #search-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .search-kbd { font-family: var(--mono); font-size: .6rem; color: var(--faint); border: 1px solid var(--border);
   border-radius: 4px; padding: .05rem .32rem; line-height: 1.35; }
-.search:hover { color: var(--ink); border-color: var(--border-hover); }
+.search:hover { color: var(--ink); border-color: var(--border-hover); background: var(--panel2); }
 .search:hover .icon { color: var(--ink); }
 .search:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
 .spacer { flex: 1; }
@@ -405,7 +475,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .user-more { color: var(--faint); font-size: 1rem; line-height: 1; }
 .user-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + .3rem); z-index: 70;
   display: flex; flex-direction: column; gap: .1rem; padding: .4rem;
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--pop); border: 1px solid var(--border); border-radius: var(--r-lg);
   box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow) 60%, transparent); animation: rise .12s ease-out; }
 .menu-id { font-family: var(--mono); font-size: .72rem; color: var(--muted);
   padding: .35rem .6rem .55rem; border-bottom: 1px solid var(--border); margin-bottom: .2rem;
@@ -416,8 +486,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
   font-family: var(--sans); font-size: .84rem; font-weight: 500; }
 .user-menu button:hover, .user-menu .logout:hover { color: var(--ink); background: var(--panel2); }
 .user-menu .logout { margin-top: .15rem; border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; }
-.pane-title { font-family: var(--mono); text-transform: uppercase; font-size: .64rem; font-weight: 600;
-  letter-spacing: .14em; color: var(--faint); margin: .7rem .35rem .35rem;
+.pane-title { font-family: var(--label-font); text-transform: var(--label-case); font-size: var(--label-size);
+  font-weight: var(--label-weight); letter-spacing: var(--label-tracking); color: var(--faint); margin: .7rem .35rem .35rem;
   display: flex; align-items: center; gap: .4rem; }
 .pane-title #tree-fold { margin-left: auto; letter-spacing: 0; }
 .pane-title #hidden-toggle { font-family: var(--mono); letter-spacing: 0; }
@@ -495,7 +565,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 
 /* ── Context menu (right-click on tree rows) ─────────────────────────────── */
 .ctx-menu { position: fixed; z-index: 76; min-width: 205px; padding: .3rem;
-  background: var(--panel); border: 1px solid var(--border); border-radius: calc(var(--r) + 2px);
+  background: var(--pop); border: 1px solid var(--border); border-radius: calc(var(--r) + 2px);
   box-shadow: 0 16px 44px color-mix(in srgb, var(--shadow) 60%, transparent); animation: rise .1s ease-out; }
 .ctx-item { display: flex; align-items: center; gap: .55rem; width: 100%;
   background: transparent; border: 0; color: var(--ink); cursor: pointer;
@@ -514,7 +584,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
   position: relative; }   /* the formatting dock floats inside it */
 .doc-title-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   padding: .42rem .95rem; border-bottom: 1px solid var(--border); color: var(--muted);
-  font-family: var(--mono); font-size: .74rem; background: var(--bg); }
+  font-family: var(--crumb-font); font-size: .74rem; background: var(--bg); }
 .crumb { color: var(--faint); }
 .crumb.last { color: var(--ink); }
 .crumb-sep { color: var(--faint); margin: 0 .45rem; font-size: .58rem; opacity: .7; }
@@ -577,7 +647,7 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 .mdbar-sep { width: 1px; height: 1.1rem; background: var(--border); margin: 0 .3rem; }
 
 /* @mention autocomplete — CM's tooltip, dressed like the rest of the chrome */
-.cm-tooltip.cm-tooltip-autocomplete { background: var(--panel); border: 1px solid var(--border);
+.cm-tooltip.cm-tooltip-autocomplete { background: var(--pop); border: 1px solid var(--border);
   border-radius: calc(var(--r) + 2px); box-shadow: 0 16px 44px color-mix(in srgb, var(--shadow) 60%, transparent); overflow: hidden; }
 .cm-tooltip-autocomplete > ul { font-family: var(--mono); font-size: .8rem; max-height: 14rem; }
 .cm-tooltip-autocomplete > ul > li { color: var(--muted); padding: .3rem .65rem !important; }
@@ -592,14 +662,14 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
    760px column. Centring is done with the line padding, which the theme's
    inset (--content-x) never drops below. */
 .cm-rich .cm-content { padding: var(--content-y) 0 40vh; }
-.cm-rich .cm-line { padding: .05rem max(var(--content-x), calc((100% - var(--content-max)) / 2)); }
-.cm-rich .cm-h { font-weight: 600; color: var(--heading); line-height: 1.3; }
-.cm-rich .cm-h1 { font-size: var(--h1); padding-top: .5rem; }
-.cm-rich .cm-h2 { font-size: var(--h2); padding-top: .45rem; }
-.cm-rich .cm-h3 { font-size: var(--h3); }
+.cm-rich .cm-line { padding: var(--line-y) max(var(--content-x), calc((100% - var(--content-max)) / 2)); }
+.cm-rich .cm-h { font-weight: var(--h-weight); color: var(--heading); line-height: 1.3; }
+.cm-rich .cm-h1 { font-size: var(--h1); padding-top: var(--h1-top); }
+.cm-rich .cm-h2 { font-size: var(--h2); padding-top: var(--h2-top); }
+.cm-rich .cm-h3 { font-size: var(--h3); padding-top: var(--h3-top); }
 .cm-rich .cm-h4 { font-size: 1.05rem; }
 .cm-rich .cm-h5, .cm-rich .cm-h6 { font-size: .95rem; color: var(--muted); }
-.cm-rich .cm-quoteline { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent);
+.cm-rich .cm-quoteline { border-left: 3px solid var(--quote-border); background: var(--quote-bg);
   color: var(--muted); padding-left: 1.8rem !important; }
 .cm-rich .cm-codeblock { font-family: var(--mono); font-size: .86rem; background: var(--code-bg);
   color: var(--code-ink); }
@@ -630,7 +700,8 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
   font-weight: 600;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--mention-me) 38%, transparent), 0 0 10px color-mix(in srgb, var(--mention-me) 30%, transparent); }
 .cm-rich .cm-dim { color: var(--faint); }
-.cm-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.cm-md-link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
 .cm-olmark { color: var(--accent); font-family: var(--mono); }
 .cm-bullet { color: var(--accent); font-weight: 700; display: inline-block; width: 1.1em; }
 .cm-hr-line { display: inline-block; width: 100%; border-top: 1px solid var(--border); vertical-align: middle; }
@@ -971,7 +1042,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .pi-keys { flex: 0 0 auto; }
 
 /* ── Find in document (CodeMirror search panel) ───────────────────────────── */
-.cm-panels { background: var(--panel); color: var(--ink); border-color: var(--border) !important; }
+.cm-panels { background: var(--pop); color: var(--ink); border-color: var(--border) !important; }
 .cm-panel.cm-search { padding: .45rem .6rem; font-family: var(--sans); font-size: .78rem; }
 .cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label {
   font-family: var(--sans); font-size: .78rem; color: var(--ink); }
@@ -988,7 +1059,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
    drawer — permissions, new-file dialog — lands on top of it */
 .modal-overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--overlay) 72%, transparent); display: grid;
   place-items: center; z-index: 75; backdrop-filter: blur(2px); animation: fadein .12s ease-out; }
-.modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+.modal-card { background: var(--pop); border: 1px solid var(--border); border-radius: var(--r-lg);
   width: min(460px, 92vw); max-height: 85vh; overflow: auto; padding: 1rem 1.2rem;
   display: flex; flex-direction: column; gap: .5rem; box-shadow: 0 24px 60px color-mix(in srgb, var(--shadow) 60%, transparent);
   animation: rise .14s ease-out; }
@@ -1006,8 +1077,8 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .frow > span { width: 4rem; color: var(--muted); }
 .frow input, .frow select { flex: 1; background: var(--panel2); border: 1px solid var(--border);
   color: var(--ink); border-radius: calc(var(--r) - 2px); padding: .35rem .5rem; font-family: var(--mono); font-size: .82rem; }
-.acl-title, .admin-sec-title { font-family: var(--mono); color: var(--faint); text-transform: uppercase;
-  font-size: .62rem; font-weight: 600; letter-spacing: .14em; margin-top: .5rem; }
+.acl-title, .admin-sec-title { font-family: var(--label-font); color: var(--faint); text-transform: var(--label-case);
+  font-size: calc(var(--label-size) - .02rem); font-weight: var(--label-weight); letter-spacing: var(--label-tracking); margin-top: .5rem; }
 .admin-sec-title { margin: 1rem 0 .4rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
 .acl-list { font-size: .82rem; }
 .acl-row { display: flex; align-items: center; gap: .5rem; padding: .22rem .3rem; border-bottom: 1px solid var(--border); }
@@ -1222,7 +1293,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 
 /* ── Secret viewer — masked by default, deliberate reveal ─────────────────── */
 .secret-view { display: grid; place-items: start center; padding: 2rem 1rem; overflow: auto; }
-.secret-card { width: min(680px, 100%); background: var(--panel); border: 1px solid var(--border);
+.secret-card { width: min(680px, 100%); background: var(--pop); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: .7rem; }
 .secret-head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap;
   border-bottom: 1px solid var(--border); padding-bottom: .55rem; }
@@ -1292,7 +1363,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 #uptray { display: none; flex-direction: column; gap: .35rem; pointer-events: auto; }
 #uptray.on { display: flex; }
 .uprow { display: flex; align-items: center; gap: .5rem; color: var(--ink);
-  background: var(--panel); border: 1px solid var(--border);
+  background: var(--pop); border: 1px solid var(--border);
   border-left: 3px solid var(--accent); border-radius: var(--r);
   padding: .45rem .7rem; font-size: .8rem; animation: rise .15s ease-out;
   box-shadow: 0 10px 30px color-mix(in srgb, var(--shadow) 50%, transparent);
@@ -1306,7 +1377,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .uprow .upcancel { flex: none; background: none; border: 0; cursor: pointer;
   color: var(--muted); font-size: .8rem; line-height: 1; padding: .1rem .15rem; }
 .uprow .upcancel:hover { color: var(--ink); }
-.toast { background: var(--panel); border: 1px solid var(--border); color: var(--ink);
+.toast { background: var(--pop); border: 1px solid var(--border); color: var(--ink);
   border-left: 3px solid var(--accent); border-radius: var(--r); padding: .5rem .8rem;
   font-size: .82rem; line-height: 1.5; box-shadow: 0 10px 30px color-mix(in srgb, var(--shadow) 50%, transparent);
   animation: rise .15s ease-out; word-break: break-word; }
@@ -1364,7 +1435,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   input, select, textarea { font-size: 16px !important; }   /* no iOS focus-zoom */
   .cm-editor { font-size: 16px; }
   .cm-line { padding: 0 .85rem; }
-  .cm-rich .cm-line { padding: .05rem 1rem; }
+  .cm-rich .cm-line { padding: var(--line-y) 1rem; }
   .cm-rich .cm-quoteline { padding-left: 1.7rem !important; }
 
   /* the name stays on phones: the bar has room now that search and the

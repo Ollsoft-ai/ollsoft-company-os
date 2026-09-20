@@ -41,8 +41,11 @@ def test_light_theme_lands_before_paint_and_switches_live(browser):
         light_bg = bg(page)
         assert light_bg == "rgb(255, 255, 255)", light_bg          # Notion's paper
         assert token(page, "--term-bg").lower() == "#f7f6f3"
-        assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "16px"       # and Notion's air
-        assert token(page, "--content-max") == "760px"
+        assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "16px"       # Notion's 16px
+        assert token(page, "--content-max") == "708px"                                          # Notion's column
+        assert page.evaluate("() => getComputedStyle(document.body).fontFamily").startswith("ui-sans-serif")
+        assert token(page, "--panel").lower() == "#f9f8f7"                                      # the sidebar Notion's shell paints
+        assert page.evaluate("() => getComputedStyle(document.querySelector('.pane-title')).textTransform") == "none"
         # the editor's highlight style follows the tokens
         open_doc(page, doc("overview.md"))
         page.wait_for_selector(".cm-editor")
@@ -56,12 +59,14 @@ def test_light_theme_lands_before_paint_and_switches_live(browser):
         page.wait_for_function("() => document.documentElement.dataset.theme === 'dark'", timeout=10000)
         page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(25, 25, 25)'", timeout=5000)
         page.wait_for_function("() => window.__kbterms[0].term.options.theme.background.toLowerCase() === '#191919'", timeout=5000)
+        assert page.evaluate("() => getComputedStyle(document.body).color") == "rgb(211, 211, 211)"   # white at 81%
         # and back to the default: deep blue
         page.evaluate(f"() => window.__kbsettings.unset('{KEY}')")
         page.wait_for_function("() => document.documentElement.dataset.theme === 'deep-blue'", timeout=10000)
         page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(13, 22, 38)'", timeout=5000)
         assert page.evaluate("() => window.__kbterms[0].term.options.theme.background").lower() == "#071019"
         assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "15px"       # deep blue keeps its numbers
+        assert '"IBM Plex Sans"' in page.evaluate("() => getComputedStyle(document.body).fontFamily")
         # a second load starts light again only if it is set — it is not now
         page.reload(); page.wait_for_selector('[data-testid="tree"] .tree-item')
         assert page.evaluate("() => document.documentElement.dataset.theme") == "deep-blue"

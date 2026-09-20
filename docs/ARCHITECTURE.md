@@ -418,8 +418,17 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   the editor's size and line heights, the written column's inset and width,
   heading sizes, row and tab density, the sidebar's padding, two radii — so a
   theme is a feel, not only a palette: deep blue keeps its numbers, Dark and
-  Light take Notion's air (16px, taller lines, a centred 760px column, softer
-  corners). `ui.theme.custom` overrides any of these per person or company. `ui.theme` sets `data-theme` on `<html>` from a cached value before
+  Light are Notion's, measured — the app shell Notion ships (page and sidebar
+  colours, hairlines, the 240px sidebar, 1.5 lines, the system font stack),
+  the notion-enhancer extraction of the live app (text, secondary, border,
+  hover, overlay, accent and scrollbar values per mode) and its published
+  palette; 16px at 1.5 with 3px blocks, a 708px column behind 96px gutters,
+  bold 700 headings at 1.875/1.5/1.25em, 14px sidebar rows, 6px corners and
+  10px popovers, sans-serif section labels instead of mono capitals, links
+  in ink with an underline, popovers on their own surface (`--pop`). Surfaces,
+  labels, links, quotes, the search box, heading rhythm and the scrollbar are
+  tokens so a theme can differ from deep blue in each. `ui.theme.custom`
+  overrides any of these per person or company. `ui.theme` sets `data-theme` on `<html>` from a cached value before
   first paint; CodeMirror's highlight style reads `--md-*` tokens through CSS
   variables so it retints live, and xterm is handed a theme built from the
   `--term-*` tokens when it opens and again on every theme change. The sign-in
