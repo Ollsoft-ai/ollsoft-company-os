@@ -38,7 +38,7 @@ def test_only_the_token_blocks_name_colours():
     css = re.sub(r"/\*.*?\*/", lambda m: "" if "the artifact's own page" not in m.group(0) else m.group(0), css, flags=re.S)
     bad = []
     for sel, body in _blocks(css):
-        if sel == ":root" or sel.startswith(":root[data-theme="):
+        if sel == ":root" or re.fullmatch(r':root\[data-theme="[^"]+"\]', sel.strip()):
             continue
         for line in body.splitlines():
             if COLOUR.search(line) and not any(a in line for a in ALLOWED):
@@ -53,14 +53,22 @@ def test_every_theme_redefines_the_same_tokens():
     css = CSS.read_text()
     blocks = dict(_blocks(re.sub(r"/\*.*?\*/", "", css, flags=re.S)))
     root = set(re.findall(r"--([a-z][a-z0-9-]*)\s*:", blocks[":root"]))
-    non_colour = {"sans", "mono", "r", "r-lg", "tbh", "accent-wash", "selection", "mention-wash", "mention-me-wash",
+    non_colour = {"sans", "mono", "r", "r-lg", "tbh", "strip-h", "accent-wash", "selection", "mention-wash", "mention-me-wash",
                   "logo-filter", "font-size", "editor-size", "editor-lh", "rich-lh", "content-x", "content-y",
                   "content-max", "content-x-narrow", "source-x", "h1", "h2", "h3", "row-y", "row-x", "tab-y", "pad",
                   "line-y", "h-weight", "h1-top", "h2-top", "h3-top", "pop", "scroll-thumb", "search-bg",
                   "search-border", "link", "quote-border", "quote-bg", "label-font", "label-size", "label-weight",
-                  "label-case", "label-tracking", "crumb-font"}
+                  "label-case", "label-tracking", "crumb-font",
+                  "block-pad", "block-pad-y", "block-inset", "cell-pad",
+                  "lm-bullet", "lm-task", "lm-space", "lm-mono"}
     colours = root - non_colour
-    themes = {k: v for k, v in blocks.items() if k.startswith(":root[data-theme=")}
+    # A theme block is the token list itself — `:root[data-theme="dark"]`,
+    # alone or beside its siblings — not every rule that happens to be scoped
+    # to a theme (`:root[data-theme="dark"] .cm-editor { --block-inset: … }`
+    # is a single-token override, and demanding a whole palette of it is
+    # nonsense).
+    is_theme = lambda sel: all(re.fullmatch(r':root\[data-theme="[^"]+"\]', part.strip()) for part in sel.split(","))
+    themes = {k: v for k, v in blocks.items() if k.startswith(":root[data-theme=") and is_theme(k)}
     assert len(themes) >= 2, "expected the dark and light themes"
     for sel, body in themes.items():
         have = set(re.findall(r"--([a-z][a-z0-9-]*)\s*:", body))
@@ -100,3 +108,25 @@ def test_customisable_tokens_exist_and_match_their_patterns():
                 assert re.fullmatch(r"#[0-9a-fA-F]{6}", val), f"{sel}: --{tok} is {val!r}, not #rrggbb"
             elif tok not in ("sans", "mono"):              # the font stacks are quoted lists; skip
                 assert re.fullmatch(pat, val), f"{sel}: --{tok} is {val!r}, which a person could not set"
+
+
+def test_the_stylesheet_is_structurally_balanced():
+    """A stray `}` closes the enclosing @media early and every rule after it
+    leaks to all widths. That is how the phone drawer once hid the sidebar on
+    a 1200px desktop (2026-09-21): a removed rule left its second line, and
+    its closing brace ended `@media (max-width: 880px)` 80 lines too soon.
+    Braces are cheap to count; the bug is not."""
+    src = CSS.read_text()
+    blanked = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), src, flags=re.S)
+    depth, problems = 0, []
+    for ln, text in enumerate(blanked.split("\n"), 1):
+        # a declaration at depth 0 belongs to a rule whose selector is gone
+        if depth == 0 and "{" not in text and re.match(r"\s*[a-z-]+\s*:", text):
+            problems.append(f"line {ln}: declaration outside any rule: {src.splitlines()[ln - 1].strip()[:60]}")
+        for ch in text:
+            depth += (ch == "{") - (ch == "}")
+            if depth < 0:
+                problems.append(f"line {ln}: unmatched closing brace")
+                depth = 0
+    assert not problems, "style.css is malformed:\n  " + "\n  ".join(problems)
+    assert depth == 0, f"style.css ends inside {depth} unclosed block(s)"

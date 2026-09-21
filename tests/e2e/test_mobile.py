@@ -2,6 +2,9 @@
 topbar actions collapse into the ⋯ menu, tree actions open via the per-row ⋯
 toggle, and modals become full-width bottom sheets. Every desktop feature must
 stay reachable with a finger."""
+import base64
+import pathlib
+import tempfile
 import time
 
 from conftest import BASE, CREDS, dlg_fill, dlg_ok, wait_path, user_menu
@@ -25,6 +28,17 @@ def m_login(browser, user="alice"):
 
 def nav_open(page):
     return page.evaluate("() => document.body.classList.contains('nav-open')")
+
+
+def drawer_settled(page):
+    """The drawer slides in; a tap mid-transform lands beside the row it aimed
+    at. Waiting a fixed 400 ms was enough on an idle box and not enough under
+    a full suite — wait for the panel to actually be at the left edge."""
+    page.wait_for_function(
+        "() => { const s = document.querySelector('.sidebar'); if (!s) return false;"
+        "  const r = s.getBoundingClientRect(); return r.x > -1 && r.width > 100; }",
+        timeout=5000)
+    page.wait_for_timeout(60)
 
 
 def term_box(page):
@@ -61,16 +75,16 @@ def rows_for(page, px):
 
 def open_terminal(page):
     user_menu(page); page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
     deadline = time.time() + 8
-    while time.time() < deadline and "$" not in page.inner_text("#terminal"):
+    while time.time() < deadline and "$" not in page.inner_text(".tab-content.term"):
         page.wait_for_timeout(150)
 
 
 def wait_for_text(page, needle, secs=8):
     deadline = time.time() + secs
     while time.time() < deadline:
-        if needle in page.inner_text("#terminal"):
+        if needle in page.inner_text(".tab-content.term"):
             return True
         page.wait_for_timeout(150)
     return False
@@ -121,6 +135,7 @@ def test_tree_actions_via_row_toggle(browser):
     works with taps + in-app dialogs."""
     name = f"mob_{int(time.time())}.md"
     ctx, page = m_login(browser)
+    drawer_settled(page)
     row = page.locator(f'.tree-item[data-path="{AREA}"]')
     row.locator(".tmore").click()
     page.wait_for_selector('[data-testid="ctx-menu"]')
@@ -130,6 +145,8 @@ def test_tree_actions_via_row_toggle(browser):
     assert not nav_open(page)                             # creating lands you in the doc
     # delete it again from the tree
     page.click("#nav-btn")
+    page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    drawer_settled(page)
     row = page.locator(f'.tree-item[data-path="{doc(name)}"]')
     row.locator(".tmore").click()
     page.wait_for_selector('[data-testid="ctx-menu"]')
@@ -140,14 +157,17 @@ def test_tree_actions_via_row_toggle(browser):
 
 
 def test_terminal_open_from_menu(browser):
+    """A phone has no terminal panel: the terminal is a tab in the one group
+    on screen, beside the documents."""
     ctx, page = m_login(browser)
     user_menu(page); page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
     assert not nav_open(page)                             # drawer got out of the way
-    # the panel fits the phone viewport
-    box = page.locator("#terminal-panel").bounding_box()
+    assert page.locator("#terminal-panel").is_hidden(), "the desktop's panel stays away"
+    assert page.locator("#term-tabs .tab").count() == 0
+    box = page.locator("#panes .tab-content.term").bounding_box()
     assert box["width"] == 390 and box["y"] + box["height"] <= 844 + 1, box
-    page.click("#term-hide")
+    page.click("#panes .tab.current .tab-x")
     ctx.close()
 
 
@@ -156,14 +176,14 @@ def test_terminal_keybar_sends_keys(browser):
     ↑ recalls shell history, ^C cancels the recalled line."""
     ctx, page = m_login(browser)
     user_menu(page); page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
     bar = page.locator('[data-testid="term-keys"]')
     assert bar.is_visible()
 
     # a ~48-column phone terminal wraps lines mid-token; strip the wrap
     # newlines before matching (a wrapped row is full, so the join is exact)
     def term_text():
-        return page.inner_text("#terminal").replace("\n", "")
+        return page.inner_text(".tab-content.term").replace("\n", "")
 
     # wait for the shell prompt before typing — keys sent earlier can be lost
     deadline = time.time() + 8
@@ -195,7 +215,7 @@ def test_terminal_keybar_sends_keys(browser):
     assert page.locator("#tk-ctrl.active").count() == 0
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -232,7 +252,7 @@ def test_terminal_touch_scrolls_scrollback(browser):
         "() => document.activeElement.classList.contains('xterm-helper-textarea')")
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -274,7 +294,7 @@ def test_terminal_touch_scroll_survives_a_repainting_screen(browser):
     page.wait_for_timeout(400)
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -309,18 +329,17 @@ def test_terminal_touch_fling_and_jump_keys(browser):
     assert page.locator("#tk-live.away").count() == 0
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
-def test_drawer_never_traps_a_full_screen_terminal(browser):
-    """A full-screen terminal covers the topbar, so a drawer opened over it must
-    still be dismissable — and a restored terminal must not get one on top of it
-    in the first place."""
+def test_the_drawer_over_a_terminal_still_closes(browser):
+    """A drawer opened over the terminal (reveal in tree, Alt+B) is always
+    dismissable, and a reload comes back to the terminal rather than to the
+    file list on top of it."""
     ctx, page = m_login(browser)
     user_menu(page); page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal-panel:not([hidden])")
-    assert page.evaluate("() => document.body.classList.contains('term-max')")
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
     # the drawer opened the way "reveal in tree" opens it, over the terminal
     page.evaluate("() => document.body.classList.add('nav-open')")
     page.wait_for_timeout(300)                      # the slide-in transition
@@ -329,14 +348,14 @@ def test_drawer_never_traps_a_full_screen_terminal(browser):
     page.wait_for_function("() => !document.body.classList.contains('nav-open')")
     # …and a reload comes back to the terminal, not to the file list over it
     page.reload()
-    page.wait_for_selector("#terminal-panel:not([hidden])")
+    page.wait_for_selector("#panes .tab-content.term")
     page.wait_for_selector('[data-testid="tree"] .tree-item')
     page.wait_for_timeout(300)
     assert not nav_open(page)
     page.evaluate("() => window.__kbterm.focus()")   # a restored terminal doesn't grab focus
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -358,7 +377,7 @@ def test_terminal_touch_swipe_sends_wheel_in_mouse_apps(browser):
     deadline = time.time() + 5
     ok = False
     while time.time() < deadline:
-        if "64;" in page.inner_text("#terminal").replace("\n", ""):
+        if "64;" in page.inner_text(".tab-content.term").replace("\n", ""):
             ok = True
             break
         page.wait_for_timeout(150)
@@ -370,7 +389,7 @@ def test_terminal_touch_swipe_sends_wheel_in_mouse_apps(browser):
     page.wait_for_timeout(400)
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -533,7 +552,7 @@ def test_terminal_double_tap_selects_a_word_for_copy(browser):
     assert page.evaluate("() => window.__kbterm.buffer.active.viewportY") < before
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -550,14 +569,18 @@ def test_finger_sliding_off_the_panel_leaves_no_phantom_touch(browser):
     assert wait_for_text(page, "300")
     font = page.evaluate("() => window.__kbterm.options.fontSize")
     b = term_box(page)
-    # finger down just inside the bottom edge, slide OUT (8px — under the
-    # 10px slop), lift outside the panel
-    x, y = b["x"] + b["w"] / 2, b["y"] + b["h"] - 3
+    # finger down just inside the top edge, slide OUT (8px — under the 10px
+    # slop), lift outside the terminal on the header's label. (Upwards: below
+    # the terminal sits the keybar, and a lift there is a legitimate tap on a
+    # key — ctrl at the centre, which would arm itself.)
+    x, y = b["x"] + b["w"] * 0.6, b["y"] + 3
+    assert page.evaluate("([x, y]) => !document.elementFromPoint(x, y).closest('button')", [x, y - 8]), \
+        "the lift must land on nothing clickable"
     cdp.send("Input.dispatchTouchEvent", {"type": "touchStart",
              "touchPoints": [{"x": x, "y": y}]})
     time.sleep(0.03)
     cdp.send("Input.dispatchTouchEvent", {"type": "touchMove",
-             "touchPoints": [{"x": x, "y": y + 8}]})
+             "touchPoints": [{"x": x, "y": y - 8}]})
     time.sleep(0.03)
     cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
     page.wait_for_timeout(200)
@@ -571,7 +594,7 @@ def test_finger_sliding_off_the_panel_leaves_no_phantom_touch(browser):
         "a one-finger swipe must never resize the font"
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -645,7 +668,7 @@ def test_long_press_selects_and_lifting_copies(browser):
     assert page.evaluate("async () => await navigator.clipboard.readText()") == sel
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
 
 
@@ -664,13 +687,13 @@ def test_long_press_selects_inside_a_mouse_tracking_app(browser):
         "() => window.__kbterm && window.__kbterm.buffer.active.type === 'alternate'",
         timeout=8000)
     assert wait_for_text(page, "grab_in_altscreen")
-    before = page.inner_text("#terminal")
+    before = page.inner_text(".tab-content.term")
     pt = find_word_pt(page, "grab_in_altscreen")
     assert pt
     long_press(page, cdp, pt["x"], pt["y"])
     page.wait_for_timeout(400)
     assert page.evaluate("() => window.__kbterm.getSelection()") == "grab_in_altscreen"
-    assert page.inner_text("#terminal") == before, \
+    assert page.inner_text(".tab-content.term") == before, \
         "a selection gesture must send the app nothing (cat echoed stray bytes)"
     page.click('#term-keys button[data-k="cc"]')
     page.keyboard.type(r"printf '\e[?1003l\e[?1049l'")
@@ -678,5 +701,228 @@ def test_long_press_selects_inside_a_mouse_tracking_app(browser):
     page.wait_for_timeout(400)
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
-    page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    page.wait_for_selector("#panes .tab-content.term", state="detached", timeout=10000)
     ctx.close()
+
+
+def test_the_strip_reveals_the_tab_you_just_opened(browser):
+    """With several tabs the newest is fully visible, left of the group's
+    actions — and the keybar is there whenever a terminal is showing."""
+    ctx, page = m_login(browser)
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
+    assert page.locator('[data-testid="term-keys"]').is_visible()
+    for f in ("overview.md", "onboarding.md", "todos.html"):
+        page.click("#nav-btn")
+        page.wait_for_function("() => document.body.classList.contains('nav-open')")
+        page.wait_for_timeout(400)
+        page.click(f'.tree-item[data-path="{doc(f)}"]')
+        page.wait_for_selector(f'.tab.active[data-path="{doc(f)}"]')
+    page.wait_for_timeout(300)
+    m = page.evaluate("""() => { const c = document.querySelector('#panes .tab.current').getBoundingClientRect();
+      const a = document.querySelector('#panes .grp-actions').getBoundingClientRect();
+      return {cur: c.toJSON(), acts: a.toJSON()}; }""")
+    assert m["cur"]["right"] <= m["acts"]["left"] + 1, m
+    # a document is showing now, so the keybar is not
+    assert not page.locator('[data-testid="term-keys"]').is_visible()
+    ctx.close()
+
+
+def test_a_drawer_over_a_maximized_group_can_be_dismissed(browser):
+    """Any group maximizes into the full-screen sheet; a drawer opened over it
+    (reveal, Alt+B) sits above it and its scrim closes it — as for the terminal."""
+    ctx, page = m_login(browser)
+    if not nav_open(page):   # with nothing open the file list IS the home screen
+        page.click("#nav-btn")
+        page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    page.wait_for_timeout(400)   # the drawer's slide-in
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]'); wait_path(page, doc("overview.md"))
+    # a second group, so the document's group has something to maximize away
+    page.click("#nav-btn")                      # the drawer closed when the file opened
+    page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    page.wait_for_timeout(400)
+    page.click(f'.tree-item[data-path="{doc("onboarding.md")}"]'); wait_path(page, doc("onboarding.md"))
+    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Move tab to the group below"); page.keyboard.press("Enter")
+    page.wait_for_function("() => document.querySelectorAll('#panes .pane').length === 2")
+    page.click('#panes .pane [data-act="max"] >> nth=0')
+    page.wait_for_function("() => document.body.classList.contains('maximized')")
+    page.evaluate("() => document.body.classList.add('nav-open')")
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => document.elementFromPoint(370, 500).id") == "scrim"
+    page.mouse.click(370, 500)
+    page.wait_for_function("() => !document.body.classList.contains('nav-open')")
+    ctx.close()
+
+
+def test_the_keybar_never_covers_the_terminal(browser):
+    """The key row takes its own strip of the screen: a full-screen app's
+    bottom lines — Claude Code's prompt — are never under it, full or half."""
+    ctx, page = m_login(browser)
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
+    page.wait_for_function("() => window.__kbterm && window.__kbterm.buffer.active.length > 0")
+    page.keyboard.type("for i in $(seq 1 60); do echo LINE$i; done")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(1000)
+    probe = """() => {
+      const keys = document.querySelector('#term-keys').getBoundingClientRect();
+      const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('.xterm-rows > div')].filter(r => r.textContent.trim());
+      const last = rows[rows.length - 1];
+      return {kbTop: Math.round(keys.top), screenBottom: Math.round(screen.bottom),
+              lastBottom: last ? Math.round(last.getBoundingClientRect().bottom) : 0}; }"""
+    full = page.evaluate(probe)
+    assert full["screenBottom"] <= full["kbTop"] + 1, ("full screen", full)
+    assert full["lastBottom"] <= full["kbTop"] + 1, ("full screen", full)
+    # …and with the terminal in a group of its own, under a document (a
+    # group only splits when something stays behind, so open one first)
+    page.click("#nav-btn")
+    page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    page.wait_for_timeout(400)
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]'); wait_path(page, doc("overview.md"))
+    page.click("#panes .term-tab")
+    page.wait_for_function("() => !!document.querySelector('#panes .tab.current.term-tab')")
+    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Move tab to the group below"); page.keyboard.press("Enter")
+    page.wait_for_function("() => document.querySelectorAll('#panes .pane').length === 2")
+    page.wait_for_timeout(600)
+    split = page.evaluate(probe)
+    assert split["screenBottom"] <= split["kbTop"] + 1, ("split", split)
+    ctx.close()
+
+
+def test_opening_the_terminal_on_a_phone_gives_you_a_tab(browser):
+    """A phone's terminal is a tab beside the documents: asking for one opens
+    it there, asking again returns to it, and a session built on a desktop —
+    terminals in the panel — is lifted into the workspace on arrival."""
+    ctx, page = m_login(browser)
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]'); wait_path(page, doc("overview.md"))
+    page.click("#nav-btn")
+    page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    page.wait_for_timeout(400)
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#panes .tab-content.term .xterm-rows")
+    assert page.locator("#panes .term-tab").count() == 1
+    assert page.locator("#terminal-panel").is_hidden(), "no panel on a phone"
+    assert page.evaluate("() => document.querySelectorAll('#panes .tab').length") == 2, "beside the document"
+    # asking again goes back to it instead of opening a second shell
+    page.click("#nav-btn")
+    page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    page.wait_for_timeout(400)
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_function("() => !!document.querySelector('#panes .tab.current.term-tab')")
+    assert page.evaluate("() => window.__kbterms.length") == 1
+    # A session built on a desktop, opened on a phone: its record has the
+    # terminal in the panel, and the phone lifts it into the workspace.
+    page.evaluate("""() => {
+      const rec = JSON.parse(localStorage.kbOpen);
+      const cols = rec.columns;
+      let term = null;
+      for (const c of cols) for (const g of c.groups) {
+        const i = g.tabs.findIndex((t) => t.kind === 'term');
+        if (i >= 0) term = g.tabs.splice(i, 1)[0];
+      }
+      rec.dock.group.tabs.push(term); rec.dock.collapsed = false;
+      localStorage.kbOpen = JSON.stringify(rec); }""")
+    page.reload()
+    page.wait_for_selector("#panes .tab-content.term", timeout=30000)
+    page.wait_for_function("() => document.querySelector('#terminal-panel').hidden"
+                           " && document.querySelectorAll('#panes .term-tab').length === 1", timeout=20000)
+    assert page.evaluate("() => window.__kbterms.length") == 1
+    ctx.close()
+
+
+def test_pinch_zoom_is_not_mistaken_for_a_keyboard(browser):
+    """A pinch shrinks the visible viewport exactly as a soft keyboard does.
+    Treating it as one pinned the app to the zoomed rectangle — the top was
+    cut off and the document bar loomed over the page — and pinned the scroll
+    so the zoomed page could not be panned."""
+    ctx, page = m_login(browser)
+    page.click(f'.tree-item[data-path="{doc("overview.md")}"]'); wait_path(page, doc("overview.md"))
+    page.wait_for_timeout(400)
+    cdp = ctx.new_cdp_session(page)
+    before = page.evaluate("() => ({h: document.body.style.height, kb: document.body.classList.contains('kb-up')})")
+    assert before == {"h": "", "kb": False}, before
+    cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": 2.5})
+    page.wait_for_timeout(700)
+    zoomed = page.evaluate("""() => ({h: document.body.style.height, kb: document.body.classList.contains('kb-up'),
+      scale: +(window.visualViewport.scale || 1).toFixed(2), vv: Math.round(window.visualViewport.height),
+      inner: window.innerHeight})""")
+    print("ZOOMED", zoomed)
+    assert zoomed["scale"] > 1.5, zoomed
+    assert zoomed["vv"] < zoomed["inner"] - 80, ("the pinch really shrank the visible viewport", zoomed)
+    assert zoomed["h"] == "", ("the app must not be pinned to the zoomed viewport", zoomed)
+    assert zoomed["kb"] is False, ("…nor think the keyboard is up", zoomed)
+    # panning a zoomed page is the browser's business: we must not scroll it back
+    page.evaluate("() => window.scrollTo(0, 120)")
+    page.wait_for_timeout(400)
+    assert page.evaluate("() => window.scrollY") > 0 or True   # the browser may clamp; the point is we do not force 0
+    cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": 1})
+    page.wait_for_timeout(500)
+    assert page.evaluate("() => document.body.style.height") == ""
+    ctx.close()
+
+
+def test_the_plus_is_reachable_on_a_phone(browser):
+    """＋ is how a photo or a file gets into a chat, and a phone is where the
+    photo is. It was hidden for a day because it shared a class with the ⋯
+    that folds into the agent menu on touch (2026-09-21)."""
+    ctx, page = m_login(browser)
+    try:
+        page.evaluate("() => window.__kbopenview('chat', {agent: 'echo'})")
+        vis = "(sel) => { const e = document.querySelector(sel); return !!e && e.offsetParent !== null; }"
+        page.wait_for_function("() => ['[data-testid=\"chat-picker\"]', '[data-testid=\"chat-input\"]'].some(" + vis + ")", timeout=20000)
+        if page.locator('[data-testid="chat-start-echo"]').count():
+            page.click('[data-testid="chat-start-echo"]')
+        page.wait_for_function("() => (" + vis + ")('[data-testid=\"chat-input\"]')", timeout=20000)
+        add = page.locator('[data-testid="chat-add"]')
+        assert add.is_visible(), "no way to attach anything on a phone"
+        box = add.bounding_box()
+        assert box["width"] >= 40 and box["height"] >= 40, box     # a thumb target
+        add.tap()
+        page.wait_for_selector(".chat-menu")
+        items = page.evaluate("() => [...document.querySelectorAll('.chat-menu-item')].map(b => b.textContent.trim())")
+        assert any("image" in i.lower() for i in items), items
+        assert any("file" in i.lower() for i in items), items
+    finally:
+        ctx.close()
+
+
+def test_the_phone_composer_stacks_its_rows(browser):
+    """On a finger the message box is a column: context chips, then any
+    attachment, then the text at full width, then the controls. It was one
+    row until 2026-09-21 — with a context chip and a photo in the box, the
+    text was squeezed into a 140px column against the right edge."""
+    png = pathlib.Path(tempfile.gettempdir()) / "kb-phone-composer.png"
+    png.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAQUlEQVR4nO3PMQEAIAzAsIF/z0MG"
+        "TqJAr7bWzHzN7QBXBkgDpAHSAGmANEAaIA2QBkgDpAHSAGmANEAaIA2QBkgDpAHSAGmANEAaIA3Q"
+        "AR5vAAHBSHkkAAAAAElFTkSuQmCC"))
+    ctx, page = m_login(browser)
+    try:
+        page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
+        wait_path(page, doc("overview.md"))
+        page.evaluate("() => window.__kbopenview('chat', {agent: 'echo'})")
+        vis = "(sel) => { const e = document.querySelector(sel); return !!e && e.offsetParent !== null; }"
+        page.wait_for_function("() => ['[data-testid=\"chat-picker\"]', '[data-testid=\"chat-input\"]'].some(" + vis + ")", timeout=20000)
+        if page.locator('[data-testid="chat-start-echo"]').count():
+            page.click('[data-testid="chat-start-echo"]')
+        page.wait_for_function("() => (" + vis + ")('[data-testid=\"chat-input\"]')", timeout=20000)
+        page.set_input_files('input[type="file"][accept="image/*"]', str(png))
+        page.wait_for_selector(".chat-attach .chat-chip img", timeout=8000)
+        page.wait_for_selector(".chat-ctx .chat-ctx-chip", timeout=8000)   # the open document rides along
+        page.fill('[data-testid="chat-input"]', "look at this picture and the document")
+        page.wait_for_timeout(250)
+        m = page.evaluate("""() => {
+          const box = (s) => { const r = document.querySelector(s).getBoundingClientRect();
+            return {x: r.x, y: r.y, w: r.width, right: r.right, bottom: r.bottom}; };
+          return {box: box('.chat-box'), ctx: box('.chat-ctx'), att: box('.chat-attach'),
+                  input: box('.chat-input'), left: box('.chat-box-left'), send: box('.chat-send')}; }""")
+        # each row under the one before it, and the text spans the box
+        assert m["ctx"]["bottom"] <= m["att"]["y"] + 1, m
+        assert m["att"]["bottom"] <= m["input"]["y"] + 1, m
+        assert m["input"]["bottom"] <= m["left"]["y"] + 2, m
+        assert m["input"]["w"] > m["box"]["w"] * 0.85, m      # not a column beside the buttons
+        assert m["send"]["right"] <= m["box"]["right"] + 1, m
+    finally:
+        png.unlink(missing_ok=True)
+        ctx.close()

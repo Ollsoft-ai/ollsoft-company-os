@@ -53,6 +53,9 @@ jobs:
           done
           echo "::error::hub never answered"; sudo journalctl -u kb-hub -n 80 --no-pager; exit 1
 
+      - name: Layout model unit tests (node --test)
+        run: node --test tests/js/*.test.mjs
+
       - name: Installer is idempotent (second run must succeed)
         run: sudo bash scripts/install.sh --admin ciadmin
 

@@ -47,9 +47,9 @@ def test_viewer_browser_experience(browser, viewer):
         user_menu(page)
         assert page.locator('[data-testid="toggle-term"]').is_hidden()
         assert page.locator('[data-testid="cron-btn"]').is_hidden()
-        page.wait_for_selector('.launchbar .lchip.company')          # file chip shows
-        assert page.locator('.launchbar .lchip.company', has_text="Overview").count() == 1
-        assert page.locator('.launchbar .lchip.company', has_text="Shell thing").count() == 0
+        page.wait_for_selector('#pins .pin-row.company')          # the file pin shows
+        assert page.locator('#pins .pin-row.company', has_text="Overview").count() == 1
+        assert page.locator('#pins .pin-row.company', has_text="Shell thing").count() == 0
         # documents still open — and are editable (kb-users group write)
         page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
         wait_path(page, doc("overview.md"))

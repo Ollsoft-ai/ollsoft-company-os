@@ -58,8 +58,8 @@ def test_terminal_panel_tabs_and_close_reclaims_space(browser):
     page.wait_for_selector("#terminal .xterm-rows")
     assert page.locator("#term-tabs .term-tab").count() == 1
 
-    # a second terminal
-    page.click('[data-testid="term-new"]')
+    # a second terminal (Ctrl+Shift+` — there is no per-strip ＋ any more)
+    page.keyboard.press("Control+Shift+Backquote")
     page.wait_for_function(
         "() => document.querySelectorAll('#term-tabs .term-tab').length === 2")
 

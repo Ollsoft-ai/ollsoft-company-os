@@ -102,19 +102,34 @@ def test_toggle_from_todos_writes_file(browser):
     line = next(i for i, t in enumerate(src.read_text().splitlines(), 1)
                 if "Read the security policy" in t)
     before = src.read_text().splitlines()[line - 1]
-    # find that task's checkbox and click it
-    task = frame.locator('.task', has_text="Read the security policy").first
-    task.locator("input[type=checkbox]").click()
-    ok = False
-    for _ in range(15):
-        now = src.read_text().splitlines()[line - 1]
-        if now != before:
-            ok = True
-            break
-        time.sleep(0.3)
+    # Find that task's checkbox and click it. The artifact rebuilds every row
+    # on each load (and once more 1.4 s after a toggle, to reconcile with the
+    # index), so a click can land on a row that has just been replaced: take
+    # the checkbox afresh and make sure the click registered before waiting on
+    # the file.
+    # The row must be THIS run's: the artifact lists every task the account
+    # can read, and a leftover namespace on the box would otherwise put an
+    # older copy of the same sentence first. Its `.loc` carries path:line.
+    def row():
+        return frame.locator(".task", has=frame.locator(f'.loc:text-is("{doc("onboarding.md")}:{line}")')).first
+
+    def toggle_once():
+        row().locator("input[type=checkbox]").click()
+        for _ in range(15):
+            if src.read_text().splitlines()[line - 1] != before:
+                return True
+            time.sleep(0.3)
+        return False
+
+    # Every row is rebuilt on each load (and once more 1.4 s after a toggle,
+    # to reconcile with the index), so a click can land on a row that has
+    # just been replaced: one retry, then it is a real failure.
+    ok = toggle_once() or toggle_once()
     assert ok, "toggling in the todos artifact must flip the source file"
     # restore
-    task2 = frame.locator('.task', has_text="Read the security policy").first
-    task2.locator("input[type=checkbox]").click()
-    time.sleep(1.0)
+    row().locator("input[type=checkbox]").click()
+    for _ in range(15):
+        if src.read_text().splitlines()[line - 1] == before:
+            break
+        time.sleep(0.3)
     ctx.close()

@@ -614,3 +614,65 @@ def test_a_pasted_url_is_left_alone_where_it_is_content(browser):
     finally:
         cleanup([docp])
         ctx.close()
+
+
+def test_a_list_hangs_and_its_wrapped_lines_line_up(browser):
+    """A list item is one block: the marker sits in the margin, and every row
+    after it — a soft wrap, or a line the item continues onto because the file
+    is hard-wrapped — starts where the item's text starts."""
+    path = kbdoc(f"hang_{int(time.time())}.md")
+    ctx = browser.new_context(viewport={"width": 380, "height": 900})   # narrow: everything wraps
+    page = login(ctx, "alice")
+    try:
+        new_doc(page, path)
+        set_source(page,
+                   "- **Ollsoft** is the technical company that owns the source code,\n"
+                   "  the architecture and the brand, and ships every release.\n"
+                   "- One item long enough to wrap by itself on a narrow pane with no hard break at all.\n"
+                   "\n"
+                   "1. A numbered point whose text continues in the file\n"
+                   "   on the next line, indented by three spaces.\n"
+                   "\n"
+                   "- [ ] A task whose text also continues\n"
+                   "  onto the next line of the file.\n")
+        # the cursor reveals the syntax of the line it is on: park it at the end
+        page.evaluate("() => window.__kbview.dispatch({selection: {anchor: window.__kbview.state.doc.length}})")
+        page.wait_for_timeout(500)
+        rows = page.evaluate("""() => [...document.querySelectorAll('.cm-rich .cm-line')].map((l) => {
+          // from the first VISIBLE character: a line's own leading spaces are
+          // real text, and measuring them would hide the alignment
+          const r = document.createRange(); r.selectNodeContents(l);
+          const w = document.createTreeWalker(l, NodeFilter.SHOW_TEXT);
+          let n2;
+          while ((n2 = w.nextNode())) { const i = n2.data.search(/\S/); if (i >= 0) { r.setStart(n2, i); break; } }
+          // one entry per VISUAL ROW: the left edge of its leftmost fragment
+          const byTop = new Map();
+          for (const b of [...r.getClientRects()].filter((x) => x.width > 1)) {
+            const k = Math.round(b.top / 8);   // one key per visual row, not per fragment box
+            byTop.set(k, Math.min(byTop.has(k) ? byTop.get(k) : 1e9, Math.round(b.left)));
+          }
+          const marker = l.querySelector('.cm-bullet, .cm-task, .cm-olmark');
+          return {cls: l.className, txt: l.textContent.trim().slice(0, 20),
+                  markerLeft: marker ? Math.round(marker.getBoundingClientRect().left) : null,
+                  rows: [...byTop.values()]}; }).filter((r) => r.txt)""")
+        items, cur = [], None
+        for r in rows:
+            if "cm-listline" in r["cls"]:
+                cur = {"item": r, "cont": []}
+                items.append(cur)
+            elif "cm-listcont" in r["cls"] and cur:
+                cur["cont"].append(r)
+        assert len(items) == 4, rows
+        assert sum(len(i["cont"]) for i in items) == 3, rows
+        for it in items:
+            item = it["item"]
+            assert item["markerLeft"] is not None, ("the marker is rendered", item)
+            text_rows = [x for x in item["rows"] if x > item["markerLeft"]]
+            assert text_rows, item
+            assert max(text_rows) - min(text_rows) <= 2, ("an item's rows line up", item)
+            for cont in it["cont"]:
+                assert max(cont["rows"]) - min(cont["rows"]) <= 2, ("every row of a continuation", cont)
+                assert abs(min(cont["rows"]) - min(text_rows)) <= 2, ("under the item's text", cont, item)
+    finally:
+        cleanup([path])
+        ctx.close()

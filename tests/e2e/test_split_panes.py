@@ -65,7 +65,7 @@ DRAG_JS = """async ([path, targetSel, fx]) => {
 }"""
 
 LAYOUT_JS = """() => ({
-  panes: [...document.querySelectorAll('#panes > .pane')].map(p => ({
+  panes: [...document.querySelectorAll('#panes > .col > .pane')].map(p => ({
     tabs: [...p.querySelectorAll('.tab')].map(t => t.dataset.path),
     current: (p.querySelector('.tab.current') || {dataset: {}}).dataset.path || null,
     width: Math.round(p.getBoundingClientRect().width),
@@ -164,7 +164,7 @@ def test_rich_document_uses_the_whole_editor_column(browser, docs):
         page.wait_for_selector(".cm-rich .cm-content")
         w = page.evaluate("""() => ({
           content: document.querySelector('.cm-rich .cm-content').getBoundingClientRect().width,
-          column: document.querySelector('#panes > .pane .editor').getBoundingClientRect().width,
+          column: document.querySelector('#panes > .col > .pane .editor').getBoundingClientRect().width,
         })""")
         assert w["column"] > 1500, w        # the window really is wide
         assert w["content"] >= w["column"] - 20, w
@@ -186,7 +186,7 @@ def test_dragging_a_tab_to_the_edge_splits_the_editor(browser, docs):
         assert len(st["panes"]) == 1 and st["splits"] == 0, st
 
         # right edge of the only pane -> a second column, carrying that tab
-        r = page.evaluate(DRAG_JS, [one, "#panes > .pane .pane-drop", 0.9])
+        r = page.evaluate(DRAG_JS, [one, "#panes > .col > .pane .pane-drop", 0.9])
         assert r.get("ok"), r
         st = layout(page)
         assert len(st["panes"]) == 2 and st["splits"] == 1, st
@@ -199,7 +199,7 @@ def test_dragging_a_tab_to_the_edge_splits_the_editor(browser, docs):
         assert page.locator("#editor").count() == 1
 
         # middle of a pane -> move, not split
-        r = page.evaluate(DRAG_JS, [three, "#panes > .pane:last-of-type .pane-drop", 0.5])
+        r = page.evaluate(DRAG_JS, [three, "#panes > .col:last-of-type > .pane .pane-drop", 0.5])
         assert r.get("ok"), r
         st = layout(page)
         assert len(st["panes"]) == 2, st
@@ -207,7 +207,7 @@ def test_dragging_a_tab_to_the_edge_splits_the_editor(browser, docs):
         assert st["panes"][0]["tabs"] == [two], st
 
         # each pane keeps showing its OWN document
-        page.click(f'#panes > .pane:first-of-type .tab[data-path="{two}"]')
+        page.click(f'#panes > .col:first-of-type > .pane .tab[data-path="{two}"]')
         page.wait_for_timeout(300)
         st = layout(page)
         assert st["active"] == two, st
@@ -234,7 +234,7 @@ def test_split_layout_and_pane_widths_survive_a_reload(browser, docs):
         one, two, _ = docs
         open_tab(page, one)
         open_tab(page, two)
-        assert page.evaluate(DRAG_JS, [two, "#panes > .pane .pane-drop", 0.9]).get("ok")
+        assert page.evaluate(DRAG_JS, [two, "#panes > .col > .pane .pane-drop", 0.9]).get("ok")
 
         # drag the handle so the two columns are visibly unequal
         box = page.locator("#panes > .pane-split").bounding_box()
@@ -248,7 +248,7 @@ def test_split_layout_and_pane_widths_survive_a_reload(browser, docs):
 
         page.reload()
         page.wait_for_selector('[data-testid="tree"] .tree-item')
-        page.wait_for_function("() => document.querySelectorAll('#panes > .pane').length === 2",
+        page.wait_for_function("() => document.querySelectorAll('#panes > .col > .pane').length === 2",
                                timeout=15000)
         page.wait_for_timeout(500)
         after = layout(page)
