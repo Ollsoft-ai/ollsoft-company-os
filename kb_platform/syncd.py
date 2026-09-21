@@ -887,6 +887,65 @@ class SyncDaemon:
                               # so a hint with thousands of distinct fake paths can't stall
                               # the commit loop with a million subprocesses
 
+    def _can_read_as(self, user: str, rel: str, cache: dict) -> bool:
+        """Can this person open that file, right now, as the kernel sees it?
+        Asked before a notification is written: an inbox line carries a path
+        and a line of text, so telling someone about a document they cannot
+        read would be the leak, not the courtesy."""
+        key = (user, rel)
+        if key in cache:
+            return cache[key]
+        try:
+            r = subprocess.run(["/usr/sbin/runuser", "-u", user, "--",
+                                "/usr/bin/test", "-r", str(common.REPO_ROOT / rel)],
+                               capture_output=True, timeout=10)
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        cache[key] = ok
+        return ok
+
+    def _notify_mentions(self, rel: str, author: str, cache: dict) -> None:
+        """A document was just committed: tell anyone NEWLY `@named` in it.
+
+        Newly, because the names a document already had are not news — and the
+        previous version is the commit we just built on, so `git show HEAD~1`
+        answers it exactly. Stateless on purpose: an in-memory set would make
+        a new document (nothing remembered) silent, and a restart would decide
+        whether you hear about a mention or not.
+        """
+        if common.is_secret_path(rel) or common.is_trash_path(rel):
+            return
+        try:
+            text = (common.REPO_ROOT / rel).read_text(errors="replace")[:400_000]
+        except OSError:
+            return
+        now = {m.lower() for m in common.MENTION_RE.findall(text)}
+        if not now:
+            return
+        prev = subprocess.run(["git", "-C", str(common.REPO_ROOT), "show", f"HEAD~1:{rel}"],
+                              capture_output=True, text=True)
+        was = ({m.lower() for m in common.MENTION_RE.findall(prev.stdout)}
+               if prev.returncode == 0 else set())   # not in the parent commit: all of it is new
+        for name in sorted(now - was):
+            if name == (author or "").lower():
+                continue                       # mentioning yourself is not news
+            try:
+                pw = pwd.getpwnam(name)
+            except KeyError:
+                continue                       # @something that is not a person here
+            if pw.pw_uid < 1000 or pw.pw_uid >= 65000:
+                continue
+            if not self._can_read_as(name, rel, cache):
+                continue                       # …and never name a document they cannot open
+            line, quote = 0, ""
+            for i, raw in enumerate(text.splitlines(), 1):
+                if ("@" + name) in raw.lower():
+                    line, quote = i, raw.strip()[:200]
+                    break
+            common.add_inbox_event(name, {"kind": "mention", "path": rel, "line": line,
+                                          "text": quote, "actor": author or ""})
+
     def _can_write_as(self, user: str, rel: str, cache: dict) -> bool:
         # cache MUST be keyed by (user, rel): multiple users are checked against
         # the same paths in one pass, so a path-only key would let one user
@@ -986,9 +1045,9 @@ class SyncDaemon:
                 if author and common.is_versioned_path(path):
                     attrib[path] = author
 
-            def commit_one(path: str, author: str, email: str) -> None:
+            def commit_one(path: str, author: str, email: str) -> bool:
                 if common.is_secret_path(path):
-                    return
+                    return False
                 subprocess.run(["git", "-C", root, "reset", "-q"], capture_output=True)
                 # LITERAL pathspec: `path` ultimately comes from the world-writable
                 # attrib drop-box, so a name like ':(glob)**/_secret[s]/**' must be
@@ -1000,13 +1059,20 @@ class SyncDaemon:
                                env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"})
                 if subprocess.run(["git", "-C", root, "diff", "--cached", "--quiet"],
                                   capture_output=True).returncode == 0:
-                    return                                   # nothing actually staged for this path
+                    return False                             # nothing actually staged for this path
                 subprocess.run(["git", "-C", root, "-c", f"user.name={author}",
                                 "-c", f"user.email={email}", "commit", "-q",
                                 "-m", f"edit: {path}"], capture_output=True)
+                return True
 
+            rcache: dict = {}
             for path in sorted(attrib):                      # attributed, one commit each
-                commit_one(path, attrib[path], f"{attrib[path]}@kb.local")
+                if not commit_one(path, attrib[path], f"{attrib[path]}@kb.local"):
+                    continue
+                try:
+                    self._notify_mentions(path, attrib[path], rcache)
+                except Exception:                            # noqa: BLE001 — never break a commit
+                    log.debug("mention notify failed for %s", path, exc_info=True)
             # the unattributed remainder — never lose history over missing
             # attribution. Sweep is one commit; its subject is generic and its
             # file list is permission-filtered by the activity endpoint.

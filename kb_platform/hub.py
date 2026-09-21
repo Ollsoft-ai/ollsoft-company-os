@@ -352,6 +352,13 @@ def _owner_name(path: Path) -> str | None:
         return None
 
 
+def _share_kind_label(rel: str) -> str:
+    p = common.REPO_ROOT / rel
+    if p.is_dir():
+        return "folder"
+    return "artifact" if rel.endswith(".html") else "document" if rel.endswith(".md") else "file"
+
+
 def _owns_or_admin(path: Path, user: str) -> bool:
     return _owner_name(path) == user or _is_admin(user)
 
@@ -2371,6 +2378,23 @@ class Hub:
         _audit("share.set", user, path=rel, scope=res["scope"],
                group=res.get("group", ""), forked=bool(res.get("forked")),
                regrouped=res.get("regrouped", 0))
+        # …and tell the people it was shared WITH. Only named people, only a
+        # widening, never the person doing the sharing, never a secret (whose
+        # existence is the owner's to disclose), and best-effort throughout:
+        # a notification must not be able to fail a grant that already landed.
+        try:
+            if not common.is_secret_path(rel):
+                # `share_with` is [("u", name)] for people and [("g", group)]
+                # for a group: a group is a standing audience, not an event,
+                # so only the named people are told.
+                for kind, who in (res.get("share_with") or []):
+                    if kind != "u" or who in (user, INDEXER_USER):
+                        continue
+                    common.add_inbox_event(who, {
+                        "kind": "share", "path": rel, "actor": user,
+                        "text": _share_kind_label(rel), "line": 0})
+        except Exception:   # noqa: BLE001
+            log.debug("share notify failed for %s", rel, exc_info=True)
         return web.json_response({
             "ok": True, "scope": res["scope"], "group": res.get("group", ""),
             "forked": bool(res.get("forked")), "restarted": changed,

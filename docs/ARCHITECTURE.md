@@ -439,6 +439,20 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   them as ACP `resource_link` blocks and the folder goes in `session/new`.
   The picker behind ＋ is `pickPath()` in `app.js` — the palette's shape, but
   it returns a path. See [agent-chat.md](agent-chat.md).
+- **The inbox: what happened while you were elsewhere.** One append-only file
+  per person, `users/<u>/.os/inbox.jsonl`, written by whichever root process
+  actually saw the event — syncd when a document you were newly `@named` in
+  is committed (it diffs the names against `HEAD~1`, so a name that was
+  already there is not an event and a restart changes nothing), the hub when
+  something is shared with you by name (a group is a standing audience, not
+  news). Both check first that you can READ the thing: an inbox line carries
+  a path and a line of text, so telling you about a document you cannot open
+  would be the leak, not the courtesy. A secret never notifies at all.
+  The app only reads the file and marks lines read (`GET /api/inbox`,
+  `POST /api/inbox/read`): a dot on the person, a count beside **Inbox** in
+  their ⋯ menu, and a list whose rows open the document at the line. A file
+  rather than a table because everything else here is a file — an agent can
+  read it, the backup already covers it, nothing has to migrate.
 - **A path is a link, however it is written.** `/company/notes.md` has always
   been a route; `/srv/kb/company/notes.md` — the path an agent prints, and
   what people paste after the host — now redirects onto it (`abs_deep_link`

@@ -1739,6 +1739,30 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
    comes back. Deliberately quiet — no red bin, no shouting: the row under
    the tree appears only when something is in it, and "Delete for good" is
    the only control that takes the danger colour, on hover. */
+/* the inbox: a list of what happened, and the one dot that says so */
+.inbox-n { margin-left: auto; font-family: var(--mono); font-size: .7rem; color: var(--accent); }
+.inbox-n:empty { display: none; }
+.user-btn.has-news .avatar::after { content: ""; position: absolute; right: -1px; top: -1px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel); }
+.inbox-list { display: flex; flex-direction: column; gap: 1px; padding: .2rem var(--content-x) 2rem;
+  max-width: 52rem; margin: 0 auto; }
+.inbox-item { display: flex; align-items: flex-start; gap: .6rem; width: 100%; text-align: left;
+  padding: .55rem .55rem; border: 0; border-left: 2px solid transparent; border-radius: var(--r);
+  background: transparent; color: var(--muted); font: inherit; cursor: pointer; min-width: 0; }
+.inbox-item:hover { background: var(--panel2); }
+.inbox-item.unread { border-left-color: var(--accent); }
+.inbox-item.unread .inbox-line { color: var(--ink); font-weight: 500; }
+.inbox-ic { flex: 0 0 auto; color: var(--faint); display: inline-flex; padding-top: .1rem; }
+.inbox-ic .icon { width: 16px; height: 16px; }
+.inbox-body { flex: 1 1 auto; min-width: 0; }
+.inbox-line { font-size: .88rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-quote { font-size: .8rem; color: var(--muted); margin-top: .15rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--sans); }
+.inbox-when { font-size: .72rem; color: var(--faint); margin-top: .15rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-clear { margin-left: auto; }
+
 /* the count beside "Trash" in the user menu: there is something in it */
 .trash-row-n { margin-left: auto; font-family: var(--mono); font-size: .7rem; color: var(--faint); }
 .trash-row-n:empty { display: none; }

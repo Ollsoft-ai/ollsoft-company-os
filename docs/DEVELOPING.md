@@ -155,15 +155,11 @@ buttons in the chrome go into a named slot (`slot("topbar")`).
 These were designed during the build (some deliberately deferred) and are the
 natural next steps.
 
-- **Notifications.** An append-only inbox per person,
-  `users/<u>/.os/inbox.jsonl`, written by the processes that already see the
-  event: the indexer for a new `@mention` of a real account (it already scans
-  for them with `ASSIGNEE_RE`), the backend for a share, cron for a job that
-  failed, the ACP bridge for an agent that finished while you were away. A
-  dot on the person's ⋯, an Inbox view, and the SSE channel that already
-  exists to push them live. A file rather than a table because everything
-  else here is a file: agents can read it, backup already covers it, and no
-  schema has to migrate.
+- **More kinds of notification.** The inbox is built (mentions and shares —
+  see [ARCHITECTURE.md](ARCHITECTURE.md)); what is not written yet is a cron
+  job that failed, an agent that finished while you were away, and a public
+  share that was opened or edited. Each is one `common.add_inbox_event` call
+  in the process that already knows.
 - **Comments, as Markdown.** A comment is a callout block written into the
   document right after what it comments on — `> [!note] @krystof · 21 Sep` —
   rendered as a quiet card by the rich editor, with Reply (a nested callout)
