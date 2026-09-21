@@ -3010,20 +3010,29 @@ class Hub:
                         pass
 
                 async def pump(src, dst, is_server_side):
-                    async for msg in src:
-                        if msg.type == WSMsgType.TEXT:
-                            await dst.send_str(msg.data)
-                        elif msg.type == WSMsgType.BINARY:
-                            await dst.send_bytes(msg.data)
-                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING,
-                                          WSMsgType.CLOSED, WSMsgType.ERROR):
-                            break
+                    try:
+                        async for msg in src:
+                            if msg.type == WSMsgType.TEXT:
+                                await dst.send_str(msg.data)
+                            elif msg.type == WSMsgType.BINARY:
+                                await dst.send_bytes(msg.data)
+                            elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING,
+                                              WSMsgType.CLOSED, WSMsgType.ERROR):
+                                break
+                    except (aiohttp.ClientError, ConnectionResetError):
+                        pass      # the far side went while a frame was in flight
 
                 t1 = asyncio.create_task(pump(server_ws, client_ws, True))
                 t2 = asyncio.create_task(pump(client_ws, server_ws, False))
                 done, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
                 for t in pending:
                     t.cancel()
+                # …and read what the finished one left, or the loop prints the
+                # closed-socket traceback at collection time: a tab closing
+                # mid-stream read as an error in the journal every day.
+                for t in done:
+                    if not t.cancelled() and t.exception() is not None:
+                        log.debug("ws pump ended: %s", t.exception())
         except aiohttp.ClientError:
             pass
         if not server_ws.closed:
