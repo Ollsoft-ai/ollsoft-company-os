@@ -2378,6 +2378,16 @@ class Hub:
         _audit("share.set", user, path=rel, scope=res["scope"],
                group=res.get("group", ""), forked=bool(res.get("forked")),
                regrouped=res.get("regrouped", 0))
+        # Changing who may open something rewrites its ACLs, which drops the
+        # entry a public link depends on (it happened the first evening this
+        # existed). Put it back at once rather than waiting for the sweep.
+        try:
+            for row in publicshare.covering(rel):
+                if publicshare.regrant(row):
+                    log.info("public share %s re-granted after a share change on %s",
+                             row["id"], rel)
+        except Exception:   # noqa: BLE001 — never fail a grant that landed
+            log.debug("public re-grant failed after %s", rel, exc_info=True)
         # …and tell the people it was shared WITH. Only named people, only a
         # widening, never the person doing the sharing, never a secret (whose
         # existence is the owner's to disclose), and best-effort throughout:

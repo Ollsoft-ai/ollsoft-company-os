@@ -236,6 +236,18 @@ def revoke(sid: str) -> dict | None:
     return _pub(row)
 
 
+def covering(rel: str) -> list[dict]:
+    """The live shares affected by a change at this path — the share itself,
+    one above it, or ones below it."""
+    rel = rel.strip("/")
+    out = []
+    for row in _read():
+        p = row["path"]
+        if p == rel or rel.startswith(p + "/") or p.startswith(rel + "/"):
+            out.append(row)
+    return out
+
+
 def listing(user: str | None = None) -> list[dict]:
     rows = _read()
     if user is not None:
@@ -247,9 +259,33 @@ def get(sid: str) -> dict | None:
     return next((r for r in _read() if r["id"] == sid), None)
 
 
+def regrant(row: dict) -> bool:
+    """Put the container's ACL entry back if something took it away.
+
+    It happens: the platform rewrites a folder's ACLs whenever its audience
+    changes, an agent runs setfacl, a backup is restored. The entry is the
+    only thing standing between a live link and a 404, and re-stating it is
+    idempotent — so the sweep does it on every pass rather than trusting that
+    nothing else ever touches the tree. Returns True if it was missing.
+    """
+    p = common.REPO_ROOT / row["path"]
+    if not p.exists():
+        return False
+    try:
+        r = _run("/usr/bin/getfacl", "-p", "-c", str(p))
+        had = f"user:{SHARE_USER}:" in (r.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        had = False
+    if had:
+        return False
+    grant(p, row.get("kind", "file"), row.get("mode", "view"))
+    return True
+
+
 def sweep() -> list[str]:
-    """Take down what has expired, and re-mount what should be up (a reboot
-    empties the mount table). Returns human-readable lines for the log."""
+    """Take down what has expired, put back what a reboot dropped, and
+    re-state the ACL every live share depends on. Human-readable lines for
+    the log."""
     out = []
     now = time.time()
     keep = []
@@ -276,6 +312,11 @@ def sweep() -> list[str]:
                 out.append(f"remounted {row['id']} ({row['path']})")
             except OSError as e:
                 out.append(f"could not remount {row['id']}: {e}")
+        try:
+            if regrant(row):
+                out.append(f"re-granted {row['id']} ({row['path']}) — its ACL had been rewritten")
+        except (OSError, subprocess.SubprocessError) as e:
+            out.append(f"could not re-grant {row['id']}: {e}")
         keep.append(row)
     if len(keep) != len(_read()):
         _write(keep)
