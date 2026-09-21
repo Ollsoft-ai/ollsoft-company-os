@@ -687,9 +687,8 @@ def _trash_payload(entry: Path, meta: dict) -> Path | None:
 
 
 async def fs_trash(request: web.Request) -> web.Response:
-    """What is in the trash, newest first — and the sweep: an entry older than
-    the keep window goes for good the first time anyone looks."""
-    cutoff = time.time() - common.TRASH_KEEP_DAYS * 86400
+    """What is in the trash, newest first. Nothing is swept on a timer: what
+    you deleted stays until someone empties it."""
     items = []
     for domain in _trash_domains():
         d = _trash_dir(domain)
@@ -703,16 +702,13 @@ async def fs_trash(request: web.Request) -> web.Response:
             if meta is None:
                 continue
             when = int(meta.get("deletedAt") or 0)
-            if when and when < cutoff:
-                shutil.rmtree(entry, ignore_errors=True)
-                continue
             items.append({"id": domain + "/" + eid, "path": meta["path"],
                           "name": meta.get("name") or os.path.basename(meta["path"]),
                           "dir": bool(meta.get("dir")), "deletedAt": when,
                           "deletedBy": meta.get("deletedBy") or "", "domain": domain,
                           "gone": _trash_payload(entry, meta) is None})
     items.sort(key=lambda x: x["deletedAt"], reverse=True)
-    return web.json_response({"entries": items, "keepDays": common.TRASH_KEEP_DAYS})
+    return web.json_response({"entries": items})
 
 
 async def fs_restore(request: web.Request) -> web.Response:

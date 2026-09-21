@@ -237,7 +237,7 @@ ollsoft-company-os/
 /opt/kb-convert-venv  kb-convert's parser venv — heavy deps, kept separate on purpose
 /srv/kb               the knowledgebase: git repo of markdown + attachments
 /srv/kb/.os/          platform config in the repo: launchers, egress allow-list, company settings
-/srv/kb/*/.trash/     deleted files, kept 30 days (one per area, project and person)
+/srv/kb/*/.trash/     deleted files, kept until emptied (one per area, project and person)
 /etc/kb/kb.env        runtime configuration read by the systemd units
 /etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it
 /etc/kb/session.key   HMAC key (root 0600)

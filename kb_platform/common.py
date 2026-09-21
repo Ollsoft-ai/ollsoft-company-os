@@ -517,7 +517,9 @@ def write_attrib_hint(op: str, *rel_paths: str) -> None:
 # hides it, the indexer skips it and search never turns up a deleted document
 # — while an agent with a shell can read it like any other folder.
 TRASH_DIRNAME = ".trash"
-TRASH_KEEP_DAYS = 30
+# Nothing in the trash is ever removed on a timer: a knowledgebase that
+# quietly eats what you deleted a month ago is worse than a folder that grows.
+# It empties when someone empties it (krystof, 2026-09-21).
 
 
 def trash_domain(rel: str) -> str | None:

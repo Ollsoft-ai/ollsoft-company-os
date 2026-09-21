@@ -238,9 +238,9 @@ it can only show what the caller could already open.
   `company/` — nobody sees anything they could not see a moment earlier, and
   the people who could delete it are exactly the people who can restore it.
   A `_secrets/` file is deleted outright instead: a readable copy sitting in
-  a trash for thirty days is precisely the exposure `_secrets/` exists to
-  prevent. The sweep is lazy (the first listing after the keep window), so a
-  box nobody opens keeps its deleted files until someone looks.
+  a trash indefinitely is precisely the exposure `_secrets/` exists to
+  prevent — and nothing in the trash expires on its own, so "indefinitely" is
+  the literal word.
 - **`kb-convert` parses untrusted binaries.** Anything a user uploads (docx,
   pptx, xlsx, pdf) is fed to third-party parsers. It runs as the non-root
   `kbindexer` in its own venv with a memory cap, so a parser exploit is

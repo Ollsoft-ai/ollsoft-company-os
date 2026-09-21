@@ -286,10 +286,11 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   who deleted it and when. Nothing is copied, so a folder of any size goes in
   an instant and its ACLs travel with it; nothing crosses a permission
   boundary, so the people who could delete it are the people who can put it
-  back. The toast that follows carries an Undo, the person's ⋯ menu holds
-  **Trash** (with a count) and its view restores or deletes for good, and an
-  entry older than `common.TRASH_KEEP_DAYS` (30) is swept the first time
-  anyone opens the list. `.trash/` is a dot-directory, so the tree hides it,
+  back. The toast that follows carries an Undo, and the person's ⋯ menu holds
+  **Trash** (with a count) whose view restores or deletes for good. **Nothing
+  is swept on a timer**: a knowledgebase that quietly eats what you deleted a
+  month ago is worse than a folder that grows, so the trash empties only when
+  someone empties it. `.trash/` is a dot-directory, so the tree hides it,
   the indexer skips it and a deleted document leaves search — while an agent
   with a shell reads it like any other folder. Two things are still deleted
   outright, with the old red question: a secret (a copy of one lingering for

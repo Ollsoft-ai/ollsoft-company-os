@@ -22,7 +22,7 @@ This is good news: you can act freely and safely. The worst you can do is limite
 ├── users/<you>/      your own private space (only you can read it)
 │   └── .os/settings.json   your settings (see the kb-settings skill)
 ├── .os/              platform config: pinned items (launchers.json), egress allow-list, company settings.json
-├── .trash/           deleted things, waiting 30 days: one folder per entry with
+├── .trash/           deleted things, kept until someone empties it: one folder per entry with
 │                     meta.json (where it came from, who, when) beside the file.
 │                     One in company/, in each project and in each person's folder
 └── .git/             version history — 0700 root-only, you cannot read it

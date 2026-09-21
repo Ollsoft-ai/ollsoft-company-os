@@ -5100,7 +5100,7 @@ function paintTrash(t, data) {
   if (!host) return;
   const note = t.el.querySelector(".trash-note");
   if (!data) { host.textContent = ""; host.append(el2("div", "trash-empty muted", "Could not read the trash.")); return; }
-  if (note) note.textContent = "Deleted things wait here for " + (data.keepDays || 30) + " days, then go for good.";
+  if (note) note.textContent = "Nothing here is removed on its own — it waits until you empty it.";
   const empty = t.el.querySelector(".trash-empty-btn");
   if (empty) empty.hidden = !(data.entries || []).length;
   host.textContent = "";
