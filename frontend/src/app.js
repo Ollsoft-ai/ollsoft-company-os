@@ -6953,7 +6953,12 @@ function shWho(a) {
 async function wirePublicShare(host, s) {
   if (!host) return;
   const secret = !!s.secret;
-  const paint = (shares, base) => {
+  // `share.url` from the server is already whole when the box knows its own
+  // public address (KB_SHARE_BASE), and a bare path when it does not — either
+  // way it is the URL, not a piece of one. Prefixing it produced
+  // "https://share.example.orghttps://share.example.org/s/…" the moment the
+  // address was configured (2026-09-22).
+  const paint = (shares) => {
     host.textContent = "";
     if (secret) {
       host.append(el2("div", "muted", "A secret is never put on the internet."));
@@ -7005,7 +7010,7 @@ async function wirePublicShare(host, s) {
         j = await r.json().catch(() => ({}));
         if (!r.ok) { kbToast(j.error || "could not create the link", "err"); go.disabled = false; return; }
       } catch (e) { kbToast("could not reach the server", "err"); go.disabled = false; return; }
-      showLinkOnce(host, (base || "") + j.share.url, load);
+      showLinkOnce(host, j.share.url, load);
     });
     form.append(el2("span", "muted", "Anyone with the link"), mode, days,
                 el2("span", "muted", "days"), pw, go);
@@ -7015,8 +7020,8 @@ async function wirePublicShare(host, s) {
     try {
       const r = await fetch("/fs/public");
       const j = r.ok ? await r.json() : { shares: [] };
-      paint(j.shares, j.base);
-    } catch (e) { paint([], ""); }
+      paint(j.shares);
+    } catch (e) { paint([]); }
   };
   load();
 }

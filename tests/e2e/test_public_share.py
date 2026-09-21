@@ -43,7 +43,11 @@ def test_a_link_mounts_the_thing_and_revoking_takes_it_away():
     try:
         assert sh["mode"] == "view" and sh["by"] == U("alice") and not sh["password"]
         assert 2 * 86400 < sh["expires"] - time.time() <= 3 * 86400
-        assert sh["url"].startswith("/s/") and len(sh["url"].split("/")[-1]) >= 20
+        # whole when the box knows its public address, a bare path when not —
+        # and never both glued together
+        base = a.get("/fs/public").json().get("base") or ""
+        assert sh["url"] == f"{base}/s/{sh['id']}/" + sh["url"].split("/")[-1], sh["url"]
+        assert len(sh["url"].split("/")[-1]) >= 20 and sh["url"].count("/s/") == 1
         # the container sees exactly one file, under the share's id, and the
         # content is the real thing (a bind mount, not a copy)
         served = f"{PUB}/data/{sh['id']}/{os.path.basename(path)}"
@@ -129,6 +133,11 @@ def test_the_panel_offers_a_link_and_shows_it_once(browser):
         page.click('[data-testid="sh-public-create"]')
         url = page.input_value('[data-testid="sh-public-url"]')
         assert "/s/" in url and len(url.split("/")[-1]) >= 20, url
+        # …and exactly once: the server's url is whole, so prefixing the base
+        # again produced "https://hosthttps://host/s/…" (2026-09-22)
+        assert url.count("/s/") == 1 and url.count("://") <= 1, url
+        base = a.get("/fs/public").json().get("base") or ""
+        assert url.startswith(base) and url[len(base):].startswith("/s/"), (base, url)
         sid = url.split("/s/")[1].split("/")[0]
         page.click('.sh-public-acts button:has-text("Done")')
         row = page.locator('[data-testid="sh-public-row"]')
