@@ -887,6 +887,42 @@ def test_the_plus_is_reachable_on_a_phone(browser):
         ctx.close()
 
 
+def test_the_phone_composer_stays_a_column_with_the_keyboard_up(browser):
+    """A soft keyboard halves the viewport, which makes the chat view
+    `.short` — the one-row composer. On a finger that put the text beside the
+    buttons exactly while you were typing into it; the column is the phone's
+    layout whatever the height, and it grows upward as the message does."""
+    ctx = browser.new_context(viewport={"width": 390, "height": 420}, is_mobile=True,
+                              has_touch=True, device_scale_factor=3)
+    page = ctx.new_page()
+    page.goto(BASE + "/login")
+    page.fill('input[name="username"]', U("alice"))
+    page.fill('input[name="password"]', CREDS["alice"])
+    page.click('button[type="submit"]')
+    page.wait_for_url(BASE + "/")
+    page.wait_for_selector('[data-testid="tree"] .tree-item')
+    try:
+        page.evaluate("() => window.__kbopenview('chat', {agent: 'echo'})")
+        vis = "(sel) => { const e = document.querySelector(sel); return !!e && e.offsetParent !== null; }"
+        page.wait_for_function("() => ['[data-testid=\"chat-picker\"]', '[data-testid=\"chat-input\"]'].some(" + vis + ")", timeout=20000)
+        if page.locator('[data-testid="chat-start-echo"]').count():
+            page.click('[data-testid="chat-start-echo"]')
+        page.wait_for_function("() => (" + vis + ")('[data-testid=\"chat-input\"]')", timeout=20000)
+        page.wait_for_function("() => document.querySelector('.chat-view.short')", timeout=8000)
+        page.fill('[data-testid="chat-input"]', "one\ntwo\nthree\nfour")
+        page.wait_for_timeout(250)
+        m = page.evaluate("""() => {
+          const b = (s) => { const r = document.querySelector(s).getBoundingClientRect();
+            return {x: r.x, y: r.y, w: r.width, bottom: r.bottom}; };
+          return {dir: getComputedStyle(document.querySelector('.chat-box')).flexDirection,
+                  input: b('.chat-input'), left: b('.chat-box-left'), box: b('.chat-box')}; }""")
+        assert m["dir"] == "column", m
+        assert m["input"]["bottom"] <= m["left"]["y"] + 2, m       # controls under the text
+        assert m["input"]["w"] > m["box"]["w"] * 0.85, m           # text spans the box
+    finally:
+        ctx.close()
+
+
 def test_the_phone_composer_stacks_its_rows(browser):
     """On a finger the message box is a column: context chips, then any
     attachment, then the text at full width, then the controls. It was one

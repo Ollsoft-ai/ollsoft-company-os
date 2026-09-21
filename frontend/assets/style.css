@@ -2118,12 +2118,19 @@ button.chat-tool-sum:hover { color: var(--ink); }
    mic · send) that grows into two only when the text wraps (ChatGPT's phone
    composer). A class the view sets, not a height container query: see the
    note on .tab-content.chat above. */
-.chat-view.short .chat-box { flex-direction: row; flex-wrap: wrap; align-items: flex-end; padding: .3rem .4rem .3rem .45rem; gap: .2rem; }
-.chat-view.short .chat-box-row { display: contents; }
-.chat-view.short .chat-box-left { order: -1; flex: 0 0 auto; }
-/* basis 0, not auto: with the box wrapping, a textarea whose basis is its
-   own content pushes itself onto a line of its own the moment you type */
-.chat-view.short .chat-input { flex: 1 1 0; min-width: 5rem; min-height: 34px; max-height: 96px; padding: .45rem .2rem; }
+/* …with a mouse only. On a phone the soft keyboard makes EVERY chat short,
+   and the one-row form would put the text beside the buttons exactly while
+   you are typing into it. A finger keeps the column, which grows upward as
+   the message does (2026-09-21). */
+@media (pointer: fine) {
+  .chat-view.short .chat-box { flex-direction: row; flex-wrap: wrap; align-items: flex-end; padding: .3rem .4rem .3rem .45rem; gap: .2rem; }
+  .chat-view.short .chat-box-row { display: contents; }
+  .chat-view.short .chat-box-left { order: -1; flex: 0 0 auto; }
+  /* basis 0, not auto: with the box wrapping, a textarea whose basis is its
+     own content pushes itself onto a line of its own the moment you type */
+  .chat-view.short .chat-input { flex: 1 1 0; min-width: 5rem; min-height: 34px; max-height: 96px; padding: .45rem .2rem; }
+  .chat-view.short .chat-ctx, .chat-view.short .chat-attach { flex: 1 0 100%; min-width: 0; }
+}
 .chat-view.short .chat-plan { display: none; }
 .chat-view.short .chat-head { min-height: 38px; padding-top: .2rem; padding-bottom: .2rem; }
 .chat-view.short .chat-agent-chip-mode { display: none; }
@@ -2147,7 +2154,6 @@ button.chat-tool-sum:hover { color: var(--ink); }
 @media (pointer: coarse) {
   .chat-ctx, .chat-attach { flex: 1 0 100%; min-width: 0; }
 }
-.chat-view.short .chat-ctx, .chat-view.short .chat-attach { flex: 1 0 100%; min-width: 0; }
 
 /* a touch screen: the same one row always (ChatGPT's phone composer) — the
    text grows upward beside the buttons, which stay on the bottom line */
@@ -2173,6 +2179,8 @@ button.chat-tool-sum:hover { color: var(--ink); }
   .chat-round .icon { width: 21px; height: 21px; }
   .chat-send.stop { background: var(--panel2); color: var(--ink); }
   .chat-input { min-height: 40px; max-height: 40vh; padding: .5rem .2rem .35rem; }
+  .chat-view.short .chat-input { max-height: 30vh; }
+  .chat-view.short .chat-box { padding: .5rem .5rem .45rem .8rem; }
 }
 
 /* ── the first screen: agents, sign-in, recent chats ─────────────────────── */
