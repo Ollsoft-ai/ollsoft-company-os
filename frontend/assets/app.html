@@ -20,38 +20,63 @@
   <link rel="stylesheet" href="/static/style.css?v=1784984673475" />
   <link rel="stylesheet" href="/static/xterm.css?v=1784984673475" />
 </head>
-<body>
+<body class="app">
   <header class="topbar">
-    <button id="nav-btn" class="navbtn" data-testid="nav-btn" aria-label="Toggle file tree" title="Files">☰</button>
+    <button id="nav-btn" class="navbtn" data-testid="nav-btn" aria-label="Toggle file tree" title="Files (Alt+B)">☰</button>
     <span class="brand">
       <span class="brand-word"><img class="logo-word" src="/brand/logo" alt="" /><small data-brand="name">Company OS</small></span>
     </span>
     <span class="spacer"></span>
+    <!-- everything on the right of the bar is a slot modules may add to; the
+         agent chat is the first (Alt+C) -->
+    <span id="topbar-actions" class="topbar-actions">
+      <!-- (module slot: the chat is reached from the sidebar's Chats section) -->
+    </span>
   </header>
-  <div id="launchbar" class="launchbar" data-testid="launchbar"></div>
+  <!-- a desktop with the file panel collapsed keeps its two global controls
+       in the top-left corner, over the first strip -->
+  <div id="corner" class="corner" aria-label="Files and chat">
+    <button id="corner-nav" class="navbtn" title="Show files (Alt+B)" aria-label="Show file tree">☰</button>
+    <button class="navbtn chat-btn" title="New chat (Alt+C)" aria-label="New chat"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg></button>
+  </div>
   <div id="scrim" class="scrim" aria-hidden="true"></div>
   <main class="layout">
     <aside class="sidebar">
       <!-- the search: a button that opens the palette (Ctrl/Cmd+K) — it never takes text -->
       <button id="search" class="search" data-testid="search" aria-haspopup="dialog"
               aria-label="Search files and contents" title="Search files and contents"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.4" y2="16.4"/></svg><span id="search-label">Search…</span><kbd id="search-kbd" class="search-kbd" hidden></kbd></button>
-      <div class="pane-title">Files
-        <button id="tree-fold" class="mini" data-testid="tree-fold" title="Collapse all folders">⊟</button>
-        <button id="hidden-toggle" class="mini" data-testid="hidden-toggle"
-          title="Show hidden files and folders (names starting with a dot)">.*</button>
+      <!-- chats and files scroll as ONE list: the chats are not a fixed
+           block pinned above a scrolling tree -->
+      <div class="sb-scroll" data-testid="sb-scroll">
+        <!-- pinned: the ways in you chose — a file, a folder, a command —
+             rows like every other row, not a strip of pills -->
+        <div id="pins-title" class="pane-title pins-title" hidden>Pinned</div>
+        <div id="pins" class="pins" data-testid="pins" hidden></div>
+        <!-- chats: the agent conversations, first-class beside the files — a
+             new one here, the recent ones to come back to (claude.ai's Recents,
+             ChatGPT's list); on a desktop this is where "New chat" lives -->
+        <div class="pane-title chats-title">Chats
+          <button id="chats-new" class="mini chats-new" data-testid="chat-new" title="New chat (Alt+C)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg><span>New</span></button>
+        </div>
+        <div id="chats" class="chats" data-testid="chats" hidden></div>
+        <div class="pane-title">Files
+          <button id="tree-fold" class="mini" data-testid="tree-fold" title="Collapse all folders">⊟</button>
+          <button id="hidden-toggle" class="mini" data-testid="hidden-toggle"
+            title="Show hidden files and folders (names starting with a dot)">.*</button>
+        </div>
+        <div id="tree" class="tree" data-testid="tree"></div>
       </div>
-      <div id="tree" class="tree" data-testid="tree"></div>
-      <!-- phones have no launcher bar; the chips live here, above the person -->
-      <div id="menu-launchers" class="menu-launchers" data-testid="menu-launchers"></div>
       <!-- The person, bottom left, as every workspace app does it. Everything
            that used to crowd the top bar is one click behind this button:
-           settings, admin, cron, terminal, dictation history, shortcuts, sign
-           out. The ids and testids are the old ones — only the home moved. -->
+           settings, pinned items, admin, cron, terminal, dictation history,
+           shortcuts, sign out. The ids and testids are the old ones — only the home moved. -->
       <div class="sb-foot">
         <nav id="user-menu" class="user-menu" data-testid="user-menu" role="menu" hidden>
           <div class="menu-id"><span id="whoami" data-testid="whoami" title="Everything here runs as your OS account">…</span></div>
           <button id="settings-btn" data-testid="settings-btn" role="menuitem"
                   title="Settings — theme and preferences"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span class="btn-label">Settings</span></button>
+          <button id="pins-btn" data-testid="pins-btn" role="menuitem"
+                  title="Pinned items — files, folders and commands in the sidebar"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><line x1="12" y1="15" x2="12" y2="21"/></svg><span class="btn-label">Pinned items</span></button>
           <button id="admin-btn" data-testid="admin-btn" role="menuitem" hidden
                   title="Admin — users, groups, network"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 4.5 5.5v5c0 4.6 3.2 8.9 7.5 10 4.3-1.1 7.5-5.4 7.5-10v-5z"/><polyline points="9 12 11 14 15 10"/></svg><span class="btn-label">Admin</span></button>
           <button id="cron-btn" data-testid="cron-btn" role="menuitem"
@@ -126,39 +151,35 @@
              selectors (and deep links into the app) keep working. -->
         <div id="panes" class="panes" data-testid="panes"></div>
       </section>
-      <div id="terminal-panel" class="terminal-panel" hidden>
-        <div id="term-resizer" class="term-resizer" title="Drag to resize"></div>
-        <div class="term-header">
-          <div id="term-tabs" class="term-tabs" data-testid="term-tabs"></div>
-          <button id="term-new" class="mini" data-testid="term-new" title="New terminal">＋</button>
-          <span class="spacer"></span>
-          <span id="term-hint" class="muted small term-hint"></span>
-          <span class="muted small">shell as <span id="term-user"></span></span>
-          <button id="term-max" class="mini term-max-btn" data-testid="term-max" title="Toggle full screen / half">⤢</button>
-          <button id="term-hide" class="mini" data-testid="term-hide" title="Hide panel — terminals keep running (Ctrl+`)">▾</button>
-        </div>
-        <div id="terminal" data-testid="terminal"></div>
-        <div id="term-keys" class="term-keys" data-testid="term-keys">
-          <button data-k="mic" id="tk-mic" title="Dictate into this terminal">🎤</button>
-          <button data-k="esc" title="Escape">esc</button>
-          <button data-k="tab" title="Tab">tab</button>
-          <button data-k="stab" title="Shift+Tab">⇧tab</button>
-          <button data-k="ctrl" id="tk-ctrl" title="Ctrl — arms the next key you type">ctrl</button>
-          <button data-k="cc" title="Interrupt (Ctrl+C)">^C</button>
-          <button data-k="left" title="Left">←</button>
-          <button data-k="down" title="Down">↓</button>
-          <button data-k="up" title="Up">↑</button>
-          <button data-k="right" title="Right">→</button>
-          <button data-k="top" title="Jump to the oldest output kept">⤒</button>
-          <button data-k="live" id="tk-live" title="Back to the live output">⤓</button>
-          <button data-k="copy" title="Copy the terminal selection">copy</button>
-          <button data-k="paste" title="Paste from the clipboard">paste</button>
-          <button data-k="fminus" title="Smaller text">A−</button>
-          <button data-k="fplus" title="Bigger text">A＋</button>
-        </div>
+      <!-- The dock: a group like every other (the same strip, the same
+           actions), only its place is the bottom (or a side) of the editor
+           area. It keeps its historic ids. -->
+      <div id="terminal-panel" class="terminal-panel pane" hidden>
+        <div id="term-tabs" class="term-tabs tabbar" data-testid="term-tabs"></div>
+        <div id="terminal" class="editor" data-testid="terminal"></div>
       </div>
     </section>
   </main>
+  <!-- the touch keybar: the keys a phone keyboard doesn't have, under
+       whichever group shows a terminal -->
+  <div id="term-keys" class="term-keys" data-testid="term-keys">
+    <button data-k="mic" id="tk-mic" title="Dictate into this terminal">🎤</button>
+    <button data-k="esc" title="Escape">esc</button>
+    <button data-k="tab" title="Tab">tab</button>
+    <button data-k="stab" title="Shift+Tab">⇧tab</button>
+    <button data-k="ctrl" id="tk-ctrl" title="Ctrl — arms the next key you type">ctrl</button>
+    <button data-k="cc" title="Interrupt (Ctrl+C)">^C</button>
+    <button data-k="left" title="Left">←</button>
+    <button data-k="down" title="Down">↓</button>
+    <button data-k="up" title="Up">↑</button>
+    <button data-k="right" title="Right">→</button>
+    <button data-k="top" title="Jump to the oldest output kept">⤒</button>
+    <button data-k="live" id="tk-live" title="Back to the live output">⤓</button>
+    <button data-k="copy" title="Copy the terminal selection">copy</button>
+    <button data-k="paste" title="Paste from the clipboard">paste</button>
+    <button data-k="fminus" title="Smaller text">A−</button>
+    <button data-k="fplus" title="Bigger text">A＋</button>
+  </div>
   <!-- Recording indicator. A fixed overlay, not something inline: dictation runs
        while focus is in the editor or the terminal, and the state has to stay
        visible wherever you are looking. -->

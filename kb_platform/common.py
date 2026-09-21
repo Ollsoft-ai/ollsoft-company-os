@@ -173,7 +173,7 @@ def open_pinned(path, is_dir: bool) -> int | None:
 
 
 def validate_launchers(data) -> tuple[list | None, str | None]:
-    """Validate a {"buttons": [...]} launcher list (company or personal).
+    """Validate a {"buttons": [...]} pinned list (company or personal).
     Returns (clean_buttons, None) or (None, error). A button opens a repo file
     or types a command into a fresh terminal AS the clicking user, so the only
     server-side concerns are shape, size and single-line-ness."""
@@ -191,10 +191,10 @@ def validate_launchers(data) -> tuple[list | None, str | None]:
         label = str(b.get("label", "")).strip()
         kind = b.get("kind")
         target = str(b.get("target", "")).strip()
-        if not 1 <= len(label) <= 24 or any(ord(c) < 32 for c in label):
-            return None, "label must be 1-24 printable characters"
-        if kind not in ("file", "term"):
-            return None, "kind must be 'file' or 'term'"
+        if not 1 <= len(label) <= 48 or any(ord(c) < 32 for c in label):
+            return None, "label must be 1-48 printable characters"
+        if kind not in ("file", "folder", "term"):
+            return None, "kind must be 'file', 'folder' or 'term'"
         if not 1 <= len(target) <= 300 or any(ord(c) < 32 for c in target):
             return None, "target must be one line of at most 300 characters"
         out.append({"label": label, "kind": kind, "target": target})

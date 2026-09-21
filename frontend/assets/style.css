@@ -42,6 +42,8 @@
   --accent-deeper: #164FA8;    /* the far end of the avatar gradient */
   --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
   --selection: color-mix(in srgb, var(--accent) 30%, transparent);
+  --av-claude: #C2603F; --av-codex: #0B7F63; --av-gemini: #2A6FE0; --av-copilot: #6E3FC4; --av-grok: #3F4654;
+  --av-qwen: #5B32A8; --av-deepseek: #3557E8; --av-opencode: #0A7FB8; --av-echo: #557089; --av-other: #5A6472;
   --ok: #2FCE98;
   --warn: #E5AE58;
   --danger: #F2809C;
@@ -84,6 +86,8 @@
   --r: 8px;                /* controls */
   --r-lg: 12px;            /* cards, menus, modals */
   --tbh: 46px;             /* topbar height — taller on touch layouts */
+  --strip-h: 38px;         /* a tab strip's height (deep blue is the compact theme; dark and light
+                              keep 44px, and every touch screen does — a thumb's worth) */
   /* type & space — the feel. Every rem in the file follows --font-size; the
      rest name the dozen dimensions the eye actually reads. */
   --font-size: 15px;
@@ -100,6 +104,14 @@
   --tab-y: .4rem;          /* the tab strip */
   --pad: .45rem;           /* the sidebar's inner padding */
   --line-y: .05rem;        /* a rendered line's vertical padding (Notion: 3px blocks) */
+  /* the widths a list's hanging indent is built from: the two boxes are
+     ours, the space and the digit are measured per font at runtime
+     (calibrateListMetrics writes them onto the root element) */
+  --lm-bullet: 1.1em; --lm-task: calc(15px + .35rem); --lm-space: .25em; --lm-mono: .55em;
+  --block-pad: 0rem;       /* inside a code card: deep blue keeps the code
+                              exactly where the prose is — no inner inset */
+  --block-pad-y: .3rem;
+  --cell-pad: .34rem .5rem;/* inside a table cell */
   --h-weight: 600;
   --h1-top: .5rem; --h2-top: .45rem; --h3-top: 0rem;
   /* surfaces and small parts a theme may want unlike the rest */
@@ -127,6 +139,8 @@
    button #2383e2 (hover #0075d3), blue text #529cca, purple #9a6dd7, red
    #ff7369 and green #4dab9a are Notion's published palette. */
 :root[data-theme="dark"] {
+  --av-claude: #C2603F; --av-codex: #0B7F63; --av-gemini: #2A6FE0; --av-copilot: #6E3FC4; --av-grok: #3F4654;
+  --av-qwen: #5B32A8; --av-deepseek: #3557E8; --av-opencode: #0A7FB8; --av-echo: #557089; --av-other: #5A6472;
   --chassis: #191919;
   --bg: #191919;
   --panel: #202020;
@@ -182,6 +196,9 @@
   --editor-lh: 1.5;
   --rich-lh: 1.5;
   --line-y: 3px;
+  --block-pad: 1rem;       /* Notion's code blocks and cells hold more air */
+  --block-pad-y: .6rem;
+  --cell-pad: .45rem .65rem;
   --content-x: 6rem;
   --content-x-narrow: 1.5rem;
   --content-y: 2rem;
@@ -191,7 +208,7 @@
   --h-weight: 700;
   --h1-top: 1.6rem; --h2-top: 1.2rem; --h3-top: .9rem;
   --row-y: .32rem; --row-x: .5rem;
-  --tab-y: .5rem;
+  --tab-y: .5rem; --strip-h: 44px;
   --pad: .5rem;
   --r: 6px; --r-lg: 10px;
   --label-font: var(--sans);
@@ -215,6 +232,8 @@
    #eb5757, blue text #337ea9, purple #9065b0, green #448361, yellow #cb912f
    from the palette. */
 :root[data-theme="light"] {
+  --av-claude: #C2603F; --av-codex: #0B7F63; --av-gemini: #2A6FE0; --av-copilot: #6E3FC4; --av-grok: #3F4654;
+  --av-qwen: #5B32A8; --av-deepseek: #3557E8; --av-opencode: #0A7FB8; --av-echo: #557089; --av-other: #5A6472;
   color-scheme: light;
   --chassis: #FFFFFF;
   --bg: #FFFFFF;
@@ -271,6 +290,9 @@
   --editor-lh: 1.5;
   --rich-lh: 1.5;
   --line-y: 3px;
+  --block-pad: 1rem;       /* Notion's code blocks and cells hold more air */
+  --block-pad-y: .6rem;
+  --cell-pad: .45rem .65rem;
   --content-x: 6rem;
   --content-x-narrow: 1.5rem;
   --content-y: 2rem;
@@ -280,7 +302,7 @@
   --h-weight: 700;
   --h1-top: 1.6rem; --h2-top: 1.2rem; --h3-top: .9rem;
   --row-y: .32rem; --row-x: .5rem;
-  --tab-y: .5rem;
+  --tab-y: .5rem; --strip-h: 44px;
   --pad: .5rem;
   --r: 6px; --r-lg: 10px;
   --label-font: var(--sans);
@@ -367,8 +389,11 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 .topbar { display: flex; align-items: center; gap: .55rem; height: var(--tbh);
   padding: 0 max(.8rem, env(safe-area-inset-right)) 0 max(.8rem, env(safe-area-inset-left));
   background: var(--chassis); border-bottom: 1px solid var(--border); }
-/* mobile-only chrome (hamburger) — hidden on wide layouts */
-.navbtn { display: none; }
+/* ☰ everywhere: the drawer on a phone, the collapsible file panel on a desktop */
+.navbtn { display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; padding: .3rem .55rem; line-height: 1; }
+/* the corner: the two global controls while the panel is collapsed (desktop only) */
+.corner { display: none; }
 .scrim { display: none; }
 .brand { display: flex; align-items: center; gap: .55rem; }
 .brand-word { display: inline-flex; align-items: center; gap: .5rem;
@@ -389,10 +414,14 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 .search:hover .icon { color: var(--ink); }
 .search:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
 .spacer { flex: 1; }
-.topbar button, .topbar .logout { background: transparent; color: var(--muted); border: 1px solid var(--border);
+/* An icon alone in the brand row: no frame — a framed ☰ reads as a form
+   control beside a wordmark. The background on hover / press is the
+   affordance (the corner's floating ☰ keeps its border: it sits over the
+   document and needs an edge). */
+.topbar button, .topbar .logout { background: transparent; color: var(--muted); border: 1px solid transparent;
   padding: .38rem .7rem; border-radius: calc(var(--r) - 1px); cursor: pointer; text-decoration: none;
   font-family: var(--sans); font-size: .8rem; font-weight: 500; white-space: nowrap; }
-.topbar button:hover, .topbar .logout:hover { color: var(--ink); background: var(--panel2); border-color: var(--border-hover); }
+.topbar button:hover, .topbar .logout:hover, .topbar button:active { color: var(--ink); background: var(--panel2); }
 
 /* interaction feel: quick, quiet transitions — never mushy */
 .topbar button, .search, .user-btn, .user-menu button, .user-menu .logout, .tree-item, .tab, .term-tab,
@@ -400,16 +429,40 @@ html, body { margin: 0; height: 100%; font-family: var(--sans);
 .modal-foot button, .admin-form button, .chip-preset, .tab-x, .term-x {
   transition: background-color .1s ease, color .1s ease, border-color .1s ease; }
 
-/* body stacks topbar / launchbar / layout; the layout takes what remains */
+/* A phone stacks topbar / layout; the layout takes what remains. */
 body { display: flex; flex-direction: column; }
 .topbar { flex: 0 0 auto; }
 .layout { display: grid; grid-template-columns: var(--sbw, 264px) 5px 1fr;
   flex: 1 1 auto; min-height: 0; }
-/* Alt+B on a wide screen: give the document the whole width. Scoped, so a
-   window that shrinks into the drawer layout never keeps a hidden sidebar. */
+/* A desktop is a grid of two columns: the brand row is the HEAD of the file
+   panel, and the editor column starts at the very top, so the first tab
+   strips sit level with the brand — the tabs are the top of the screen. */
 @media (min-width: 881px) {
-  body.nav-hidden .layout { grid-template-columns: 1fr; }
-  body.nav-hidden .sidebar, body.nav-hidden .sb-resizer { display: none; }
+  /* scoped to the app's body: the sign-in page shares this stylesheet and
+     must keep its centred card */
+  body.app { display: grid; grid-template-columns: var(--sbw, 264px) 5px 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .topbar { grid-column: 1; grid-row: 1; height: var(--strip-h); border-right: 1px solid var(--border);
+    padding: 0 .45rem 0 .5rem; gap: .4rem; container-type: inline-size; min-width: 0; }
+  .topbar .brand { min-width: 0; overflow: hidden; }
+  /* the name stays at the panel's default width (264px) and gives way only
+     when the panel is genuinely squeezed */
+  .topbar .brand-word small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  @container (max-width: 190px) { .brand-word small { display: none; } }
+  .layout { display: contents; }
+  .sidebar { grid-column: 1; grid-row: 2; }
+  .sb-resizer { grid-column: 2; grid-row: 1 / 3; }
+  .main-col { grid-column: 3; grid-row: 1 / 3; }
+  /* ☰ (or Alt+B): the document gets the whole width; the corner keeps ☰ and the chat */
+  body.app.nav-hidden { grid-template-columns: 0 0 1fr; }
+  body.nav-hidden .topbar, body.nav-hidden .sidebar, body.nav-hidden .sb-resizer { display: none; }
+  body.nav-hidden .corner { display: inline-flex; gap: .25rem; align-items: center; position: fixed;
+    top: 5px; left: 8px; z-index: 40; }
+  .corner .navbtn { background: var(--chassis); color: var(--muted); border: 1px solid var(--border);
+    border-radius: calc(var(--r) - 1px); cursor: pointer; padding: .3rem .55rem; }
+  .corner .navbtn:hover { color: var(--ink); background: var(--panel2); border-color: var(--border-hover); }
+  .corner .chat-btn .icon { width: 17px; height: 17px; }
+  body.nav-hidden #panes > .col:first-child > .pane:first-of-type > .tabbar,
+  body.nav-hidden .main-col[data-dock="left"] #terminal-panel > .tabbar { padding-left: 92px; }
 }
 /* The gutter between tree and editor IS the drag handle. It reads as part of
    the editor's left margin until you point at it, so a resizable edge costs no
@@ -423,12 +476,7 @@ body { display: flex; flex-direction: column; }
    text under the pointer — otherwise a fast drag paints the tree blue */
 body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
 
-/* ── Launcher bar — one-tap company (blue) & personal (violet) shortcuts ──── */
-.launchbar { display: flex; align-items: center; gap: .35rem; flex: 0 0 auto;
-  min-height: 37px; padding: .28rem max(.8rem, env(safe-area-inset-right)) .28rem max(.8rem, env(safe-area-inset-left));
-  background: var(--panel); border-bottom: 1px solid var(--border);
-  overflow-x: auto; scrollbar-width: none; }
-.launchbar::-webkit-scrollbar { display: none; }
+/* ── Launcher chips — the manage dialog's list; the sidebar uses .pin-row ── */
 .lchip { display: inline-flex; align-items: center; gap: .35rem; flex: 0 0 auto;
   padding: .24rem .65rem; border-radius: 20px; cursor: pointer; border: 1px solid;
   background: transparent; font-family: var(--sans); font-size: .78rem; font-weight: 500;
@@ -451,14 +499,19 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .launcher-card { width: min(560px, 92vw); }
 .lnch-note { font-size: .76rem; margin-bottom: .3rem; }
 .lnch-form .lnch-target { flex: 1; min-width: 10rem; }
-.menu-launchers { display: none; }
 
 /* ── Sidebar / file tree ──────────────────────────────────────────────────── */
 .sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: var(--pad);
   display: flex; flex-direction: column; min-height: 0; }
-/* the tree scrolls on its own so the person stays pinned at the bottom */
-#tree { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.menu-launchers { display: none; }
+/* the chats and the files are ONE list with ONE scrollbar; the person stays
+   pinned at the bottom below it */
+.sb-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+#tree { flex: 0 0 auto; }
+/* the section a row belongs to stays at the top while you scroll it, so
+   "New chat" is never scrolled away (ChatGPT pins its compose the same way) */
+.sb-scroll .pane-title { position: sticky; top: 0; z-index: 2; margin-top: 0; padding: .45rem .35rem .3rem;
+  background: linear-gradient(var(--panel), var(--panel)), var(--bg); }
+.sb-scroll .pane-title.chats-title { padding-top: .25rem; }
 /* ── the person, bottom left — and the menu that hides behind them ────────── */
 .sb-foot { flex: 0 0 auto; position: relative; margin-top: .35rem; padding-top: .35rem;
   border-top: 1px solid var(--border); }
@@ -470,15 +523,14 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
   background: linear-gradient(145deg, var(--accent-deep), var(--accent-deeper)); color: var(--on-accent);
   font-weight: 600; font-size: .72rem; display: inline-flex; align-items: center; justify-content: center; }
 /* the live dot the old identity pill carried: this account is signed in and running */
-.avatar::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px;
-  border-radius: 50%; background: var(--ok); border: 2px solid var(--panel);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 80%, transparent); animation: live 2.4s ease-in-out infinite; }
+/* (no status dot on the avatar: being signed in is not news) */
 .user-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 500; }
 .user-more { color: var(--faint); font-size: 1rem; line-height: 1; }
 .user-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + .3rem); z-index: 70;
   display: flex; flex-direction: column; gap: .1rem; padding: .4rem;
-  background: var(--pop); border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: linear-gradient(var(--pop), var(--pop)), var(--bg);   /* opaque whatever the token is: rows never print through */
+  border: 1px solid var(--border); border-radius: var(--r-lg);
   box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow) 60%, transparent); animation: rise .12s ease-out; }
 .menu-id { font-family: var(--mono); font-size: .72rem; color: var(--muted);
   padding: .35rem .6rem .55rem; border-bottom: 1px solid var(--border); margin-bottom: .2rem;
@@ -580,14 +632,20 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
 .ctx-item.danger .icon { color: var(--danger); }
 .ctx-item.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .ctx-sep { height: 1px; background: var(--border); margin: .3rem .4rem; }
+.ctx-note { padding: .3rem .7rem .45rem; font-size: .74rem; color: var(--faint); font-family: var(--sans);
+  max-width: 17rem; }
 
 /* ── Main column: tabs / editor / terminal ────────────────────────────────── */
 .main-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.editor-wrap { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; min-height: 0;
+.editor-wrap { display: flex; flex-direction: column; min-width: 0; flex: 1 1 0; min-height: 0;
   position: relative; }   /* the formatting dock floats inside it */
 .doc-title-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
   padding: .42rem .95rem; border-bottom: 1px solid var(--border); color: var(--muted);
-  font-family: var(--crumb-font); font-size: .74rem; background: var(--bg); }
+  font-family: var(--crumb-font); font-size: .74rem; background: var(--bg); flex: 0 0 auto; min-width: 0; }
+#doc-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 881px) { .pane.showing-doc .cm-scroller { padding-bottom: 76px; } }
+/* a group showing a terminal or a chat has no document chrome to show */
+.pane:not(.showing-doc) > .doc-title-bar, .pane:not(.showing-doc) > #mdbar { display: none !important; }
 .crumb { color: var(--faint); }
 .crumb.last { color: var(--ink); }
 .crumb-sep { color: var(--faint); margin: 0 .45rem; font-size: .58rem; opacity: .7; }
@@ -595,7 +653,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; -webkit-user-select: n
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 20px; padding: .08rem .55rem;
   font-size: .62rem; letter-spacing: .03em; }
 .doc-title-right { display: flex; align-items: center; gap: .7rem; flex: 0 0 auto; }
-
 
 /* presence: who has this doc open right now */
 .presence { display: inline-flex; align-items: center; }
@@ -666,7 +723,14 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
    follows the pane (8% of it) instead of holding the wide-screen inset, down
    to --content-x-narrow, which is also what phones get. The rich and source
    views share the formula through --gutter, computed per pane. */
-.cm-editor { --gutter: max(var(--content-x-narrow), min(var(--content-x), 8%), calc((100% - var(--content-max)) / 2)); }
+.cm-editor { --gutter: max(var(--content-x-narrow), min(var(--content-x), 8%), calc((100% - var(--content-max)) / 2));
+  /* how far a code block, a quotation or a table is inset from the pane:
+     deep blue's gutter is small, so its tint runs to the edges (an inset
+     stripe floating in the page looks odd, especially on a phone); the
+     Notion themes' gutter is 96px+, so there the block aligns with the
+     written column. Derived from --gutter, so it lives here, not on :root. */
+  --block-inset: 0px; }
+:root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor { --block-inset: var(--gutter); }
 .cm-rich .cm-content { padding: var(--content-y) 0 40vh; }
 .cm-rich .cm-line { padding: var(--line-y) var(--gutter); }
 .cm-rich .cm-h { font-weight: var(--h-weight); color: var(--heading); line-height: 1.3; }
@@ -675,12 +739,19 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 .cm-rich .cm-h3 { font-size: var(--h3); padding-top: var(--h3-top); }
 .cm-rich .cm-h4 { font-size: 1.05rem; }
 .cm-rich .cm-h5, .cm-rich .cm-h6 { font-size: .95rem; color: var(--muted); }
+/* a quotation's bar is a mark on the text, not a container around it: it
+   lines up with the writing in every theme, at every width */
 .cm-rich .cm-quoteline { border-left: 3px solid var(--quote-border); background: var(--quote-bg);
-  color: var(--muted); padding-left: 1.8rem !important; }
+  color: var(--muted); margin-inline: var(--gutter); padding-inline: .9rem; }
 .cm-rich .cm-codeblock { font-family: var(--mono); font-size: .86rem; background: var(--code-bg);
-  color: var(--code-ink); }
-.cm-rich .cm-codeblock-first { border-radius: 10px 10px 0 0; position: relative; padding-top: .3rem; }
-.cm-rich .cm-codeblock-last { border-radius: 0 0 10px 10px; padding-bottom: .3rem; }
+  color: var(--code-ink);
+  /* the card is the written column: the page's gutter becomes the card's
+     margin, and the code gets its own padding inside it (a full-bleed tint
+     with the text inset by a 96px gutter reads as absurd padding) */
+  margin-inline: var(--block-inset);
+  padding-inline: calc(var(--gutter) - var(--block-inset) + var(--block-pad)); }
+.cm-rich .cm-codeblock-first { border-radius: 10px 10px 0 0; position: relative; padding-top: var(--block-pad-y); }
+.cm-rich .cm-codeblock-last { border-radius: 0 0 10px 10px; padding-bottom: var(--block-pad-y); }
 .cm-rich .cm-codeblock-first.cm-codeblock-last { border-radius: calc(var(--r) + 2px); }
 .cm-code-copy { position: absolute; top: .3rem; right: .6rem; z-index: 3;
   background: color-mix(in srgb, var(--panel2) 92%, transparent); border: 1px solid var(--border); color: var(--muted);
@@ -710,6 +781,26 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
 .cm-olmark { color: var(--accent); font-family: var(--mono); }
 .cm-bullet { color: var(--accent); font-weight: 700; display: inline-block; width: 1.1em; }
+
+/* a list item reads as one block: the marker sits in the margin and every
+   wrapped line lines up under the words (a hanging indent), rather than
+   running back to the page's left edge under the bullet */
+.cm-rich .cm-line.cm-listline, .cm-rich .cm-line.cm-listcont {
+  --list-hang: calc(var(--list-mark, 1.35em) + var(--list-lead, 0px)); }
+.cm-rich .cm-line.cm-listline { padding-left: calc(var(--gutter) + var(--list-hang));
+  text-indent: calc(-1 * var(--list-hang)); }
+/* The lines an item continues onto (a paragraph hard-wrapped in the file)
+   sit where its text sits — every row of them, not just the first: the
+   padding puts the wrapped rows there, and the negative indent lets the
+   first row spend the indentation it prints itself. */
+.cm-rich .cm-line.cm-listcont { padding-left: calc(var(--gutter) + var(--list-hang));
+  text-indent: calc(-1 * var(--own-lead, 0px)); }
+/* text-indent inherits into every block container inside the line, and an
+   inline-block marker is one: without this the bullet's glyph is dragged
+   out of its own box and off the page */
+.cm-rich .cm-listline .cm-bullet, .cm-rich .cm-listline .cm-task,
+.cm-rich .cm-listline .cm-inline-copy, .cm-rich .cm-listline .cm-img-embed,
+.cm-rich .cm-listline .cm-mention { text-indent: 0; }
 .cm-hr-line { display: inline-block; width: 100%; border-top: 1px solid var(--border); vertical-align: middle; }
 .cm-task { display: inline-flex; align-items: center; margin-right: .35rem; }
 .cm-task-toggle { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; vertical-align: -2px; }
@@ -732,16 +823,19 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 @media (hover: none) { .cm-media-bar { opacity: 1; } }
 
 /* ---- tables: rendered as a real grid you type into ---------------------- */
-.cm-table-wrap { margin: .5rem 0; position: relative; overflow-x: auto; }
-.cm-table { border-collapse: collapse; font-size: .88rem; min-width: min(100%, 20rem); }
+/* a table is a block widget, not a line: it needs the column's gutter of
+   its own, or the grid starts at the pane's edge while the text sits 96px in */
+.cm-table-wrap { margin: .5rem var(--gutter); position: relative; overflow-x: auto; }
+.cm-table { border-collapse: collapse; font-size: .88rem; min-width: min(100%, 20rem);
+  border-radius: var(--r); overflow: hidden; }
 .cm-table th, .cm-table td { border: 1px solid var(--border); padding: 0; vertical-align: middle; }
 .cm-table th { background: var(--panel2); }
 .cm-table th input, .cm-table th { font-weight: 600; color: var(--ink); }
 .cm-table input { width: 100%; min-width: 4rem; box-sizing: border-box; background: transparent;
-  border: 0; color: inherit; font: inherit; padding: .34rem .5rem; border-radius: 0; }
+  border: 0; color: inherit; font: inherit; padding: var(--cell-pad); border-radius: 0; }
 .cm-table input:focus { outline: 2px solid var(--accent); outline-offset: -2px;
   background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.cm-table td:not(:has(input)), .cm-table th:not(:has(input)) { padding: .34rem .5rem; }
+.cm-table td:not(:has(input)), .cm-table th:not(:has(input)) { padding: var(--cell-pad); }
 .cm-tbl-bar { display: flex; gap: .25rem; margin-top: .3rem; opacity: 0; transition: opacity .12s ease; }
 .cm-table-wrap:hover .cm-tbl-bar, .cm-table-wrap:focus-within .cm-tbl-bar { opacity: 1; }
 .cm-tbl-bar button { font: 500 .72rem/1 var(--sans); color: var(--muted); cursor: pointer;
@@ -754,7 +848,7 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 /* strikethrough on a checked task line for that "done" feel */
 .cm-rich .cm-line:has(.cm-task-toggle:checked) { color: var(--muted); }
 .editor { flex: 1; overflow: auto; position: relative; }
-.editor:empty::before { content: "Ctrl+P to jump to a file · Ctrl+` for a shell · ? for every shortcut";
+.editor:empty::before { content: "Ctrl+K to search or jump to a file · Ctrl+` for a shell · ? for every shortcut";
   position: absolute; inset: 0; display: grid; place-items: center;
   font-family: var(--mono); font-size: .8rem; color: var(--faint);
   padding: 0 1rem; text-align: center; }
@@ -766,14 +860,39 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 .panes { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .pane { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0;
   position: relative; }
-.pane + .pane, .pane-split + .pane { border-left: 1px solid var(--border); }
+.col { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; }
+/* (the divider between two groups is drawn by the handle between them — a
+   border here as well would read as two lines with a trough between) */
+.col + .col { border-left: 1px solid var(--border); }
 /* Which pane a new file opens into is not guessable — mark it, quietly. */
 body.split .pane.focused > .tabbar { box-shadow: inset 0 2px 0 var(--accent-wash); }
-.pane-split { flex: 0 0 5px; background: var(--bg); cursor: col-resize; position: relative;
+/* A divider is a HAIRLINE with a 5px grab zone around it — the zone is
+   invisible. Painting those 5px left a trough of page background between
+   the panes, which read as a hole rather than an edge. */
+.pane-split { flex: 0 0 5px; background: none; cursor: col-resize; position: relative;
   z-index: 5; touch-action: none; }
+.pane-split::before { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px;
+  background: var(--border); transition: background-color .1s ease, width .1s ease, left .1s ease; }
 .pane-split::after { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; }
-.pane-split:hover, body.pane-resizing .pane-split { background: var(--accent); }
+.pane-split:hover::before, body.pane-resizing .pane-split::before { background: var(--accent); left: 1px; width: 3px; }
 body.pane-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+/* the handle between two groups stacked in one column */
+.row-split { flex: 0 0 5px; background: none; cursor: ns-resize; position: relative; }
+.row-split::before { content: ""; position: absolute; left: 0; right: 0; top: 2px; height: 1px;
+  background: var(--border); transition: background-color .1s ease, height .1s ease, top .1s ease; }
+.row-split::after { content: ""; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; }
+.row-split:hover::before, body.row-resizing .row-split::before { background: var(--accent); top: 1px; height: 3px; }
+body.row-resizing { cursor: ns-resize; user-select: none; -webkit-user-select: none; }
+.pane-split:focus-visible, .row-split:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* maximized: one group fills the editor area, everything else steps aside */
+.max-hidden { display: none !important; }
+#terminal-panel.maximized { height: auto !important; width: auto !important; flex: 1 1 auto; min-height: 0; }
+/* a terminal wherever its tab lives: its own background, its own touch handling */
+.tab-content.term { height: 100%; overflow: hidden; touch-action: none; background: var(--term-bg);
+  padding: .35rem .35rem 0; }
+.tab-content.term .xterm { height: 100%; }
+.tab-content.term.connecting::before { content: "connecting…"; position: absolute; top: .4rem; left: .8rem;
+  font: 500 .72rem/1.4 var(--mono); color: var(--muted); }
 
 /* The drop surface only exists while a tab is in flight — otherwise it would
    sit on top of CodeMirror and swallow every click, and steal the file drops
@@ -785,6 +904,51 @@ body.dragging-tab .pane-drop { display: block; }
   border: 2px solid var(--accent); pointer-events: none; }
 .pane-drop.over .pane-drop-ind { display: block; }
 .tab.dragging { opacity: .4; }
+/* every group's actions, pinned at the right end of its strip: ＋ terminal
+   here, ⤢ maximize / ⤡ restore, ▾ fold */
+.grp-actions { margin-left: auto; position: sticky; right: 0; display: flex; align-items: center; gap: .05rem;
+  flex: 0 0 auto; padding: 0 .25rem 0 .35rem; background: var(--chassis); align-self: stretch; }
+/* a fade at the actions' left edge says the strip goes on underneath */
+.grp-actions::before { content: ""; position: absolute; left: -12px; top: 0; bottom: 0; width: 12px; pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--chassis)); }
+/* a group too small for the floating formatting toolbar (a narrow column,
+   a group at its minimum height) does without it — the shortcuts and the
+   Rich | Source switch remain; a phone's keyboard row is not this */
+.pane.tight > #mdbar { display: none !important; }
+.pane.tight .cm-scroller { padding-bottom: .5rem !important; }
+/* a narrow strip keeps its tab names: ＋ and ▾ yield first, ⤢ stays (it is
+   the way out); a new terminal and the fold remain in the palette */
+.pane.narrow .grp-btn[data-act="fold"] { display: none; }
+.grp-btn { background: transparent; border: 0; color: var(--faint); cursor: pointer; font-size: .9rem; line-height: 1;
+  padding: .3rem .4rem; border-radius: calc(var(--r) - 1px); min-width: 1.7rem; }
+.grp-btn:hover { color: var(--ink); background: var(--panel2); }
+.pane.maximized .grp-btn[data-act="max"] { color: var(--accent); }
+/* a folded group: one line naming what it holds; a click opens it */
+.pane-handle { display: none; align-items: center; gap: .5rem; flex: 0 0 auto; width: 100%; text-align: left;
+  padding: .4rem .9rem; border: 0; border-top: 1px solid var(--border); background: var(--chassis); color: var(--muted);
+  font: 500 .8rem/1.3 var(--sans); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-handle.on { display: block; }
+.pane-handle:hover { color: var(--ink); background: var(--panel2); }
+.pane-handle.drop-over { color: var(--ink); background: var(--accent-wash); box-shadow: inset 0 0 0 2px var(--accent); }
+.fold-hidden { display: none !important; }
+/* a column whose groups are all folded: a rail of vertical handles, its width
+   given to the neighbours */
+.col.folded { flex: 0 0 auto !important; width: 30px; min-width: 30px; }
+.col.folded .pane-handle { writing-mode: vertical-rl; text-orientation: mixed; height: auto; flex: 1 1 auto; width: 30px;
+  padding: .7rem .35rem; border-top: 0; border-right: 1px solid var(--border); text-align: left; }
+.col.folded .pane-handle.on { display: flex; }
+/* while a handle is dragged, iframes under the cursor must not eat the pointer */
+body.pane-resizing iframe, body.row-resizing iframe { pointer-events: none; }
+/* a finger's drag: the lifted tab follows it, the one it left stays dim */
+.tab { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.tab-ghost { position: fixed; left: 0; top: 0; z-index: 200; pointer-events: none; opacity: .96; will-change: transform;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--accent); border-radius: var(--r);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--ink) 28%, transparent); max-width: 70vw;
+  transition: opacity .13s ease, transform .13s ease; }
+.tab-ghost.drop { opacity: 0; }
+body.touch-drag { cursor: grabbing; }
+body.touch-drag .tab.dragging { opacity: .3; }
+body.touch-drag .pane-drop-ind { transition: none; }
 /* where the tab will land in this strip */
 .tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
 .tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
@@ -817,7 +981,7 @@ body.dragging-tab .pane-drop { display: block; }
    eye = read-only); the colour says whether the live session is connected —
    primary while your edits reach everyone, the danger colour while they do
    not. The words are in the tooltip. */
-.access-badge { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+.access-badge { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
   border-radius: 50%; color: var(--muted); border: 1px solid var(--border); background: transparent;
   flex: 0 0 auto; cursor: default; }
 .access-badge .icon { width: 13px; height: 13px; }
@@ -844,7 +1008,7 @@ body.dragging-tab .pane-drop { display: block; }
    last one was. Releasing the lock just removes the override, and the
    transition on max-width is what lets the tabs glide back to full size. */
 .tabbar { display: flex; align-items: stretch; background: var(--chassis); border-bottom: 1px solid var(--border);
-  overflow-x: auto; flex: 0 0 auto; scrollbar-width: thin; --tab-max: 240px; }
+  overflow-x: auto; flex: 0 0 auto; scrollbar-width: thin; --tab-max: 240px; min-height: var(--strip-h); }
 .tab { display: flex; align-items: center; gap: .38rem; padding: var(--tab-y) .5rem var(--tab-y) .75rem;
   border-right: 1px solid var(--border); cursor: pointer; color: var(--muted); font-size: .8rem;
   white-space: nowrap; border-top: 2px solid transparent;
@@ -857,11 +1021,12 @@ body.dragging-tab .pane-drop { display: block; }
    under a pointer that is deliberately holding still. */
 .tabbar.tabs-locked .tab-x { opacity: 1; }
 .tab:hover { background: var(--panel); }
-.tab.current { background: var(--bg); color: var(--ink); }
-.tab.active { background: var(--bg); color: var(--ink); border-top-color: var(--accent); }
+.tab.current { background: var(--bg); color: var(--ink);
+  border-top-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.pane.focused .tab.current { border-top-color: var(--accent); }
 .tab-icon { color: var(--faint); display: inline-flex; align-items: center; flex: 0 0 auto; }
 .tab-icon .icon { width: 13px; height: 13px; }
-.tab.active .tab-icon { color: var(--accent); }
+.pane.focused .tab.current .tab-icon { color: var(--accent); }
 .tab.current .tab-icon { color: var(--muted); }
 /* The name takes whatever is left and ellipsises; the icon and the × never
    shrink, so the × keeps the same offset from the tab's right edge no matter
@@ -871,7 +1036,7 @@ body.dragging-tab .pane-drop { display: block; }
   overflow: hidden; text-overflow: ellipsis; max-width: 90px; flex: 0 1 auto; min-width: 0; }
 .tab-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .95rem;
   line-height: 1; padding: 0 .15rem; border-radius: 4px; opacity: 0; flex: 0 0 auto; }
-.tab:hover .tab-x, .tab.current .tab-x, .tab.active .tab-x { opacity: 1; }
+.tab:hover .tab-x, .tab.current .tab-x { opacity: 1; }
 .tab-x:hover { color: var(--ink); background: var(--border); }
 
 /* CodeMirror — the writing surface, tuned to the chassis */
@@ -905,30 +1070,20 @@ body.dragging-tab .pane-drop { display: block; }
   background: color-mix(in srgb, var(--accent) 32%, transparent) !important; }
 
 /* ── Terminal panel ───────────────────────────────────────────────────────── */
-.terminal-panel { position: relative; flex: 0 0 auto; height: 38%; min-height: 110px; background: var(--term-bg);
-  border-top: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-.term-resizer { position: absolute; top: 0; left: 0; right: 0; height: 6px; cursor: ns-resize;
-  z-index: 5; touch-action: none; }
-.term-resizer:hover { background: var(--accent); opacity: .5; }
-.term-header { display: flex; align-items: center; gap: .45rem; background: var(--chassis);
-  padding: .22rem .6rem; flex: 0 0 auto; border-bottom: 1px solid var(--border); }
-.term-header .small { font-family: var(--mono); font-size: .66rem; letter-spacing: .04em; }
-.term-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
-/* the hint is nice-to-have, not essential — drop it before the identity when the
-   header runs out of room (narrow panels, phones) */
-@media (max-width: 880px) { .term-hint { display: none; } }
-.term-tabs { display: flex; gap: .25rem; overflow-x: auto; scrollbar-width: thin; }
-.term-tab { display: inline-flex; align-items: center; gap: .3rem; padding: .14rem .3rem .14rem .55rem;
-  border-radius: calc(var(--r) - 2px); cursor: pointer; color: var(--muted); font-family: var(--mono); font-size: .72rem;
-  white-space: nowrap; border: 1px solid transparent; }
-.term-tab:hover { background: var(--panel2); }
-.term-tab.active { background: var(--panel2); color: var(--ink); border-color: var(--border); }
-.term-x { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .85rem;
-  line-height: 1; padding: 0 .12rem; border-radius: 4px; }
-.term-x:hover { color: var(--danger); }
-/* min-height:0 lets this flex child shrink to the panel instead of growing to
-   xterm's content height and overflowing below the viewport. */
-#terminal { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: .35rem .35rem 0; }
+.terminal-panel { position: relative; flex: 1 1 0; min-height: 110px; background: var(--term-bg);
+  display: flex; flex-direction: column; min-width: 0; }
+.terminal-panel > .tabbar { background: var(--chassis); }
+.term-tabs.tabbar .tab.current { background: var(--term-bg); }
+/* the dock as a column on the right or left of the workspace */
+.main-col[data-dock="right"] { flex-direction: row; }
+.main-col[data-dock="left"] { flex-direction: row-reverse; }
+.main-col[data-dock="right"] .terminal-panel, .main-col[data-dock="left"] .terminal-panel {
+  height: auto; min-height: 0; min-width: 160px; }
+
+/* the dock's own edges: only where no handle draws the line (a phone's
+   sheet, and a folded dock's handle row) */
+@media (max-width: 880px) { .main-col .terminal-panel { border-top: 1px solid var(--border); } }
+#terminal { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; }
 .term-content { height: 100%; position: relative; }
 .terminal-panel .xterm { height: 100%; }
 /* a dropped pty connection: dim the (still-shown) scrollback and badge it —
@@ -941,23 +1096,18 @@ body.dragging-tab .pane-drop { display: block; }
   border: 1px solid var(--warn); border-radius: 999px; padding: 0 .55rem; }
 /* touch keybar: esc/tab/ctrl/arrows a phone keyboard doesn't have */
 .term-keys { display: none; }
+#term-keys { position: fixed; left: 0; right: 0; bottom: var(--kb-lift, 0px); z-index: 58; }   /* over a maximized group (57), under the drawer's scrim (59) */
 
 /* Full-screen / half toggle: a phone-only affordance. On desktop the panel is
    freely resizable and this button is noise. */
-.term-max-btn { display: none; }
 
-/* ── Mobile terminal: modes, not a resizable panel ────────────────────────────
-   A docked panel resized by dragging is a desktop metaphor; on a phone it
-   fights the soft keyboard and the visualViewport pinning. Instead the panel
-   has exactly two states on small screens: HALF (in-flow, share with the doc)
-   and FULL (fixed overlay, own the screen). Default is FULL — the phone use
-   case is full attention, not split attention. */
+/* ── Phone: a group maximizes into a full-screen sheet — any group, the same
+   way; the dock, restored, shares the height with the workspace ("half") ── */
 @media (max-width: 880px) {
-  .term-resizer { display: none; }              /* snap states, no free drag */
-  .terminal-panel { height: 50%; }              /* the half state */
-  .term-max-btn { display: inline-block; }
-  body.term-max .terminal-panel {
-    position: fixed; inset: 0; height: auto; z-index: 58;
+  #term-resizer { display: none; }              /* snap states, no free drag */
+  .main-col[data-dock] .editor-wrap, .main-col[data-dock] .terminal-panel { flex: 1 1 0 !important; }
+  .pane.maximized {
+    position: fixed; inset: 0; height: auto; z-index: 57;
     border-top: 0;
     padding-top: env(safe-area-inset-top);
   }
@@ -968,12 +1118,31 @@ body.dragging-tab .pane-drop { display: block; }
   background: var(--panel2); border: 1px solid var(--border); border-radius: 999px;
   padding: .05rem .5rem; white-space: nowrap; }
 .ptt-target:empty { display: none; }
+/* a finger needs its 44px whatever the theme says */
+@media (pointer: coarse) { :root { --strip-h: 44px; } }
 @media (pointer: coarse) {
-  .term-keys { display: flex; gap: .3rem; flex: 0 0 auto; overflow-x: auto;
+  /* thumbs: nothing below 40px in the places a finger goes */
+  .tab-x { min-width: 34px; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; margin-right: -.3rem; }
+  .doc-title-bar .mini, .doc-title-bar .modeswitch button, .access-badge { min-height: 38px; min-width: 38px; }
+  .grp-btn { min-width: 38px; min-height: 38px; }
+  /* The keybar takes its strip of the screen rather than floating over the
+     terminal: a padded terminal did not help, because xterm sizes its own
+     screen from a measurement taken before the padding and then overflows
+     it (the bottom rows of a full-screen app ended up under the bar). The
+     height is measured, not guessed — the safe-area inset moves it. */
+  body.kb-term .main-col { padding-bottom: var(--kb-h, 50px); }
+  body.kb-term .pane.maximized { bottom: var(--kb-h, 50px); }
+  body.kb-term .term-keys { display: flex; }
+  .tree-item .tmore { min-width: 36px; min-height: 36px; }
+  #term-max::after { content: " " attr(data-label); font-size: .78rem; }
+  #term-hide::after { content: " hide"; font-size: .78rem; }
+  .term-keys { display: none; gap: .3rem; flex: 0 0 auto; overflow-x: auto;
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 34px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 34px), transparent);
     scrollbar-width: none; background: var(--chassis); border-top: 1px solid var(--border);
     padding: .3rem .45rem calc(.3rem + env(safe-area-inset-bottom)); }
   .term-keys::-webkit-scrollbar { display: none; }
-  .term-keys button { flex: 0 0 auto; min-width: 2.5rem; padding: .38rem .55rem;
+  .term-keys button { flex: 0 0 auto; min-width: 2.6rem; min-height: 40px; padding: .38rem .55rem;
     border-radius: calc(var(--r) - 1px); background: var(--panel2); border: 1px solid var(--border);
     color: var(--muted); font-family: var(--mono); font-size: .74rem; cursor: pointer;
     line-height: 1.2; }
@@ -1359,7 +1528,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   border: 0; }
 
 /* ── Toasts — quiet, self-dismissing notices ──────────────────────────────── */
-#toasts { position: fixed; bottom: max(1rem, env(safe-area-inset-bottom)); right: 1rem;
+#toasts { position: fixed; top: calc(var(--strip-h) + .6rem); left: 50%; transform: translateX(-50%);   /* the bottom is where composers and bars live; the corners hold a group's actions */
   display: flex; flex-direction: column; gap: .4rem; z-index: 90; pointer-events: none;
   max-width: min(420px, calc(100vw - 2rem)); }
 /* live uploads started from inside a document (the tree's ghost rows are the
@@ -1401,8 +1570,6 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .ctx-item { padding: .6rem .65rem; font-size: .92rem; }
   .tab { padding: .55rem .5rem .55rem .8rem; }
   .tab-x { opacity: 1; padding: 0 .3rem; }
-  .term-tab { padding: .3rem .4rem .3rem .6rem; font-size: .78rem; }
-  .term-x { padding: 0 .3rem; }
   .mini { padding: .25rem .55rem; font-size: .85rem; }
   /* the formatting dock becomes a keyboard accessory row: docked to the bottom
      edge — the top of the keyboard while one is up (interactive-widget=
@@ -1441,27 +1608,37 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   input, select, textarea { font-size: 16px !important; }   /* no iOS focus-zoom */
   .cm-editor { font-size: 16px; }
   .cm-line { padding: 0 var(--content-x-narrow); }
-  .cm-rich .cm-line { padding: var(--line-y) var(--content-x-narrow); }
-  .cm-rich .cm-quoteline { padding-left: 1.7rem !important; }
+  /* One inset on a narrow screen, for the writing and for everything that
+     sits with it: the rich view's own rules all read --gutter, so setting it
+     here lines up the text, the quotations and the tables at the same edge
+     (they used to be 31px in while the text was 16px in). */
+  .cm-editor { --gutter: var(--content-x-narrow); }
+  /* …and no room to inset a code block at all: its tint runs edge to edge
+     and its padding alone keeps the code under the prose */
+  .cm-editor, :root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor { --block-inset: 0px; }
 
   /* the name stays on phones: the bar has room now that search and the
      actions live in the drawer */
   .topbar { gap: .45rem; }
-  .navbtn { display: inline-flex; align-items: center; justify-content: center;
-    font-size: 1.05rem; padding: .45rem .6rem; line-height: 1; }
+  .navbtn { padding: .45rem .6rem; }
 
-  /* screen space: no permanent bar on phones — the launcher chips sit in the
-     drawer, just above the person */
-  .launchbar { display: none; }
-  .menu-launchers { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
-    padding: .55rem .25rem .2rem; border-top: 1px solid var(--border); margin-top: .35rem; }
+  /* the pinned rows live in the drawer with the tree, at thumb size */
+  .pin-row { min-height: 44px; }
   .user-menu button, .user-menu .logout { padding: .6rem .7rem; font-size: .92rem; }
 
   /* No side-by-side on a phone: two 180px editors are worse than one. Panes
      opened on a desktop stay open — they just stack until the window grows. */
   .panes { flex-direction: column; }
-  .pane-split { display: none; }
-  .pane + .pane, .pane-split + .pane { border-left: 0; border-top: 1px solid var(--border); }
+  /* a column of folded groups in a stack is a row of handles, not a rail */
+  .col.folded { width: auto; min-width: 0; }
+  .col.folded .pane-handle { writing-mode: horizontal-tb; width: 100%; padding: .55rem .9rem; border-right: 0;
+    border-top: 1px solid var(--border); }
+  .pane-split, .row-split { display: none; }
+  .col + .col { border-left: 0; border-top: 1px solid var(--border); }
+  /* the dock is always the sheet at the bottom on a phone, whatever side it has on a desktop */
+  .main-col[data-dock="right"], .main-col[data-dock="left"] { flex-direction: column; }
+  .main-col[data-dock="right"] .terminal-panel, .main-col[data-dock="left"] .terminal-panel {
+    width: auto; min-width: 0; height: 50%; border-left: 0; border-right: 0; border-top: 1px solid var(--border); }
 
   /* file tree becomes an over-content drawer */
   .layout { grid-template-columns: 1fr; }
@@ -1481,15 +1658,25 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
      restored session, "reveal in tree") used to have no way out: the ☰ sits
      under the panel, and so did the scrim. Lift both above the panel, and let
      the scrim cover the whole screen since there is no visible topbar to spare. */
-  body.term-max .sidebar { top: 0; padding-top: max(.45rem, env(safe-area-inset-top)); }
-  body.term-max .scrim { inset: 0; z-index: 59; }
+  body.term-max .sidebar, body.maximized .sidebar { top: 0; padding-top: max(.45rem, env(safe-area-inset-top)); }
+  body.term-max .scrim, body.maximized .scrim { inset: 0; z-index: 59; }
 
-  /* doc header: just the filename, not the whole path */
+  /* tabs a person can read: the strip scrolls, the names stay whole */
+  .tab { flex: 0 0 auto; min-width: 7rem; max-width: 62vw; }
+  .pane-handle { min-height: 44px; padding: .55rem .9rem; }
+  .chat-row { min-height: 44px; padding: .45rem .5rem; }
+  .chats-new { min-height: 32px; }
+  #toasts { top: calc(var(--tbh) + var(--strip-h) + .6rem); left: .6rem; right: .6rem; transform: none; }   /* under the strip, never on it */
+  .chat-agents { overflow: visible; max-height: none; }
+  /* the document bar: just the filename, at the BOTTOM of its group — the
+     tabs are the top of the screen, the path and its actions sit at the thumb */
+  .pane > .doc-title-bar { order: 10; border-bottom: 0; border-top: 1px solid var(--border);
+    padding-bottom: max(.42rem, env(safe-area-inset-bottom)); }
+  body.kb-up .doc-title-bar { display: none; }
   .doc-title-bar { gap: .5rem; padding: .42rem .6rem; }
   .crumb:not(.last), .crumb-sep { display: none; }
   .doc-flag { margin-left: .4rem; }
   #doc-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-
 
   /* modals become bottom sheets */
   .modal-overlay { place-items: end stretch; }
@@ -1516,7 +1703,6 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 
   #toasts { left: .8rem; right: .8rem; max-width: none; }
   #editor:empty::before { content: "tap ☰ to browse the files"; }
-  .launchbar { min-height: 42px; }
   .lchip { padding: .4rem .75rem; }
   .lchip.manage { padding: .4rem .6rem; }
   .lnch-form .lnch-target { min-width: 100%; }
@@ -1525,7 +1711,6 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 
 @media (prefers-reduced-motion: reduce) {
   .login-card::before { animation: none; }
-  .avatar::after { animation: none; }
   .modal-overlay, .modal-card, .user-menu, .toast, .ctx-menu { animation: none; }
   .caret .icon { transition: none; }
   /* The dot stops pulsing and the level meter stops moving — dictation.js also
@@ -1534,4 +1719,540 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .ptt, .ptt-dot { animation: none; }
   .ptt-bar { transform: scaleX(1) !important; }
   * { transition: none !important; }
+}
+
+/* ---- the agent chat (chat.js) ---------------------------------------------
+   Everything in tokens: the chat follows the theme like a document does.
+   The transcript reads like Claude Code in a terminal — a ⏺ before what the
+   agent says and does, a ⎿ before what came of it, a ✻ spinner line above
+   the input, a bordered box with numbered options for a permission — and the
+   person's own messages and the composer read like claude.ai. */
+.topbar-actions { display: inline-flex; align-items: center; gap: .25rem; }
+.chat-btn { display: inline-flex; align-items: center; justify-content: center; padding: .35rem .5rem; }
+.chat-btn .icon { width: 18px; height: 18px; }
+/* the head is ☰ and the brand, on every screen: "New chat" is a row of the
+   sidebar (ChatGPT's compose sits in its list too), and the collapsed-panel
+   corner keeps one within reach */
+.topbar-actions:empty { display: none; }
+/* ── Pinned: the things you keep coming back to, as rows like every other ──
+   row in this panel. They used to be blue and violet pills glued above the
+   tree; a pill says "chip", and a chip in a list of rows reads as an alien.
+   Scope is a quiet word, not a colour. */
+.pins-title { margin-top: .15rem; }
+.lnch-browse { flex: 0 0 auto; padding: .3rem .55rem; }
+.lnch-browse[hidden] { display: none; }
+.pins { display: flex; flex-direction: column; gap: 1px; flex: 0 0 auto; margin: 0 0 .2rem; }
+.pin-row { display: flex; align-items: center; gap: .38rem; width: 100%; min-width: 0;
+  padding: var(--row-y) var(--row-x); border-radius: calc(var(--r) - 2px);
+  border-left: 2px solid transparent; background: transparent; color: var(--muted);
+  font-family: var(--sans); font-size: .85rem; text-align: left; cursor: pointer;
+  user-select: none; -webkit-user-select: none; }
+.pin-row:hover { background: var(--panel2); color: var(--ink); }
+.pin-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.pin-row-ic { flex: 0 0 auto; color: var(--faint); display: inline-flex; align-items: center; }
+.pin-row-ic .icon { width: 14px; height: 14px; }
+.pin-row:hover .pin-row-ic { color: inherit; }
+.pin-row.company .pin-row-ic { color: var(--accent); }
+.pin-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Whose pin it is, said quietly: a company one takes the accent on its icon
+   (rule above) and says so in its tooltip and its menu. It used to carry the
+   word "company" in the row — one word too many for a list this small. */
+.pin-row-more { flex: 0 0 auto; opacity: 0; transition: opacity .1s ease;
+  font-size: 1rem; line-height: .6; letter-spacing: .12em; padding: .1rem .3rem .35rem; }
+.pin-row:hover .pin-row-more, .pin-row:focus-within .pin-row-more { opacity: 1; }
+@media (hover: none) { .pin-row-more { opacity: 1; } }
+
+/* ── Chats, beside the files: a new one, the recent ones ─────────────────── */
+.chats-title { margin-top: .55rem; }
+.chats-new { margin-left: auto; display: inline-flex; align-items: center; gap: .3rem; letter-spacing: 0; text-transform: none;
+  font-family: var(--sans); font-size: .72rem; padding: .1rem .45rem .1rem .35rem; }
+.chats-new .icon { width: 13px; height: 13px; }
+.chats { display: flex; flex-direction: column; gap: 1px; flex: 0 0 auto; margin: 0 0 .2rem; }
+.chat-row { display: flex; align-items: center; gap: .45rem; width: 100%; padding: var(--row-y) var(--row-x); border: 0; border-left: 2px solid transparent;
+  border-radius: calc(var(--r) - 2px); background: transparent; color: var(--muted); text-align: left; font-family: var(--sans); font-size: .85rem;
+  cursor: pointer; min-width: 0; }
+.chat-row:hover { background: var(--panel2); color: var(--ink); }
+.chat-row.active { background: var(--accent-wash); color: var(--ink); border-left-color: var(--accent); }
+.chat-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row-time { flex: 0 0 auto; font-family: var(--mono); font-size: .66rem; color: var(--faint); }
+.chat-row-pin { flex: 0 0 auto; display: inline-flex; color: var(--accent); }
+.chat-row-pin .icon { width: 12px; height: 12px; }
+/* the row's ⋯: on the pointer it appears on hover, on a finger it is always
+   there (the same rule the tree rows follow) */
+.chat-row-more-btn { flex: 0 0 auto; opacity: 0; transition: opacity .1s ease; }
+.chat-row:hover .chat-row-more-btn, .chat-row:focus-within .chat-row-more-btn { opacity: 1; }
+@media (hover: none) { .chat-row-more-btn { opacity: 1; } }
+.chat-row.pinned .chat-row-title { color: var(--ink); }
+.chat-row-more { color: var(--faint); font-size: 1rem; line-height: .6; justify-content: center; letter-spacing: .12em;
+  padding-top: .1rem; padding-bottom: .35rem; }
+.chat-row-more:hover { color: var(--ink); }
+.chat-row-more[aria-expanded="true"] { color: var(--muted); }
+/* an agent's mark */
+.av { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+  font: 600 .62rem/1 var(--sans); color: var(--on-accent); background: var(--av-other); user-select: none; }
+.av-lg { width: 44px; height: 44px; border-radius: 12px; font-size: 1.25rem; }
+.av-sm { width: 18px; height: 18px; border-radius: 5px; font-size: .6rem; }
+.av-claude { background: var(--av-claude); font-size: .8rem; } .av-lg.av-claude { font-size: 1.5rem; } .av-sm.av-claude { font-size: .66rem; }
+.av-codex { background: var(--av-codex); } .av-gemini { background: var(--av-gemini); } .av-copilot { background: var(--av-copilot); }
+.av-grok { background: var(--av-grok); } .av-qwen { background: var(--av-qwen); } .av-deepseek { background: var(--av-deepseek); }
+.av-opencode { background: var(--av-opencode); } .av-echo { background: var(--av-echo); }
+.tab.attention .tab-name::after { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--warn); margin-left: .35rem; vertical-align: middle; }
+/* a width container (never `size`: size-containing this scrolling flex
+   column crashes Chromium's renderer on a long transcript — measured
+   2026-09-21); the "short" state is a class the view sets from its own
+   ResizeObserver */
+.tab-content.chat { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--bg); container-type: inline-size; }
+.chat-view { font-size: var(--font-size); --chat-gutter: 1.35rem; --chat-lh: 1.55rem; --chat-measure: 52rem; }
+/* the page's .err (a form's error line) is not the transcript's */
+.chat-view .err { margin: 0; min-height: 0; }
+
+/* the chat has no title bar of its own: the tab strip above it is the
+   title bar, and the ⋯ menu lives in the composer — 44px of every screen
+   back, and the chat's name is not printed twice */
+/* the anchor a composer menu opens against. The ＋ had this as
+   `.chat-more-wrap` and inherited the rule that hides the ⋯ on a phone — so
+   attaching a photo became impossible on the device most likely to have one
+   (2026-09-21). One class for the anchoring, another for who is hidden. */
+.chat-menu-wrap { position: relative; display: inline-flex; }
+.chat-menu { position: absolute; left: 0; bottom: calc(100% + .45rem); z-index: 80; min-width: 13rem; padding: .3rem;
+  background: linear-gradient(var(--pop), var(--pop)), var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: 0 10px 32px color-mix(in srgb, var(--shadow) 55%, transparent); }
+.chat-menu-id { font-family: var(--mono); font-size: .68rem; color: var(--muted); padding: .35rem .65rem .45rem;
+  border-bottom: 1px solid var(--border); margin-bottom: .25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 18rem; }
+.chat-menu-item { display: flex; align-items: center; gap: .6rem; width: 100%; text-align: left; font: inherit; font-size: .88rem;
+  min-height: 38px; padding: .4rem .65rem; border: 0; border-radius: var(--r); background: transparent; color: var(--ink);
+  cursor: pointer; white-space: nowrap; }
+.chat-menu-item:hover, .chat-menu-item:focus-visible { background: var(--panel2); outline: none; }
+.chat-menu-item .icon { width: 16px; height: 16px; color: var(--muted); flex: 0 0 auto; }
+/* ── the transcript ──────────────────────────────────────────────────────── */
+.chat-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; position: relative; }
+/* a reading measure: wider than ~52rem, the text stays centred (claude.ai) */
+.chat-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column;
+  padding: 1rem max(1rem, calc((100% - var(--chat-measure)) / 2)) 1.1rem; gap: .75rem; overscroll-behavior: contain; }
+.chat-jump { position: absolute; left: 50%; bottom: .6rem; transform: translateX(-50%); z-index: 4; font: 500 .78rem/1 var(--sans);
+  padding: .45rem .8rem; border-radius: 999px; border: 1px solid var(--border); background: var(--pop, var(--panel)); color: var(--ink);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--shadow) 45%, transparent); cursor: pointer; white-space: nowrap; }
+.chat-jump:hover { border-color: var(--accent); }
+.chat-jump[hidden] { display: none; }
+/* the empty screen: the agent's mark, a greeting, three ways in (claude.ai's
+   "Good afternoon, …" with its suggestion chips) */
+.chat-empty { margin: auto; text-align: center; color: var(--muted); padding: 1.5rem 1rem; max-width: 30rem; display: flex; flex-direction: column;
+  align-items: center; }
+.chat-empty .av-lg { margin-bottom: .9rem; box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 35%, transparent); }
+.chat-empty-title { color: var(--heading); font-weight: 600; font-size: 1.15rem; letter-spacing: -.01em; }
+.chat-empty-sub { color: var(--muted); font-size: .88rem; line-height: 1.5; margin-top: .35rem; max-width: 26rem; }
+.chat-empty-chips { display: flex; flex-direction: column; align-items: stretch; gap: .4rem; margin-top: 1.1rem; width: min(26rem, 100%); }
+.chat-sug { font: 500 .82rem/1.35 var(--sans); padding: .55rem .85rem; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--panel);
+  color: var(--ink); cursor: pointer; text-align: left; }
+.chat-sug:hover { border-color: var(--accent); background: var(--accent-wash); }
+.chat-empty-hint { font-family: var(--mono); font-size: .7rem; color: var(--faint); margin-top: 1rem; }
+/* what the person said: a bubble on the right, as claude.ai draws it */
+.chat-msg { max-width: 100%; min-width: 0; }
+.chat-msg.user { align-self: flex-end; max-width: 85%; background: color-mix(in srgb, var(--accent) 13%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border)); border-radius: 18px 18px 6px 18px; padding: .5rem .9rem; }
+.chat-msg.user .chat-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+/* held back: the connection was down — the bubble says so, and how to retry */
+.chat-msg.user.unsent { opacity: .75; border-style: dashed; }
+.chat-unsent { margin-top: .3rem; font-size: .74rem; color: var(--danger); display: flex; align-items: center; gap: .1rem; }
+.chat-unsent-retry { font: inherit; font-weight: 600; color: var(--danger); background: transparent; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; }
+.chat-msg.user .chat-img { display: block; margin-top: .4rem; }
+/* what the agent said: no bubble — a ⏺ in the gutter, the page's own text */
+.chat-msg.agent { display: flex; align-items: flex-start; }
+.chat-dot { flex: 0 0 auto; width: var(--chat-gutter); font-family: var(--mono); font-size: 1rem; line-height: var(--chat-lh); color: var(--accent);
+  user-select: none; }
+.chat-elbow { flex: 0 0 auto; width: 1.4rem; font-family: var(--mono); font-size: .82rem; line-height: var(--chat-lh); color: var(--faint); user-select: none; }
+.chat-md { flex: 1 1 auto; min-width: 0; line-height: 1.55; word-break: break-word; }
+.chat-md > :first-child { margin-top: 0; } .chat-md > :last-child { margin-bottom: 0; }
+.chat-md p, .chat-md ul, .chat-md ol, .chat-md blockquote, .chat-md table { margin: .4rem 0; }
+.chat-md ul, .chat-md ol { padding-left: 1.4rem; }
+.chat-md li + li { margin-top: .15rem; }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4 { margin: .8rem 0 .3rem; font-weight: var(--h-weight); color: var(--heading); line-height: 1.25; }
+.chat-md h1 { font-size: 1.2em; } .chat-md h2 { font-size: 1.1em; } .chat-md h3 { font-size: 1.02em; } .chat-md h4 { font-size: 1em; }
+.chat-md code { font-family: var(--mono); font-size: .86em; background: var(--code-bg); color: var(--code-ink); padding: .08em .32em; border-radius: 4px; }
+.chat-md pre.chat-code { margin: .55rem 0; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
+.chat-md pre.chat-code code { display: block; padding: .6rem .75rem; background: transparent; color: var(--code-ink); font-size: .8rem;
+  line-height: 1.5; overflow-x: auto; border-radius: 0; white-space: pre; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.chat-md pre.chat-code code::-webkit-scrollbar { height: 6px; }
+.chat-md pre.chat-code code::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.chat-code-bar { display: flex; justify-content: space-between; align-items: center; padding: .15rem .45rem .15rem .75rem; font: 500 .66rem/1.8 var(--mono);
+  color: var(--faint); letter-spacing: .04em; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel2) 55%, var(--code-bg)); }
+.chat-copy { background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--muted); cursor: pointer; font: inherit; padding: 0 .4rem; }
+.chat-copy:hover { color: var(--ink); border-color: var(--border); background: var(--panel2); }
+.chat-md blockquote { border-left: 3px solid var(--quote-border, var(--border)); padding: .1rem .8rem; color: var(--muted); background: var(--quote-bg, transparent); }
+.chat-md table { border-collapse: collapse; font-size: .92em; display: block; overflow-x: auto; max-width: 100%; }
+/* a cell wraps at spaces and scrolls the table when a word is too long — it never breaks a word */
+.chat-md th, .chat-md td { border: 1px solid var(--border); padding: .25rem .55rem; text-align: left; word-break: normal; overflow-wrap: normal; min-width: 4rem; }
+.chat-md input[type="checkbox"] { margin: 0 .45rem 0 0; vertical-align: -.1em; accent-color: var(--accent); }
+.chat-md th { background: var(--panel2); font-weight: 600; }
+.chat-md a { color: var(--link, var(--accent)); }
+.chat-md img { max-width: 100%; border-radius: var(--r); }
+.chat-md hr { border: 0; border-top: 1px solid var(--border); margin: .7rem 0; }
+/* syntax colours for the fenced code: the terminal's palette, so a theme that
+   recolours the terminal recolours these too */
+.chat-md .hljs-comment, .chat-md .hljs-quote { color: var(--faint); font-style: italic; }
+.chat-md .hljs-keyword, .chat-md .hljs-selector-tag, .chat-md .hljs-meta, .chat-md .hljs-doctag, .chat-md .hljs-built_in, .chat-md .hljs-tag { color: var(--term-magenta); }
+.chat-md .hljs-string, .chat-md .hljs-addition, .chat-md .hljs-regexp { color: var(--term-green); }
+.chat-md .hljs-number, .chat-md .hljs-literal, .chat-md .hljs-symbol, .chat-md .hljs-bullet { color: var(--term-cyan); }
+.chat-md .hljs-title, .chat-md .hljs-section, .chat-md .hljs-name, .chat-md .hljs-selector-id, .chat-md .hljs-selector-class { color: var(--term-yellow); }
+.chat-md .hljs-attr, .chat-md .hljs-attribute, .chat-md .hljs-variable, .chat-md .hljs-template-variable, .chat-md .hljs-type, .chat-md .hljs-params { color: var(--term-blue); }
+.chat-md .hljs-deletion { color: var(--term-red); }
+.chat-md .hljs-emphasis { font-style: italic; } .chat-md .hljs-strong { font-weight: 600; }
+.chat-img { max-width: 100%; max-height: 360px; border-radius: var(--r); border: 1px solid var(--border); }
+/* ✻ Thinking… while it streams, ✻ Thought for 4s once it is done */
+.chat-thought { display: block; }
+.chat-thought summary { list-style: none; display: flex; align-items: flex-start; cursor: pointer; user-select: none; color: var(--faint);
+  font-style: italic; line-height: var(--chat-lh); }
+.chat-thought summary::-webkit-details-marker { display: none; }
+.chat-thought summary:hover .chat-thought-label { color: var(--muted); }
+.chat-spark { flex: 0 0 auto; width: var(--chat-gutter); font-family: var(--mono); font-style: normal; font-size: .85rem; }
+.chat-thought-label { font-size: .92em; }
+.chat-thought-body { margin-left: var(--chat-gutter); color: var(--muted); font-style: italic; font-size: .92em; padding: .1rem 0 .15rem; }
+.chat-thought-body code { font-style: normal; }
+.chat-note { display: flex; align-items: flex-start; padding-left: var(--chat-gutter); color: var(--muted); font-family: var(--mono); font-size: .8rem;
+  line-height: var(--chat-lh); }
+/* ⏺ Bash(ls -la)  — the line; then  ⎿ what came of it */
+.chat-tool { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.chat-tool-head { display: flex; align-items: flex-start; min-width: 0; }
+.chat-tool.has-more .chat-tool-head { cursor: pointer; }
+.chat-tool-title { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: .82rem; line-height: var(--chat-lh); color: var(--ink);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; word-break: break-all; }
+.chat-tool-name { font-weight: 600; }
+.chat-tool-title .icon { width: 13px; height: 13px; display: inline-block; vertical-align: -2px; margin-right: .4rem; color: var(--muted); }
+/* the row under an answer: copy, shown when the pointer is over the answer */
+.chat-msg.agent { position: relative; }
+.chat-msg-actions { position: absolute; right: 0; bottom: -.15rem; display: flex; gap: .1rem; opacity: 0; transition: opacity .12s ease;
+  background: linear-gradient(90deg, transparent, var(--bg) 30%); padding-left: 1.2rem; }
+.chat-msg.agent:hover .chat-msg-actions, .chat-msg-actions:focus-within { opacity: 1; }
+.chat-msg-act { width: 26px; height: 26px; border-radius: 6px; border: 0; background: transparent; color: var(--faint); cursor: pointer; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; }
+.chat-msg-act:hover { background: var(--panel2); color: var(--ink); }
+.chat-msg-act .icon { width: 14px; height: 14px; }
+@media (pointer: coarse) { .chat-msg-actions { opacity: 1; } }
+.chat-tool[data-status="pending"] .chat-dot, .chat-tool[data-status="in_progress"] .chat-dot { color: var(--muted); animation: chat-pulse 1.3s ease-in-out infinite; }
+.chat-tool[data-status="completed"] .chat-dot { color: var(--ok); }
+.chat-tool[data-status="failed"] .chat-dot, .chat-tool[data-status="cancelled"] .chat-dot { color: var(--danger); }
+@keyframes chat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.chat-tool-res { display: flex; align-items: flex-start; min-width: 0; padding-left: var(--chat-gutter); }
+.chat-tool-out { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .3rem; color: var(--muted); }
+.chat-tool-sum { font-family: var(--mono); font-size: .8rem; line-height: var(--chat-lh); color: var(--muted); }
+.chat-tool-sum.err { color: var(--danger); font-size: .8rem; }
+button.chat-tool-sum { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; align-self: flex-start; }
+button.chat-tool-sum:hover { color: var(--ink); }
+.chat-tool-caret { color: var(--faint); }
+.chat-tool-text { margin: 0; font-family: var(--mono); font-size: .78rem; line-height: 1.5; white-space: pre; overflow-x: auto; color: var(--muted);
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.chat-tool-text.tall { max-height: 24rem; overflow: auto; }
+.chat-tool-text.err { color: var(--danger); font-size: .78rem; }
+.chat-tool-detail { font-size: .92em; color: var(--ink); max-height: 30rem; overflow: auto; }
+.chat-more { align-self: flex-start; background: none; border: 0; padding: 0; font-family: var(--sans); font-size: .76rem; color: var(--faint); cursor: pointer; }
+.chat-more:hover { color: var(--ink); }
+.chat-tool-locs { display: flex; flex-wrap: wrap; gap: .25rem .6rem; }
+.chat-path { font-family: var(--mono); font-size: .78rem; color: var(--link, var(--accent)); text-decoration: none; cursor: pointer; word-break: break-all; }
+.chat-path:hover { text-decoration: underline; }
+.chat-diff { border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; background: var(--panel); }
+.chat-diff-head { padding: .2rem .6rem; background: var(--panel2); border-bottom: 1px solid var(--border); line-height: 1.6; }
+.chat-diff-body { margin: 0; font-family: var(--mono); font-size: .76rem; line-height: 1.5; max-height: 22rem; overflow: auto; }
+.chat-diff-line { padding: 0 .6rem; white-space: pre; }
+.chat-diff-line.add { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ink); }
+.chat-diff-line.del { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--ink); }
+.chat-diff-line.ctx { color: var(--muted); }
+/* the permission box: Claude Code's prompt — a frame, the question, 1. 2. 3. */
+.chat-perm { border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); border-radius: var(--r);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel)); padding: .55rem .7rem .5rem; color: var(--ink); max-width: 36rem; font-family: var(--sans); }
+.chat-perm.done { border: 0; background: transparent; padding: 0; }
+.chat-perm-what { font-family: var(--mono); font-size: .8rem; color: var(--muted); margin-bottom: .3rem; word-break: break-word; }
+.chat-perm-q { font-weight: 600; font-size: .9rem; margin-bottom: .3rem; }
+.chat-perm.done .chat-perm-q { display: none; }
+.chat-perm-row { display: flex; flex-direction: column; gap: .1rem; }
+.chat-perm-btn { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; font: inherit; font-size: .88rem; min-height: 38px;
+  padding: .35rem .5rem; border: 1px solid transparent; border-radius: var(--r); background: transparent; color: var(--ink); cursor: pointer; }
+.chat-perm-btn:hover, .chat-perm-btn:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: none; }
+.chat-perm-btn.reject:hover, .chat-perm-btn.reject:focus-visible { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.chat-perm-n { font-family: var(--mono); font-size: .78rem; color: var(--faint); width: 1.4rem; flex: 0 0 auto; text-align: right; }
+.chat-perm-hint { font-family: var(--mono); font-size: .68rem; color: var(--faint); margin-top: .35rem; padding-left: .5rem; }
+.chat-perm-answer { font-family: var(--mono); font-size: .8rem; color: var(--muted); line-height: var(--chat-lh); }
+.chat-perm-answer.ok { color: var(--ok); }
+.chat-perm-answer.no { color: var(--danger); }
+.chat-elicit .chat-perm-row { flex-direction: row; flex-wrap: wrap; gap: .4rem; margin-top: .3rem; }
+.chat-elicit .chat-perm-btn { width: auto; border-color: var(--border); background: var(--panel2); padding: .35rem .8rem; }
+.chat-elicit .chat-perm-btn.allow { background: var(--accent-deep); color: var(--on-accent); border-color: transparent; }
+.chat-elicit .chat-perm-btn.allow:hover { background: var(--accent); }
+.chat-form { display: flex; flex-direction: column; gap: .4rem; margin: .3rem 0 .2rem; }
+.chat-field { display: flex; flex-direction: column; gap: .15rem; font-size: .84rem; color: var(--muted); }
+.chat-field input, .chat-field select { font: inherit; padding: .3rem .45rem; background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: var(--r); }
+.chat-field.check { flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: .5rem; }
+.chat-field.check input { width: 1rem; height: 1rem; padding: 0; accent-color: var(--accent); }
+/* the plan: Claude Code's todo list, under the transcript */
+.chat-plan { flex: 0 0 auto; border-top: 1px solid var(--border); padding: .4rem 1rem .45rem; background: var(--chassis); font-size: .84rem; max-height: 30%; overflow: auto; }
+.chat-plan summary { cursor: pointer; color: var(--muted); font-family: var(--mono); font-size: .72rem; letter-spacing: .03em; user-select: none; }
+.chat-plan-list { list-style: none; margin: .3rem 0 0; padding: 0; }
+.chat-plan-item { display: flex; gap: .5rem; padding: .1rem 0; line-height: 1.45; color: var(--muted); }
+.chat-plan-item.completed { color: var(--faint); }
+.chat-plan-item.completed .chat-plan-text { text-decoration: line-through; }
+.chat-plan-item.in_progress { color: var(--ink); }
+.chat-plan-mark { flex: 0 0 1.1rem; font-family: var(--mono); text-align: center; color: var(--muted); }
+.chat-plan-item.in_progress .chat-plan-mark { color: var(--accent); }
+.chat-plan-item.completed .chat-plan-mark { color: var(--ok); }
+
+/* ── the foot: the status line, then the composer ────────────────────────── */
+.chat-foot { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--chassis); }
+.chat-composer { padding: .5rem max(.7rem, calc((100% - var(--chat-measure)) / 2)) calc(.6rem + env(safe-area-inset-bottom)); display: flex;
+  flex-direction: column; gap: .3rem; position: relative; }
+
+/* ✻ Working… (esc to interrupt · 12s · context 42%) */
+.chat-status { font-family: var(--mono); font-size: .74rem; color: var(--muted); padding: 0 .4rem; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; line-height: 1.4; }
+.chat-status[hidden] { display: none; }
+.chat-spin { display: inline-block; width: 1em; text-align: center; color: var(--accent); }
+.chat-status.err { color: var(--danger); font-size: .74rem; white-space: normal; }
+.chat-status-meta { color: var(--faint); }
+/* the box: one rounded shape holding the text and, on its bottom row, the
+   attach on the left, the mic and the round send on the right */
+.chat-box { display: flex; flex-direction: column; gap: .1rem; padding: .55rem .55rem .45rem 1rem;
+  border: 1px solid var(--border); border-radius: 22px; background: var(--panel);
+  transition: border-color .12s ease, box-shadow .12s ease; }
+.chat-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.chat-input { width: 100%; resize: none; font: inherit; font-size: var(--font-size); line-height: 1.5; padding: .2rem 0; box-sizing: border-box;
+  background: transparent; color: var(--ink); border: 0; outline: none; min-height: 1.9rem; max-height: 220px; overflow-y: auto; }
+.chat-input::placeholder { color: var(--faint); }
+.chat-box-row { display: flex; align-items: center; justify-content: space-between; gap: .35rem; margin-left: -.45rem; }
+.chat-box-left, .chat-box-right { display: flex; align-items: center; gap: .15rem; flex: 0 0 auto; min-width: 0; }
+.chat-box-left { flex: 1 1 auto; }
+/* the agent chip: its mark, its name, the mode — and the menu behind it */
+.chat-agent-chip { display: inline-flex; align-items: center; gap: .35rem; height: 30px; padding: 0 .45rem 0 .35rem; border-radius: 999px;
+  border: 1px solid transparent; background: transparent; color: var(--muted); font: 500 .78rem/1 var(--sans); cursor: pointer; min-width: 0;
+  max-width: 100%; }
+.chat-agent-chip:hover, .chat-agent-chip[aria-expanded="true"] { background: var(--panel2); color: var(--ink); border-color: var(--border); }
+.chat-agent-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-agent-chip-mode { color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-agent-chip .icon { width: 14px; height: 14px; color: var(--faint); flex: 0 0 auto; }
+.chat-agent-menu { position: fixed; z-index: 80; min-width: 17rem; max-width: min(24rem, calc(100vw - 1rem));
+  overflow: auto; padding: .35rem; background: linear-gradient(var(--pop), var(--pop)), var(--bg); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow) 60%, transparent); }
+.chat-menu-h { font-family: var(--label-font); font-size: var(--label-size); font-weight: var(--label-weight); letter-spacing: var(--label-tracking);
+  text-transform: var(--label-case); color: var(--faint); padding: .45rem .65rem .25rem; }
+.chat-menu-h:first-child { padding-top: .3rem; }
+.chat-agent-menu .chat-menu-item { min-height: 36px; padding: .3rem .6rem; }
+.chat-agent-menu .chat-menu-item.on { color: var(--ink); }
+.chat-agent-menu .chat-menu-item > .icon:last-child { margin-left: auto; color: var(--accent); width: 14px; height: 14px; }
+.chat-agent-item-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .05rem; overflow: hidden; }
+.chat-agent-item-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-agent-item-st { font-family: var(--sans); font-size: .7rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-agent-item-st.ok { color: color-mix(in srgb, var(--ok) 78%, var(--ink)); }
+.chat-agent-item-st.warn { color: color-mix(in srgb, var(--warn) 62%, var(--ink)); font-weight: 600; }
+.chat-agent-item-st.off { color: var(--faint); }
+.chat-menu-sep { border-top: 1px solid var(--border); margin: .3rem 0; }
+.chat-menu-note { padding: .4rem .65rem; color: var(--muted); font-size: .8rem; }
+.chat-round { width: 34px; height: 34px; border-radius: 50%; border: 0; background: transparent; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; flex: 0 0 auto; }
+.chat-round:hover { background: var(--panel2); color: var(--ink); }
+.chat-round .icon { width: 19px; height: 19px; }
+.chat-mic[aria-pressed="true"] { color: var(--on-accent); background: var(--danger); }
+.chat-mic.busy { color: var(--muted); background: var(--panel2); }
+.chat-mic.busy .icon { opacity: .5; }
+.chat-send { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--accent-deep); color: var(--on-accent);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; flex: 0 0 auto;
+  transition: background-color .12s ease, opacity .12s ease; }
+.chat-send .icon { width: 18px; height: 18px; }
+.chat-send:hover { background: var(--accent); }
+.chat-send:disabled { opacity: .3; cursor: default; }
+.chat-send.stop { background: var(--ink); color: var(--bg); }
+.chat-send.stop .icon { width: 16px; height: 16px; }
+/* ── What the agent is pointed at: chips above the message ───────────────
+   The documents this window has open ride along with every prompt (dashed:
+   they follow you), files you added stay put (solid), and the folder chip
+   says where the agent stands. Claude's own composer marks context the same
+   way — small, quiet, removable. */
+.chat-ctx { display: flex; gap: .3rem; flex-wrap: wrap; padding: .1rem 0 .4rem; }
+.chat-ctx-chip { display: inline-flex; align-items: center; max-width: 14rem; min-width: 0;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--panel2); }
+.chat-ctx-chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.chat-ctx-chip.auto { border-style: dashed; }
+.chat-ctx-chip.cwd .icon { color: var(--accent); }
+.chat-ctx-open { display: inline-flex; align-items: center; gap: .3rem; min-width: 0; cursor: pointer;
+  border: 0; background: transparent; color: var(--muted); font: 500 .74rem/1.3 var(--sans);
+  padding: .24rem .15rem .24rem .5rem; }
+.chat-ctx-open:hover { color: var(--ink); }
+.chat-ctx-chip .icon { width: 12px; height: 12px; flex: 0 0 auto; }
+.chat-ctx-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-ctx-x { border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: .9rem; line-height: 1; padding: .2rem .45rem .25rem .2rem; border-radius: 999px; }
+.chat-ctx-x:hover { color: var(--ink); }
+/* the same chips under the message they went with */
+/* a message written while the agent was working: it waits for the turn in
+   front of it, and says so under the bubble */
+.chat-msg.user.queued { opacity: .72; }
+.chat-queued { display: flex; align-items: center; gap: .5rem; justify-content: flex-end;
+  margin-top: .35rem; font: 500 .72rem/1.3 var(--sans); color: var(--faint); }
+.chat-queued-x { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font: inherit; text-decoration: underline; padding: 0; }
+.chat-queued-x:hover { color: var(--ink); }
+.chat-msg-ctx { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .4rem; }
+.chat-ctx-chip.sent { gap: .3rem; padding: .22rem .6rem; cursor: pointer;
+  color: var(--muted); font: 500 .72rem/1.3 var(--sans); background: transparent; }
+.chat-ctx-chip.sent:hover { color: var(--ink); }
+/* a menu row that is a switch: its state is a check on the right */
+.chat-menu-item.on .icon:last-child { margin-left: auto; color: var(--accent); }
+/* the path picker: the palette's shape, but only as tall as a list needs */
+.pick-card { height: min(62vh, 520px); }
+
+.chat-attach { display: flex; gap: .4rem; flex-wrap: wrap; padding: .1rem 0 .4rem; }
+.chat-chip { position: relative; display: inline-block; }
+.chat-chip img { height: 56px; border-radius: var(--r); border: 1px solid var(--border); }
+.chat-chip-x { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--panel); color: var(--ink); font-size: .75rem; line-height: 1; cursor: pointer; padding: 0; }
+/* the slash popup: /name on the left, what it does on the right */
+.chat-slash { position: absolute; left: .7rem; right: .7rem; bottom: calc(100% - .2rem); background: var(--pop, var(--panel)); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: 0 8px 28px color-mix(in srgb, var(--shadow) 55%, transparent); z-index: 5; overflow: hidden; padding: .25rem; }
+.chat-slash-row { display: flex; gap: .8rem; align-items: baseline; padding: .4rem .7rem; min-height: 36px; box-sizing: border-box; cursor: pointer; border-radius: var(--r); }
+.chat-slash-row.sel, .chat-slash-row:hover { background: var(--panel2); }
+.chat-slash-row.sel .chat-slash-name { color: var(--accent); }
+.chat-slash-name { font-family: var(--mono); font-size: .82rem; color: var(--ink); flex: 0 0 auto; min-width: 5.5rem; }
+.chat-slash-desc { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .82rem; }
+.chat-slash-hint { flex: 0 0 auto; font-family: var(--mono); font-style: italic; color: var(--faint); font-size: .74rem; }
+/* short: a landscape phone, the chat in the panel — one row (＋ · text ·
+   mic · send) that grows into two only when the text wraps (ChatGPT's phone
+   composer). A class the view sets, not a height container query: see the
+   note on .tab-content.chat above. */
+.chat-view.short .chat-box { flex-direction: row; flex-wrap: wrap; align-items: flex-end; padding: .3rem .4rem .3rem .45rem; gap: .2rem; }
+.chat-view.short .chat-box-row { display: contents; }
+.chat-view.short .chat-box-left { order: -1; flex: 0 0 auto; }
+/* basis 0, not auto: with the box wrapping, a textarea whose basis is its
+   own content pushes itself onto a line of its own the moment you type */
+.chat-view.short .chat-input { flex: 1 1 0; min-width: 5rem; min-height: 34px; max-height: 96px; padding: .45rem .2rem; }
+.chat-view.short .chat-plan { display: none; }
+.chat-view.short .chat-head { min-height: 38px; padding-top: .2rem; padding-bottom: .2rem; }
+.chat-view.short .chat-agent-chip-mode { display: none; }
+.chat-view.short .chat-more-wrap { display: none; }   /* …and in a short chat, where its menu would be clipped */
+.chat-view.short .chat-empty .av-lg, .chat-view.short .chat-empty-sub, .chat-view.short .chat-empty-hint { display: none; }
+.chat-view.short .chat-empty { padding: .8rem; }
+.chat-view.short .chat-empty-title { font-size: 1rem; }
+@container (max-width: 360px) {
+  .chat-agent-chip-mode { display: none; }
+}
+@container (max-width: 300px) {
+  .chat-agent-chip-name { max-width: 5rem; }
+}
+/* …and in EITHER compact mode the box is a WRAPPING row, so the two chip
+   rows (context, attachments) take a full line of their own above the
+   controls. Without the wrap, `flex-basis: 100%` only made them fight the
+   textarea for the same line: the text ended up squeezed against the right
+   edge with an image thumbnail beside it (2026-09-21, krystof's phone). */
+.chat-view.short .chat-ctx, .chat-box .chat-ctx { order: -3; }
+.chat-view.short .chat-attach, .chat-box .chat-attach { order: -2; }
+@media (pointer: coarse) {
+  .chat-ctx, .chat-attach { flex: 1 0 100%; min-width: 0; }
+}
+.chat-view.short .chat-ctx, .chat-view.short .chat-attach { flex: 1 0 100%; min-width: 0; }
+
+/* a touch screen: the same one row always (ChatGPT's phone composer) — the
+   text grows upward beside the buttons, which stay on the bottom line */
+/* A finger: the text gets the whole width and the controls sit under it, as
+   claude.ai and ChatGPT have it on a phone. It WAS one row (＋ · text · mic ·
+   send), which worked while the box held nothing else — then the agent chip
+   and the context chips arrived and the text was squeezed into a 140px
+   column against the right edge (2026-09-21, krystof's phone). */
+@media (pointer: coarse) {
+  /* Claude's phone composer, copied: one soft-cornered box, the text on its
+     own at the top, and under it a row of round filled buttons with the
+     agent as a pill beside the ＋. Everything a thumb can hit. */
+  .chat-box { padding: .6rem .6rem .55rem .85rem; gap: .35rem; border-radius: 26px; }
+  .chat-box-row { gap: .4rem; margin-left: 0; }
+  .chat-box-left, .chat-box-right { gap: .4rem; }
+  .chat-agent-chip-mode, .chat-agent-chip .icon { display: none; }   /* the mode and the chevron go; the agent stays */
+  .chat-agent-chip-name { max-width: 9rem; }
+  .chat-agent-chip { height: 40px; padding: 0 .85rem 0 .6rem; gap: .4rem; flex: 0 1 auto; min-width: 0;
+    background: var(--panel2); border-color: var(--border); color: var(--ink); font-size: .85rem; }
+  .chat-agent-chip .av { width: 22px; height: 22px; border-radius: 7px; }
+  .chat-more-wrap { display: none; }                  /* ⋯ folds into the agent's menu — one control on a phone */
+  .chat-round { background: var(--panel2); color: var(--ink); }
+  .chat-round .icon { width: 21px; height: 21px; }
+  .chat-send.stop { background: var(--panel2); color: var(--ink); }
+  .chat-input { min-height: 40px; max-height: 40vh; padding: .5rem .2rem .35rem; }
+}
+
+/* ── the first screen: agents, sign-in, recent chats ─────────────────────── */
+.chat-picker { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 1rem 1.1rem 1.4rem; display: flex; flex-direction: column; gap: .45rem; }
+.chat-picker-title { margin: 0; font-size: 1.05rem; font-weight: 600; color: var(--heading); }
+.chat-picker-lead { margin: 0 0 .35rem; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+.chat-picker h3 { margin: .7rem 0 .1rem; font-family: var(--label-font); font-size: var(--label-size); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-tracking); color: var(--muted); }
+.chat-error { border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  border-radius: var(--r); padding: .5rem .7rem; color: var(--ink); }
+.chat-stderr { margin: .4rem 0 0; font-family: var(--mono); font-size: .72rem; white-space: pre-wrap; word-break: break-word; color: var(--muted); max-height: 14rem; overflow: auto; }
+/* never squeezed by the column it sits in: the picker scrolls, the cards
+   keep their height (a shrunk card clipped its own last row) */
+.chat-agents { display: flex; flex-direction: column; flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--panel); overflow: hidden; container-type: inline-size; }
+.chat-agent { display: flex; flex-direction: column; gap: .35rem; padding: .55rem .85rem; min-width: 0; }
+/* an agent's row always fits: its buttons drop under the name when the
+   column is too narrow for them, rather than running off the edge */
+.chat-agent-row { display: flex; align-items: center; gap: .7rem .5rem; min-width: 0; flex-wrap: wrap; }
+.chat-agent + .chat-agent { border-top: 1px solid var(--border); }
+.chat-agent.chosen { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.chat-agent-dot { flex: 0 0 auto; width: .55rem; height: .55rem; border-radius: 50%; background: var(--faint); }
+.chat-agent-dot.ok { background: var(--ok); }
+.chat-agent-dot.warn { background: var(--warn); }
+.chat-agent-dot.off { background: transparent; border: 1px solid var(--faint); }
+.chat-agent-main { flex: 1 1 9rem; min-width: 0; display: flex; flex-direction: column; gap: .05rem; }
+.chat-agent-id { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
+.chat-agent-id strong { font-weight: 600; white-space: nowrap; }
+.chat-agent-vendor { color: var(--faint); font-size: .74rem; white-space: nowrap; }
+.chat-agent-status { font-family: var(--mono); font-size: .68rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-agent-status.ok { color: var(--ok); }
+.chat-agent-status.warn { color: var(--warn); }
+.chat-agent-status.off { color: var(--faint); }
+.chat-agent-actions { display: flex; flex-wrap: wrap; gap: .3rem; flex: 0 1 auto; margin-left: auto; justify-content: flex-end; min-width: 0; }
+.chat-agent-actions button { font: inherit; font-size: .8rem; padding: .3rem .7rem; min-height: 32px; border-radius: var(--r); border: 1px solid var(--border);
+  background: var(--panel2); color: var(--ink); cursor: pointer; white-space: nowrap; }
+.chat-agent-actions button:hover { border-color: var(--border-hover); }
+.chat-agent-actions button.primary { background: var(--accent-deep); color: var(--on-accent); border-color: transparent; }
+.chat-agent-actions button.primary:hover { background: var(--accent); }
+.chat-agent-actions button:disabled { opacity: .6; cursor: default; }
+.chat-agent-ask { color: var(--faint); font-size: .76rem; }
+.chat-agent-note { color: var(--faint); font-size: .76rem; line-height: 1.4; padding-left: 1.25rem; }
+/* a narrow picker (a side column, a phone): the buttons take their own line */
+@container (max-width: 540px) {
+  .chat-agent-actions { flex-basis: 100%; justify-content: flex-start; padding-left: 1.25rem; margin-left: 0; }
+}
+.chat-history { display: flex; flex-direction: column; flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--panel); overflow: hidden; }
+.chat-history-row { display: flex; align-items: center; gap: .6rem; width: 100%; text-align: left; font: inherit; font-size: .88rem; padding: .45rem .85rem; min-height: 40px;
+  border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+.chat-history-row + .chat-history-row { border-top: 1px solid var(--border); }
+.chat-history-row:hover { background: var(--panel2); }
+.chat-history-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-history-meta { flex: 0 0 auto; font-family: var(--mono); font-size: .66rem; color: var(--faint); white-space: nowrap; }
+.chat-log-det { margin-top: .5rem; }
+.chat-log-det summary { cursor: pointer; font-family: var(--label-font); font-size: var(--label-size); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-tracking); color: var(--muted); }
+.chat-back { align-self: flex-start; margin-top: .6rem; font: inherit; font-size: .84rem; padding: .35rem .8rem; min-height: 36px; border-radius: var(--r);
+  border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; }
+.chat-back:hover { color: var(--ink); background: var(--panel2); }
+
+@media (prefers-reduced-motion: reduce) { .chat-tool .chat-dot { animation: none; } .chat-box { transition: none; } }
+@media (pointer: coarse) {
+  .chat-hbtn { width: 40px; height: 40px; }
+  .chat-mode { height: 40px; }
+  .chat-round, .chat-send { width: 40px; height: 40px; }
+}
+@media (max-width: 880px) {
+  .chat-view { --chat-gutter: 1.25rem; }
+  .chat-head { padding: .3rem .4rem .3rem .75rem; gap: .3rem; }
+  .chat-head .chat-pill { display: none; }        /* the ⋯ menu names the agent */
+  .chat-hbtn { width: 40px; height: 40px; }
+  .chat-mode { height: 40px; max-width: 8.5rem; font-size: 16px; }
+  .chat-log { padding: .8rem .8rem .9rem; gap: .65rem; }
+  .chat-msg.user { max-width: 92%; }
+  .chat-perm { max-width: none; }
+  .chat-perm-btn { min-height: 42px; }
+  .chat-round, .chat-send { width: 40px; height: 40px; }
+  .chat-composer { padding: .45rem .6rem calc(.55rem + env(safe-area-inset-bottom)); }
+  .chat-picker { padding: .9rem .85rem 1.2rem; }
+  .chat-agent-actions button { min-height: 40px; }
+  .chat-history-row { padding: .5rem .8rem; }
 }

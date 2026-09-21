@@ -64,6 +64,14 @@ REGISTRY: list[dict] = [
      "help": "Override single colours, fonts and spacing of the chosen theme — the accent, the "
              "background, the base size, the column width… Your set replaces the company's; "
              "empty means the theme as shipped."},
+    {"key": "ai.agent", "type": "enum",
+     "options": ["claude", "codex", "gemini", "copilot", "grok", "qwen", "opencode", "hermes", "deepseek"],
+     "labels": {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "copilot": "Copilot CLI",
+                "grok": "Grok Build", "qwen": "Qwen Code", "opencode": "OpenCode", "hermes": "Hermes",
+                "deepseek": "DeepSeek Harness"},
+     "default": "claude", "scopes": ("company", "user"), "group": "Agents", "label": "Agent for new chats",
+     "help": "Which agent a new chat opens with. Every installed agent stays one click away in the "
+             "chat's picker; signing in is per person (docs/agent-chat.md)."},
     {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
      "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",

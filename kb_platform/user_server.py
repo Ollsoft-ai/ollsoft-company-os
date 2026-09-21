@@ -35,6 +35,7 @@ import aiohttp
 from aiohttp import WSMsgType, web
 
 from . import common, uploads
+from . import acp as kbacp
 from . import settings as kbsettings
 
 try:
@@ -89,7 +90,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 32   # /api/events (SSE: tree deltas, presence, config); /api/settings
+BACKEND_V = 33   # /acp + /api/acp/* (agent chat over ACP); /api/events; /api/settings
 
 
 def _name_key(name: str):
@@ -2441,6 +2442,7 @@ def make_app() -> web.Application:
     app.router.add_post("/api/cron/remove", _cron_guard(cron_remove))
     app.router.add_post("/api/cron/toggle", _cron_guard(cron_toggle))
     app.router.add_get("/pty", pty_handler)
+    kbacp.add_routes(app)   # /acp and /api/acp/* — agent chat
     return app
 
 

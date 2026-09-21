@@ -258,10 +258,14 @@ function paint(label) {
   }
   const lbl = $("#ptt-label");
   if (lbl && label) lbl.textContent = label;
-  if (hooks && hooks.button) {
-    hooks.button.classList.toggle("rec", state === "recording");
-    hooks.button.classList.toggle("busy", state === "sending");
-    hooks.button.setAttribute("aria-pressed", state === "recording" ? "true" : "false");
+  // every mic button shows the state: the dock's, and any view's own
+  // (a chat composer's carries data-mic)
+  const buttons = [...document.querySelectorAll("[data-mic]")];
+  if (hooks && hooks.button) buttons.push(hooks.button);
+  for (const b of buttons) {
+    b.classList.toggle("rec", state === "recording");
+    b.classList.toggle("busy", state === "sending");
+    b.setAttribute("aria-pressed", state === "recording" ? "true" : "false");
   }
   // One announcement per state change, never per frame.
   const st = $("#ptt-status");
@@ -383,7 +387,7 @@ async function beginRecording() {
       fail("Microphone blocked. Click the mic (Chrome) or padlock (Firefox) icon "
            + "in the address bar and allow it, then try again.");
     } else if (n === "NotFoundError" || n === "DevicesNotFoundError") {
-      fail("No microphone found.");
+      fail("No microphone found — allow it in the browser, or plug one in.");
     } else if (n === "NotReadableError" || n === "TrackStartError") {
       fail("The microphone is in use by another app.");
     } else {

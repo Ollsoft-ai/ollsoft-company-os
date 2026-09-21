@@ -19,6 +19,10 @@ import { initDictation, toggleDictation, dictationReady, retryDictation,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
 import { connectEvents } from "./events.js";
+import { parse as parseLayout, serialize as serializeLayout, findGroup as findLayoutGroup,
+         canAddColumn, canAddGroup, newGroupId, MIN_COL_PX, MIN_GROUP_PX } from "./layout.js";
+import { registerView, viewKind, registerCommand, commands as registeredCommands,
+         defineSlot, slot } from "./views.js";
 
 // Markdown source view: content stays ink; the machinery (marks, urls, code)
 // recedes. Every colour is a stylesheet token, so a theme change retints the
@@ -610,6 +614,51 @@ function livePreview(dir) {
         const d = Decoration.replace({ widget });
         decos.push(d.range(from, to)); atomics.push(d.range(from, to));
       };
+        // A list line hangs: the marker (and any indent of a nested level)
+      // sits in the margin, and the wrapped lines line up under the first
+      // word instead of running back to the page's edge. `lead` is how many
+      // spaces precede the marker, `mark` the marker's own width in em.
+      const hung = new Set();
+      const MARKER = /^(\s*)(?:([-*+])|(\d+[.)]))(\s+)/;
+      // the width of everything before an item's text, in CSS that resolves
+      // against the measured metrics (see calibrateListMetrics)
+      const markWidth = (kind, len) =>
+        kind === "task" ? "var(--lm-task)"     // the widget swallows the space after it
+          : kind === "num" ? "calc(" + len + " * var(--lm-mono) + var(--lm-space))"
+            : "calc(var(--lm-bullet) + var(--lm-space))";
+      const spaces = (n) => "calc(" + n + " * var(--lm-space))";
+      const hangList = (line, lead, kind, len) => {
+        if (hung.has(line.from)) return;
+        hung.add(line.from);
+        decos.push(Decoration.line({ class: "cm-listline",
+          attributes: { style: "--list-mark:" + markWidth(kind, len) + ";--list-lead:" + spaces(lead) } })
+          .range(line.from));
+      };
+      // A paragraph wrapped in the FILE is several lines in the editor, and
+      // the ones after the marker carry no marker of their own: without this
+      // they fall back to the page's edge, which is what makes a list look
+      // ragged. They are pushed to where the item's text begins, less the
+      // indentation they already print themselves.
+      // Continuations are decided at the END of the walk: a line inside a
+      // fenced code block belongs to the block's card, not to the item's
+      // paragraph, and the block is only seen later in the tree.
+      const codeLines = new Set();
+      const pendingCont = [];
+      const hangCont = (line, kind, len, lead) => {
+        if (hung.has(line.from)) return;
+        hung.add(line.from);
+        pendingCont.push({ line, kind, len, lead });
+      };
+      const flushCont = () => {
+        for (const { line, kind, len, lead } of pendingCont) {
+          if (codeLines.has(line.number)) continue;
+          const own = (line.text.match(/^\s*/) || [""])[0].length;
+          decos.push(Decoration.line({ class: "cm-listcont",
+            attributes: { style: "--list-mark:" + markWidth(kind, len) + ";--list-lead:" + spaces(lead) +
+                                 ";--own-lead:" + spaces(own) } })
+            .range(line.from));
+        }
+      };
       for (const { from, to } of view.visibleRanges) {
         syntaxTree(state).iterate({ from, to, enter: (n) => {
           const name = n.name;
@@ -674,6 +723,22 @@ function livePreview(dir) {
             }
           } else if (name === "Table") {
             return false;   // handled by tableField (a block decoration, below)
+          } else if (name === "ListItem") {
+            const first = state.doc.lineAt(n.from);
+            const m = first.text.match(MARKER);
+            if (m) {
+              const lead = m[1].length;
+              const kind = /^\s*[-*+]\s\[[ xX]\]\s/.test(first.text) ? "task" : m[2] ? "bullet" : "num";
+              const len = m[3] ? m[3].length : 0;
+              hangList(first, lead, kind, len);
+              const last = state.doc.lineAt(n.to);
+              for (let ln = first.number + 1; ln <= last.number; ln++) {
+                const line = state.doc.line(ln);
+                if (!line.text.trim()) continue;          // a blank line between paragraphs
+                if (MARKER.test(line.text)) continue;     // a nested item: its own shape
+                hangCont(line, kind, len, lead);
+              }
+            }
           } else if (name === "TaskMarker") {
             const line = state.doc.lineAt(n.from);
             const bm = line.text.match(/^(\s*)([-*+])\s\[[ xX]\]\s?/);
@@ -711,6 +776,7 @@ function livePreview(dir) {
               let cls = "cm-codeblock";
               if (ln === firstLine.number) cls += " cm-codeblock-first";
               if (ln === lastLine.number) cls += " cm-codeblock-last";
+              codeLines.add(ln);
               decos.push(Decoration.line({ class: cls }).range(state.doc.line(ln).from));
             }
             // copy button on the opening fence, copying the lines between the
@@ -727,6 +793,7 @@ function livePreview(dir) {
           }
         } });
       }
+      flushCont();
       this.decorations = Decoration.set(decos, true);
       this.atomic = Decoration.set(atomics, true);
     }
@@ -1216,11 +1283,17 @@ function activeDocView() {
 // the shell. Remember the last pane the user MEANINGFULLY interacted with
 // (typing, tapping into it); opening menus and tapping toolbar buttons must
 // not count, which is exactly why this cannot be document.activeElement.
-let lastPane = null;   // "term" | "doc" | {kind:"field", el}
+let lastPane = null;   // {kind:"term", t} | "doc" | {kind:"field", el}
+// the terminal tab an element sits in, if any
+function termTabOf(el) {
+  const host = el && el.closest ? el.closest(".tab-content.term") : null;
+  return host ? tabs.find((x) => x.el === host) || null : null;
+}
 document.addEventListener("focusin", (e) => {
   const el = e.target;
   if (!el || !el.closest) return;
-  if (el.closest("#terminal-panel")) { lastPane = "term"; return; }
+  const tt = termTabOf(el);
+  if (tt) { lastPane = { kind: "term", t: tt }; return; }
   if (el.tagName === "TEXTAREA" ||
       (el.tagName === "INPUT" && /^(text|search|url|tel|email)$/.test(el.type))) {
     // Fields inside transient chrome (menus, dialogs) are real dictation
@@ -1238,16 +1311,18 @@ function dictationTarget() {
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
 
   let target = null;
-  if (el && el.closest && el.closest("#terminal-panel") && activeTerm)
-    target = { kind: "term", t: activeTerm };
+  const inTermTab = el && termTabOf(el);
+  if (inTermTab && inTermTab.term)
+    target = { kind: "term", t: inTermTab };
   else if (el && (el.tagName === "TEXTAREA" ||
              (el.tagName === "INPUT" && /^(text|search|url|tel|email)$/.test(el.type))))
     target = { kind: "field", el };
 
   // Focus is on chrome (a menu button, the body): fall back to the last pane
   // the user actually worked in, not to "whatever document happens to be open".
-  if (!target && lastPane === "term" && activeTerm && !$("#terminal-panel").hidden)
-    target = { kind: "term", t: activeTerm };
+  if (!target && lastPane && lastPane.kind === "term" && terms.includes(lastPane.t) &&
+      isDisplayed(lastPane.t))
+    target = { kind: "term", t: lastPane.t };
   if (!target && lastPane && lastPane.kind === "field" &&
       document.contains(lastPane.el) && !lastPane.el.disabled &&
       lastPane.el.offsetParent !== null)
@@ -1259,8 +1334,10 @@ function dictationTarget() {
   }
   // Nothing focused and no writable document: the terminal if it is showing,
   // otherwise nowhere — and "nowhere" is a message, not a silent drop.
-  if (!target && activeTerm && !$("#terminal-panel").hidden)
-    target = { kind: "term", t: activeTerm };
+  if (!target) {
+    const shown = (activeTerm && isDisplayed(activeTerm)) ? activeTerm : terms.find(isDisplayed);
+    if (shown) target = { kind: "term", t: shown };
+  }
 
   // Say where the words will land while they can still be stopped: the pill
   // shows "→ terminal" for the whole recording, so a misroute is visible
@@ -1614,6 +1691,9 @@ function wireMdBar() {
   const inDoc = (el) => !!(el && el.closest && el.closest(".cm-content"));
   let tallest = 0, tallestW = 0;
   function keyboardGap() {
+    // A pinch shrinks the visible viewport exactly as a keyboard does, and
+    // it is not one: while the page is zoomed, nothing here applies.
+    if (vv && vv.scale > 1.01) return 0;
     const h = vv ? vv.height : window.innerHeight, w = vv ? vv.width : window.innerWidth;
     if (w !== tallestW) { tallestW = w; tallest = 0; }        // rotated: measure afresh
     tallest = Math.max(tallest, h);
@@ -1623,6 +1703,7 @@ function wireMdBar() {
   function syncKb() {
     const up = inDoc(document.activeElement) && keyboardGap() > 0;
     bar.classList.toggle("kb", up);
+    document.body.classList.toggle("kb-up", up);
     const lift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
     bar.style.setProperty("--kb-lift", up ? lift + "px" : "0px");
   }
@@ -1670,6 +1751,11 @@ function wireMdBar() {
 const $ = (s) => document.querySelector(s);
 const wsBase = () => (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host;
 const isMobile = () => window.matchMedia("(max-width: 880px)").matches;
+const COARSE_PRIMARY = window.matchMedia("(pointer: coarse)").matches;
+// A phone: narrow AND touched. A desktop window dragged narrow renders the
+// phone layout but keeps its record — the sheet's automatic "full" and its
+// remembered mode are a phone's, and would leak into the widened window.
+const isPhone = () => isMobile() && COARSE_PRIMARY;
 
 // ═══ Icons ══════════════════════════════════════════════════════════════════
 // One consistent stroke family (outline, 24-grid) instead of the mixed
@@ -1685,6 +1771,8 @@ const I = {
   file: svgIcon('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>'),
   artifact: svgIcon('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'),
   lock: svgIcon('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+  term: svgIcon('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+  chat: svgIcon('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
   plus: svgIcon('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'),
   folderPlus: svgIcon('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>'),
   upload: svgIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
@@ -1694,6 +1782,7 @@ const I = {
   trash: svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
   more: svgIcon('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
   pencil: svgIcon('<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>'),
+  pin: svgIcon('<path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z"/><line x1="12" y1="15" x2="12" y2="21"/>'),
   eye: svgIcon('<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>'),
   copy: svgIcon('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
   paste: svgIcon('<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>'),
@@ -1718,84 +1807,171 @@ function treeIcon(n) {
 // still-running shells (the backend keeps them alive across disconnects).
 let _restoring = false;
 
+// The layout as layout.js understands it, read off the DOM-side records.
+function currentLayout() {
+  const specOf = (t) => viewKind(t.kind).serialize(t);
+  const groupOf = (p) => {
+    const list = paneTabs(p);
+    return { id: p.gid, size: p.grow, active: Math.max(0, list.indexOf(p.active)), tabs: list.map(specOf),
+             collapsed: !!p.collapsed };
+  };
+  const focused = focusedPane();
+  const max = maximizedPaneId ? paneById(maximizedPaneId) : null;
+  return {
+    v: 2,
+    columns: columns.map((c) => ({ size: c.grow, groups: c.panes.map(groupOf) })),
+    dock: { side: dock.side, size: dock.size, collapsed: dockHidden(),
+            group: dockPane ? groupOf(dockPane) : { id: "dock", size: 1, active: 0, tabs: [] } },
+    focused: focused ? focused.gid : null,
+    maximized: max ? max.gid : null,
+  };
+}
+
 function saveSession() {
   if (_restoring) return;
   try {
-    localStorage.setItem("kbOpen", JSON.stringify({
-      tabs: tabs.map((t) => ({ path: t.path, kind: t.kind,
-                               pane: Math.max(0, panes.findIndex((p) => p.id === t.paneId)) })),
-      panes: panes.map((p) => p.grow),
-      paneActive: panes.map((p) => (p.active ? p.active.path : null)),
-      active: active ? active.path : null,
-      terms: terms.map((t) => ({ sid: t.sid, name: t.name })),
-      activeTerm: activeTerm ? activeTerm.sid : null,
-      termOpen: !$("#terminal-panel").hidden,
-    }));
+    // v2 (the layout) beside every v1 field derived from it — a browser still
+    // holding the previous bundle restores the tabs and the terminals from the
+    // shadow and loses only the stacking (see layout.js).
+    localStorage.setItem("kbOpen",
+      JSON.stringify(serializeLayout(currentLayout(), active ? active.path : null)));
   } catch (e) { /* private mode */ }
 }
 
 // Restoring the last session is two phases, because its two halves wait on
 // different things — and used to wait on each other's.
 //
-// Phase 1, at t=0: panes and tabs, from localStorage alone. openPath registers
-// a tab and draws its row synchronously before its first await, so the whole
-// tab bar — the right tab active — is on screen in the first frame; only the
-// documents' contents are still on their way. Nothing here needs to know who
-// you are: an expired session bounces on the first 401 whichever request it
-// is, and your name reaches the collaboration session the moment whoami
-// answers (t.announce, from loadWhoami).
+// Phase 1, at t=0: the grid, its groups and the document tabs, from
+// localStorage alone. openView registers a tab and draws its row synchronously
+// before its first await, so the whole tab bar — the right tab active — is on
+// screen in the first frame; only the documents' contents are still on their
+// way. A terminal tab is drawn too, as a "⟳ name" placeholder in its group,
+// and comes alive in phase 2. Nothing here needs to know who you are: an
+// expired session bounces on the first 401 whichever request it is, and your
+// name reaches the collaboration session the moment whoami answers
+// (t.announce, from loadWhoami).
 function restoreTabs() {
-  let s;
-  try { s = JSON.parse(localStorage.getItem("kbOpen") || "null"); } catch (e) { return null; }
-  if (!s) return null;
+  let raw, rec;
+  try { raw = localStorage.getItem("kbOpen"); rec = JSON.parse(raw || "null"); } catch (e) { return null; }
+  if (!raw || !rec) return null;
+  const layout = parseLayout(rec);
+  if (!layout) return null;
   _restoring = true;
-  // Rebuild the columns first, so every tab lands in the pane it was in.
-  while (panes.length < Math.min((s.panes || []).length, 6)) insertPane(panes.length);
-  (s.panes || []).forEach((g, i) => { if (panes[i] && g > 0) panes[i].grow = g; });
-  normalizeSplits();
-  // Open every saved tab CONCURRENTLY: mapping over the list preserves order
-  // while firing all the props/epoch/websocket round-trips at once.
-  const mounts = Promise.allSettled((s.tabs || []).map(
-    (t) => openPath(t.path, t.kind, (panes[t.pane || 0] || panes[0]).id)));
+  const gmap = buildLayout(layout);   // group id → pane
+  const mounts = [], pending = [];
+  const openInto = (p, specs) => {
+    for (const spec of specs) {
+      const K = viewKind(spec.kind);
+      const clean = K ? K.restore(spec) : null;
+      if (!clean) continue;
+      if (spec.kind === "term") { pending.push(pendingTerminal(p, clean)); continue; }
+      // Open every saved tab CONCURRENTLY: mapping over the list preserves
+      // order while firing all the props/epoch/websocket round-trips at once.
+      mounts.push(openView(spec.kind, clean, p.id));
+    }
+  };
+  for (const [gid, p] of gmap) {
+    const g = gid === "dock" ? layout.dock.group : findLayoutGroup(layout, gid);
+    if (g) openInto(p, g.tabs);
+  }
+  renderTabBar();
   // The tab you were on, from the first frame — not the last one opened.
-  const first = s.active && tabs.find((x) => x.path === s.active);
+  const first = typeof rec.active === "string" && tabs.find((x) => x.path === rec.active && !paneOf(x).collapsed);
   if (first) activateTab(first);
   // A restore that will want a terminal starts fetching its chunk now, so the
   // wait for whoami and the wait for xterm overlap instead of adding up.
-  if ((s.terms || []).length) warmTerminal().catch(() => { /* reported on use */ });
-  return { s, mounts };
+  if (pending.length) warmTerminal().catch(() => { /* reported on use */ });
+  return { layout, rec, mounts: Promise.allSettled(mounts), pending, gmap };
+}
+
+// The grid the layout describes, replacing the empty boot pane. Returns the
+// map from the layout's group ids to the panes made for them.
+function buildLayout(layout) {
+  const chrome = [document.querySelector(".doc-title-bar"), $("#mdbar")].filter(Boolean);
+  for (const el of chrome) el.remove();          // kept aside while the boot pane goes
+  for (const c of columns.slice()) c.el.remove();
+  columns.length = 0; panes.length = 0;
+  activePaneId = focusedPaneId = null; maximizedPaneId = null;
+  const gmap = new Map();
+  layout.columns.forEach((col, i) => {
+    const c = makeColumn(i);
+    c.grow = col.size;
+    col.groups.forEach((g, j) => {
+      const p = insertPaneAt(c, j);
+      p.grow = g.size; p.gid = g.id;
+      if (g.collapsed) { p.collapsed = true; p.el.hidden = true; }
+      gmap.set(g.id, p);
+    });
+  });
+  gmap.set("dock", dockPane);
+  dock.side = layout.dock.side; dock.size = layout.dock.size;
+  applyDockSide();
+  dockPane.collapsed = layout.dock.collapsed;
+  dockPane.el.hidden = layout.dock.collapsed;
+  if (!layout.dock.collapsed && isPhone()) setTermMax(preferredTermMax());
+  keepOneOpen();
+  const fp = gmap.get(layout.focused);
+  const open = panes.find((p) => !p.collapsed) || panes[0];
+  focusedPaneId = fp && !fp.collapsed ? fp.id : open.id;
+  activePaneId = open.id;
+  if (layout.maximized) { const mp = gmap.get(layout.maximized); if (mp && !mp.collapsed) maximizedPaneId = mp.id; }
+  normalizeSplits();
+  const home = panes[0];
+  for (const el of chrome) { if (el.id === "mdbar") home.el.appendChild(el); else home.el.insertBefore(el, home.hostEl); }
+  return gmap;
 }
 
 // Phase 2, once whoami has answered (canShell, the pty protocol version) and
 // the terminal UI is wired: the terminals — straight away, not after every
 // document's websocket has connected, which is what they used to queue behind
 // and never needed. Then the tabs' contents, and the tidy-up that depends on
-// them (a pane whose files all vanished collapses, the saved per-pane
+// them (a group whose files all vanished collapses, the saved per-group
 // selection comes back).
 async function restoreRest(h) {
   if (!h) return;
-  const { s, mounts } = h;
+  const { layout, rec, mounts, pending, gmap } = h;
   try {
-    if (canShell && (s.terms || []).length) {
-      let act = null;
-      for (const o of s.terms) {   // older saves stored bare sid strings
-        const sid = typeof o === "string" ? o : o.sid;
-        const t = await newTerminal(undefined, sid, typeof o === "string" ? undefined : o.name);
-        if (t && sid === s.activeTerm) act = t;
+    if (pending.length) {
+      if (!canShell) { for (const t of pending) dropTab(t); }
+      else {
+        for (const t of pending) {
+          if (!tabs.includes(t)) continue;
+          let ok = false;
+          try { ok = await attachTerminal(t, undefined); } catch (e) { ok = false; }
+          if (!ok) { for (const x of pending) if (tabs.includes(x) && x.pending) dropTab(x); break; }
+        }
       }
-      if (act) activateTerm(act, false);
-      if (!s.termOpen) hideTerminalPanel();
     }
     await mounts;
-    for (const p of panes.slice()) if (!paneTabs(p).length) removePane(p);
-    (s.paneActive || []).forEach((path, i) => {
-      const t = path && tabs.find((x) => x.path === path);
-      if (t && panes[i] && t.paneId === panes[i].id) panes[i].active = t;
-    });
-    if (s.active) {
-      const t = tabs.find((x) => x.path === s.active);
-      if (t) activateTab(t);
-    } else if (tabs.length) activateTab(panes[0].active || tabs[0]);
+    for (const p of panes.slice()) if (!paneTabs(p).length) paneEmptied(p, true);
+    keepOneOpen();
+    if (!paneTabs(dockPane).length && !dockHidden()) hideTerminalPanel(true);
+    // The active document first — one in view: a document in a folded
+    // group is never it, and new documents open beside one that is shown.
+    const inView = (t) => !paneOf(t).collapsed;
+    const act = typeof rec.active === "string" && tabs.find((x) => x.path === rec.active && inView(x));
+    if (act) activateTab(act);
+    else if (tabs.length) activateTab(firstDocTab(paneTabs(panes[0]).filter(inView)) || firstDocTab(tabs.filter(inView)) || null);
+    if (activePane().collapsed) activePaneId = (panes.find((p) => !p.collapsed) || panes[0]).id;
+    // Then each group shows the tab it showed — after, because activating
+    // the document pulls its group's view onto it, and a document read
+    // behind a terminal in its own group belongs behind it.
+    for (const [gid, p] of gmap) {
+      if (!paneById(p.id)) continue;
+      const g = gid === "dock" ? layout.dock.group : findLayoutGroup(layout, gid);
+      const want = g && paneTabs(p)[g.active];
+      if (want) p.active = want;
+    }
+    if (isPhone() && paneTabs(dockPane).length) liftPanelOntoPhone();
+    showEachPanesTab();
+    const fp = gmap.get(layout.focused);
+    if (fp && paneById(fp.id) && !fp.collapsed) focusedPaneId = fp.id;
+    const dockTerm = dockPane.active && dockPane.active.kind === "term" ? dockPane.active : null;
+    const shownTerm = dockTerm || terms.find(isDisplayed) || null;
+    if (shownTerm && shownTerm.term) noteActiveTerm(shownTerm);
+    normalizeSplits();
+    renderTabBar();
+    refitDisplayedTerminals();
   } finally {
     _restoring = false;
     saveSession();
@@ -1991,12 +2167,17 @@ function kbToast(msg, kind) {
 // action buttons into a dropdown below 880px, so nothing here forks by device.
 function closeNav() { document.body.classList.remove("nav-open"); }
 function wireNav() {
-  $("#nav-btn").addEventListener("click", () => {
-    const open = document.body.classList.toggle("nav-open");
-    // the drawer opens onto the file you are in, centred — not wherever the
-    // tree happened to be scrolled last time
-    if (open) revealActiveInTree(true);
-  });
+  // ☰: the drawer on a phone (opened onto the file you are in, centred — not
+  // wherever the tree happened to be scrolled last time), the collapsible
+  // file panel on a desktop; the corner's ☰ brings the panel back.
+  $("#nav-btn").addEventListener("click", toggleSidebar);
+  const badge = $("#access-badge");   // the pen / eye: not a decoration — the sharing panel is behind it
+  if (badge) {
+    badge.addEventListener("click", () => { if (active) openPerms(active.path); });
+    badge.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && active) { e.preventDefault(); openPerms(active.path); } });
+  }
+  const cn = $("#corner-nav");
+  if (cn) cn.addEventListener("click", toggleSidebar);
   $("#scrim").addEventListener("click", closeNav);
   // The user menu, bottom left of the sidebar: everything that is not a file
   // or the search lives one click behind the person. Hidden until asked, gone
@@ -2027,6 +2208,17 @@ function wireNav() {
 // layout, and clamped to the window so a width dragged on a 34" screen never
 // leaves a laptop with no editor left.
 const SBW_KEY = "kbSidebarW";
+// Whether the file panel is collapsed (☰ / Alt+B on a desktop) is remembered
+// the same way, and applied before the first paint so nothing jumps.
+const NAV_KEY = "kbNavHidden";
+try {
+  if (localStorage.getItem(NAV_KEY) === "1" && window.matchMedia("(min-width: 881px)").matches)
+    document.body.classList.add("nav-hidden");
+} catch (e) { /* private mode */ }
+function setNavHidden(on) {
+  document.body.classList.toggle("nav-hidden", on);
+  try { localStorage.setItem(NAV_KEY, on ? "1" : "0"); } catch (e) { /* private mode */ }
+}
 const SBW_DEFAULT = 264, SBW_MIN = 140;
 const sbwMax = () => Math.max(SBW_MIN, Math.round(window.innerWidth * 0.6));
 
@@ -2145,7 +2337,8 @@ async function loadWhoami() {
   $("#whoami").textContent = j.user + " · uid " + j.uid;
   $("#user-name").textContent = j.user;
   $("#user-avatar").textContent = (j.user || "?").slice(0, 1).toUpperCase();
-  $("#term-user").textContent = j.user;
+  whoamiUser = j.user;
+  renderTabBar();
   window.__kbuser = j.user;
   // Tabs restored before this answer announced themselves as "user"; tell the
   // collaboration sessions, and the avatar row, who you actually are.
@@ -2195,7 +2388,7 @@ function collectTreePaths(nodes, set) {
 function pruneVanishedTabs(newPaths) {
   if (!_lastTreePaths) return;
   for (const t of tabs.slice()) {
-    if (t.path.includes("/") && _lastTreePaths.has(t.path) && !newPaths.has(t.path) &&
+    if (t.path && t.path.includes("/") && _lastTreePaths.has(t.path) && !newPaths.has(t.path) &&
         !_movingPaths.has(t.path)) {
       const wasActive = active === t;
       closeTab(t);
@@ -2399,6 +2592,13 @@ function openCtxMenu(items, x, y) {
       m.appendChild(s);
       continue;
     }
+    if (it.note) {                       // a line that explains, with nothing to click
+      const n = document.createElement("div");
+      n.className = "ctx-note";
+      n.textContent = it.note;
+      m.appendChild(n);
+      continue;
+    }
     const b = document.createElement("button");
     b.className = "ctx-item" + (it.danger ? " danger" : "");
     b.innerHTML = (it.icon || "") + "<span></span>";
@@ -2410,7 +2610,7 @@ function openCtxMenu(items, x, y) {
   const r = m.getBoundingClientRect();
   m.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
   m.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
-  m.querySelector(".ctx-item").focus();   // Tab/arrows walk the menu; Escape closes it
+  m.querySelector(".ctx-item")?.focus();  // Tab/arrows walk the menu; Escape closes it
   _ctxMenu = m;
 }
 
@@ -2438,6 +2638,9 @@ function openTreeMenu(n, parentWritable, x, y) {
                  fn: () => { location.href = "/api/attachment?dl=1&path=" + encodeURIComponent(n.path); } });
     items.push("-");
   }
+  const pinned = pinnedTargets().has(n.path);
+  items.push({ icon: I.pin, label: pinned ? "Unpin from the sidebar" : "Pin to the sidebar",
+               fn: () => (pinned ? unpinPath(n.path) : pinPath(n.path, !!n.dir)) });
   items.push({ icon: I.copy, label: "Copy", fn: () => copyEntry(n) });
   if (parentWritable) {
     items.push({ icon: I.pencil, label: "Rename…", fn: () => renameEntry(n) });
@@ -2558,7 +2761,29 @@ async function moveEntry(srcPath, dst) {
     if (t) activateTab(t);
   }
   loadTree(true);
+  await repointPins(srcPath, dst);
   return true;
+}
+
+// A pin points at a path, so moving or renaming what it points at must carry
+// the pin with it — krystof moved a pinned file into company/ and had to pin
+// it again by hand (2026-09-21). `to` null means it is gone: drop the pin.
+// Your own list always; the company list only if you may write it.
+async function repointPins(from, to) {
+  const remap = (b) => {
+    if (b.kind === "term") return b;
+    if (b.target === from) return to === null ? null : { ...b, target: to };
+    if (b.target.startsWith(from + "/"))
+      return to === null ? null : { ...b, target: to + b.target.slice(from.length) };
+    return b;
+  };
+  for (const scope of ["mine", "company"]) {
+    if (scope === "company" && !isAdmin) continue;
+    const list = (scope === "company" ? launchers.company : launchers.mine) || [];
+    const next = list.map(remap).filter(Boolean);
+    if (next.length === list.length && next.every((b, i) => b.target === list[i].target)) continue;
+    await savePins(scope, next);
+  }
 }
 
 async function renameEntry(n) {
@@ -2570,14 +2795,131 @@ async function renameEntry(n) {
   await moveEntry(n.path, (dir ? dir + "/" : "") + name.trim());
 }
 
+// ---- choosing a path, over the tree the panel already holds ----------------
+// The palette searches everything (names AND contents) and OPENS what you
+// pick. This is the other half: pick a path and hand it back. The chat uses
+// it for "add a file" and for a chat's working folder.
+function pickPath(opts = {}) {
+  const dirs = opts.kind === "dir";
+  const entries = [];
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      // the dot-dirs the tree hides stay hidden here too (`.*` shows them)
+      if (!showHidden && n.name.startsWith(".")) continue;
+      // …and a secret is findable in the tree, never through a list like this
+      // one, exactly as the palette has it
+      if (isSecretPath(n.path)) continue;
+      // moving a folder: itself and everything under it are not destinations
+      if (opts.exclude && (n.path === opts.exclude || n.path.startsWith(opts.exclude + "/"))) continue;
+      if (n.dir) { if (dirs) entries.push(n.path); walk(n.children); }
+      else if (!dirs) entries.push(n.path);
+    }
+  };
+  walk(_lastTreeData || []);
+  if (dirs) entries.unshift("");                    // the knowledgebase itself
+  return new Promise((resolve) => {
+    let sel = 0, shown = entries, done = false;
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay palette-overlay";
+    ov.setAttribute("data-testid", "pickpath");
+    const card = document.createElement("div");
+    card.className = "modal-card palette-card pick-card";
+    const head = document.createElement("div");
+    head.className = "palette-head";
+    const kind = document.createElement("span");
+    kind.className = "palette-kind";
+    kind.innerHTML = dirs ? I.folder : I.file;
+    const input = document.createElement("input");
+    input.className = "palette-input";
+    input.setAttribute("data-testid", "pickpath-input");
+    input.placeholder = opts.placeholder || (dirs ? "Filter folders…" : "Filter files…");
+    input.spellcheck = false; input.autocomplete = "off";
+    const x = document.createElement("button");
+    x.className = "modal-x palette-x"; x.textContent = "×"; x.title = "Close";
+    x.setAttribute("aria-label", "Close");
+    head.append(kind, input, x);
+    const list = document.createElement("div");
+    list.className = "palette-list";
+    list.setAttribute("data-testid", "pickpath-list");
+    const foot = document.createElement("div");
+    foot.className = "palette-foot";
+    foot.innerHTML = "<span>↑↓ move · ⏎ choose · esc cancel</span>";
+    card.append(head, list, foot);
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      ov.remove();
+      resolve(v === undefined ? null : v);
+    };
+    const label = (path) => (path ? baseName(path) : "Company OS");
+    const render = () => {
+      const q = input.value.trim().toLowerCase();
+      shown = (q ? entries.filter((e) => e.toLowerCase().includes(q)) : entries).slice(0, 300);
+      if (sel >= shown.length) sel = Math.max(0, shown.length - 1);
+      list.innerHTML = "";
+      if (!shown.length) {
+        const none = document.createElement("div");
+        none.className = "palette-empty muted"; none.textContent = "No matches";
+        list.appendChild(none);
+        return;
+      }
+      shown.forEach((path, i) => {
+        const row = document.createElement("div");
+        row.className = "palette-item" + (i === sel ? " sel" : "");
+        row.setAttribute("data-testid", "pickpath-item");
+        row.dataset.path = path;
+        const ic = document.createElement("span");
+        ic.className = "pi-icon"; ic.innerHTML = dirs ? I.folder : I.file;
+        const body = document.createElement("span");
+        body.className = "pi-body";
+        const main = document.createElement("span");
+        main.className = "pi-main"; main.textContent = label(path);
+        body.appendChild(main);
+        const parent = dirName(path);
+        if (parent || !path) {
+          const sub = document.createElement("span");
+          sub.className = "pi-sub"; sub.textContent = path ? parent : "the whole knowledgebase";
+          body.appendChild(sub);
+        }
+        row.append(ic, body);
+        row.addEventListener("click", () => finish(path));
+        list.appendChild(row);
+      });
+      const cur = list.children[sel];
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); return; }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        sel = Math.max(0, Math.min(shown.length - 1, sel + (e.key === "ArrowDown" ? 1 : -1)));
+        render();
+        return;
+      }
+      if (e.key === "Enter") { e.preventDefault(); if (shown.length) finish(shown[sel]); }
+    };
+    input.addEventListener("input", () => { sel = 0; render(); });
+    x.addEventListener("click", () => finish(null));
+    ov.addEventListener("click", (e) => { if (e.target === ov) finish(null); });
+    document.addEventListener("keydown", onKey, true);
+    render();
+    input.focus();
+  });
+}
+
 async function moveToEntry(n) {
-  const dest = await kbPrompt("Destination folder:", dirName(n.path),
-                              { title: "Move " + baseName(n.path), ok: "Move",
-                                placeholder: "company/subfolder" });
-  if (!dest || !dest.trim()) return;
-  const d = dest.trim().replace(/^\/+|\/+$/g, "");
+  // Typing a destination path was the worst input in the app: you had to know
+  // the folder by heart and spell it. Pick it from the folders that exist.
+  const dest = await pickPath({ kind: "dir", exclude: n.dir ? n.path : null,
+                                placeholder: "Move “" + baseName(n.path) + "” to…" });
+  if (dest === null) return;
+  const d = dest.replace(/^\/+|\/+$/g, "");
   if (d === dirName(n.path)) return;
-  await moveEntry(n.path, d + "/" + baseName(n.path));
+  await moveEntry(n.path, (d ? d + "/" : "") + baseName(n.path));
 }
 
 async function pasteInto(folder) {
@@ -3117,124 +3459,471 @@ function openEntry(n) {
 }
 
 // ---- editor panes: the split view ------------------------------------------
-// A pane is one column of the editor area: its own tab strip, its own editor
-// host, its own scroll. Panes exist because two documents side by side is the
-// whole reason to have a wide screen; you make one by dragging a tab onto the
-// left or right edge of an existing pane, exactly as in VS Code.
+// ---- groups, columns and the dock: the layout -----------------------------
+// The editor area is a WORKSPACE of COLUMNS, each column a vertical stack of
+// GROUPS ("panes" here: a tab strip, an editor host and one visible tab), plus
+// the DOCK — the group that lives outside the workspace as the bottom panel
+// (or a side column) and holds the terminals by default. Every kind of view
+// is a tab in a group; a terminal is a tab like a document, only its group is
+// the dock until you drag it elsewhere. The rules — what a valid layout is,
+// how an old session maps onto it, how a phone renders it — live in
+// layout.js; this is the DOM side.
 //
 // The flat `tabs` array stays the single list of every open tab (order = strip
-// order); a tab's `paneId` says which column it lives in. Everything that
-// looked a tab up by path still works untouched.
-const panes = [];        // [{id, el, barEl, hostEl, dropEl, active, grow}]
-let paneSeq = 0;
-let activePaneId = null;
+// order); a tab's `paneId` says which group it lives in. Everything that looked
+// a tab up by path still works untouched — a terminal tab simply has no path.
+const columns = [];      // [{id, el, grow, panes: […]}] left → right
+const panes = [];        // workspace panes in reading order (column by column)
+let paneSeq = 0, colSeq = 0;
+let activePaneId = null;   // the pane whose visible tab is `active` — where documents open
+let focusedPaneId = null;  // the pane the keyboard is in, whatever it shows
+let dockPane = null;       // the pane that is #terminal-panel
+const dock = { side: "bottom", size: 0.38 };   // collapsed ⇔ #terminal-panel.hidden
+let maximizedPaneId = null;
 let _dragTab = null;     // the tab currently being dragged, if any
 
-const paneById = (id) => panes.find((p) => p.id === id) || null;
+const allPanes = () => (dockPane ? [...panes, dockPane] : panes.slice());
+const paneById = (id) => allPanes().find((p) => p.id === id) || null;
 const paneOf = (t) => paneById(t.paneId) || panes[0];
 const paneTabs = (p) => tabs.filter((t) => t.paneId === p.id);
 const activePane = () => paneById(activePaneId) || panes[0];
+const focusedPane = () => paneById(focusedPaneId) || activePane();
+const colById = (id) => columns.find((c) => c.id === id) || null;
+const colOf = (p) => colById(p.colId);
+const isDock = (p) => !!p && p === dockPane;
+const dockHidden = () => !dockPane || dockPane.el.hidden;
+// the first tab in a list that the header can describe (a document, not a terminal)
+const firstDocTab = (list) => list.find((t) => viewKind(t.kind).isActiveDocument) || null;
+// Is this tab on screen — its group's visible tab, in a group that is shown?
+function isDisplayed(t) {
+  const p = t && paneOf(t);
+  if (!p || p.active !== t || p.el.hidden) return false;
+  if (maximizedPaneId && maximizedPaneId !== p.id) return false;
+  return true;
+}
 
-function insertPane(index) {
+function makePane() {
   const el = document.createElement("div");
   el.className = "pane";
   const barEl = document.createElement("div");
   barEl.className = "tabbar";
   barEl.hidden = true;
-  // The streak is over when the MOUSE leaves the strip — that is the moment
-  // Chrome springs the tabs back. Only the mouse: a touch pointer ceases to
-  // exist the instant the finger lifts, so pointerleave fires after every tap,
-  // and releasing there would re-flow the strip between taps — exactly what
-  // the freeze exists to prevent. For touch the end of the streak is the next
-  // touch somewhere else (see wireTabStrip).
-  barEl.addEventListener("pointerleave", (e) => {
-    if (e.pointerType === "mouse") unlockTabStrip(barEl);
-  });
   const hostEl = document.createElement("div");
   hostEl.className = "editor";
   const dropEl = document.createElement("div");
   dropEl.className = "pane-drop";
   dropEl.appendChild(Object.assign(document.createElement("div"), { className: "pane-drop-ind" }));
   el.append(barEl, hostEl, dropEl);
-  const p = { id: ++paneSeq, el, barEl, hostEl, dropEl, active: null, grow: 1 };
-  el.dataset.pane = String(p.id);
-  panes.splice(index, 0, p);
+  return finishPane({ id: ++paneSeq, el, barEl, hostEl, dropEl, active: null, grow: 1,
+                      colId: null, role: "group", gid: newGroupId(), collapsed: false });
+}
+
+// A group's collapsed form: one line naming what it holds; a tap opens it
+// again. The same for a group in a column and for the dock.
+function makeHandle(p) {
+  const h = document.createElement("button");
+  h.type = "button"; h.className = "pane-handle";
+  h.setAttribute("data-testid", "pane-handle");
+  h.title = "Open this group (middle-click closes the tab it shows)";
+  h.addEventListener("click", () => { expandPane(p); if (p.active) activateTab(p.active); });
+  // middle-click closes the tab the group shows, as it does on a tab
+  h.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
+  h.addEventListener("auxclick", (e) => { if (e.button === 1 && p.active) { e.preventDefault(); closeTab(p.active); } });
+  // a tab dropped on the handle goes into the group, which opens to show it
+  h.addEventListener("dragover", (e) => {
+    if (!_dragTab) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    h.classList.add("drop-over");
+  });
+  h.addEventListener("dragleave", () => h.classList.remove("drop-over"));
+  h.addEventListener("drop", (e) => {
+    if (!_dragTab) return;
+    e.preventDefault(); e.stopPropagation();
+    const t = _dragTab;
+    endTabDrag();
+    moveTabToPane(t, p, paneTabs(p).length);
+  });
+  p.handleEl = h;
+  return h;
+}
+
+function finishPane(p) {
+  p.el.dataset.pane = String(p.id);
+  p.barEl.setAttribute("role", "tablist");
+  // The streak is over when the MOUSE leaves the strip — that is the moment
+  // Chrome springs the tabs back. Only the mouse: a touch pointer ceases to
+  // exist the instant the finger lifts, so pointerleave fires after every tap,
+  // and releasing there would re-flow the strip between taps — exactly what
+  // the freeze exists to prevent. For touch the end of the streak is the next
+  // touch somewhere else (see wireTabStrip).
+  p.barEl.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse") unlockTabStrip(p.barEl);
+  });
+  // A group that changes size refits the terminal it shows (a document
+  // reflows by itself). One observer, many hosts.
+  _fitObserver.observe(p.hostEl);
+  makeHandle(p);
+  wirePane(p);
+  return p;
+}
+const _fitObserver = new ResizeObserver((entries) => {
+  for (const e of entries) {
+    const p = allPanes().find((x) => x.hostEl === e.target);
+    if (!p) continue;
+    // a tight group has no room for the floating formatting toolbar (a
+    // touch screen's keyboard row is not that toolbar); a narrow strip
+    // keeps its tab names and gives up ＋ and ▾ first
+    p.el.classList.toggle("tight", !COARSE_PRIMARY && (e.contentRect.width < 420 || e.contentRect.height < 240));
+    p.el.classList.toggle("narrow", e.contentRect.width < 240);
+    if (p.active && p.active.kind === "term") fitTerm(p.active);
+  }
+});
+
+// The dock is the terminal panel's own markup adopted as a pane: same ids,
+// same header row, same test hooks — only now it is a group like the others.
+function adoptDock() {
+  const el = $("#terminal-panel");
+  const dropEl = document.createElement("div");
+  dropEl.className = "pane-drop";
+  dropEl.appendChild(Object.assign(document.createElement("div"), { className: "pane-drop-ind" }));
+  el.appendChild(dropEl);
+  dockPane = finishPane({ id: ++paneSeq, el, barEl: $("#term-tabs"), hostEl: $("#terminal"), dropEl,
+                          active: null, grow: 1, colId: null, role: "dock", gid: "dock", collapsed: true });
+  // The dock's handle lives at the bottom of the editor area whatever side
+  // the dock is on: "▴ Terminal · bash 1 · notes.md" (Ctrl+` opens it too).
+  dockPane.handleEl.id = "dock-handle";
+  dockPane.handleEl.title = "Open the terminal panel (Ctrl+`)";
+  document.querySelector(".editor-wrap").appendChild(dockPane.handleEl);
+  return dockPane;
+}
+
+function makeColumn(index) {
+  const el = document.createElement("div");
+  el.className = "col";
+  // an equal share of the row, whatever shares the others hold (after a
+  // reload they are fractions, and a flat 1 would dwarf them)
+  const share = columns.length ? columns.reduce((a, x) => a + x.grow, 0) / columns.length : 1;
+  const c = { id: ++colSeq, el, grow: share, panes: [] };
+  columns.splice(index, 0, c);
   const host = $("#panes");
-  const before = panes[index + 1];
+  const before = columns[index + 1];
   host.insertBefore(el, before ? before.el : null);
+  return c;
+}
+
+// A new column at `index`, holding one new pane. (The historic name — a pane
+// used to BE a column.)
+function insertPane(index) {
+  return insertPaneAt(makeColumn(index), 0);
+}
+
+// A new pane inside column `c` at row `rowIndex`.
+function insertPaneAt(c, rowIndex) {
+  const p = makePane();
+  p.colId = c.id;
+  p.grow = c.panes.length ? c.panes.reduce((a, x) => a + x.grow, 0) / c.panes.length : 1;
+  c.panes.splice(rowIndex, 0, p);
+  const before = c.panes[rowIndex + 1];
+  c.el.insertBefore(p.el, before ? (before.handleEl.parentElement === c.el ? before.handleEl : before.el) : null);
+  c.el.insertBefore(p.handleEl, p.el);
   // Split handles are disposable, panes are NOT: re-inserting a pane element
   // reloads any artifact iframe inside it, so only the handles get rebuilt.
   normalizeSplits();
-  wirePane(p);
   if (activePaneId === null) activePaneId = p.id;
+  if (focusedPaneId === null) focusedPaneId = p.id;
   return p;
 }
 
 function removePane(p) {
+  if (isDock(p)) return;                       // the dock collapses; it never leaves
+  const c = colOf(p);
   const i = panes.indexOf(p);
-  if (i < 0 || panes.length < 2) return;   // the last pane always stays
+  if (i < 0 || panes.length < 2 || !c) return;   // the last pane always stays
+  if (p.el.querySelector(":scope > .doc-title-bar, :scope > #mdbar"))
+    seatDocChrome(panes.find((x) => x !== p && !x.collapsed) || panes.find((x) => x !== p));
+  _fitObserver.unobserve(p.hostEl);
   p.el.remove();
-  panes.splice(i, 1);
+  if (p.handleEl) p.handleEl.remove();
+  c.panes.splice(c.panes.indexOf(p), 1);
+  if (!c.panes.length) { c.el.remove(); columns.splice(columns.indexOf(c), 1); }
+  if (maximizedPaneId === p.id) maximizedPaneId = null;
   normalizeSplits();
-  if (activePaneId === p.id) activePaneId = (panes[i] || panes[i - 1]).id;
+  if (keepOneOpen()) normalizeSplits();   // the neighbour it leaves behind may be folded
+  const next = panes[i] || panes[i - 1];
+  if (activePaneId === p.id) activePaneId = next.id;
+  if (focusedPaneId === p.id) focusedPaneId = next.id;
+}
+
+// A group whose last tab just left: the dock folds away, a group in a split
+// goes, and the last group of all stays — open, so the empty screen shows
+// (folded and empty it would be a blank workspace with no handle to click).
+function paneEmptied(p, quiet) {
+  if (isDock(p)) { hideTerminalPanel(quiet); return; }
+  if (panes.length > 1) { removePane(p); return; }
+  if (p.collapsed) { p.collapsed = false; p.el.hidden = false; normalizeSplits(); }
+}
+
+// The workspace never shows nothing: with every group folded (a record from
+// a build that allowed it, or the open group's files all gone) the first
+// one opens.
+function keepOneOpen() {
+  if (!panes.length || panes.some((p) => !p.collapsed)) return false;
+  panes[0].collapsed = false; panes[0].el.hidden = false;
+  return true;
+}
+
+function syncPaneOrder() {
+  panes.length = 0;
+  for (const c of columns) panes.push(...c.panes);
 }
 
 function normalizeSplits() {
   const host = $("#panes");
-  host.querySelectorAll(":scope > .pane-split").forEach((s) => s.remove());
+  host.querySelectorAll(":scope > .pane-split, .row-split").forEach((x) => x.remove());
+  const folded = (c) => c.panes.every((p) => p.collapsed);
+  columns.forEach((c, i) => {
+    // every group folded: the column is a rail of handles and its width goes
+    // to the neighbours (tmux break-pane, VS Code's collapsed side panel)
+    c.el.classList.toggle("folded", folded(c));
+    if (i) {
+      const sp = makeSplit(columns[i - 1], c, "col");
+      sp.classList.toggle("fold-hidden", folded(columns[i - 1]) || folded(c));
+      host.insertBefore(sp, c.el);
+    }
+    c.panes.forEach((p, j) => {
+      if (j) {
+        const sp = makeSplit(c.panes[j - 1], p, "row");
+        // no handle beside a collapsed group: there is nothing to size
+        sp.classList.toggle("fold-hidden", !!(c.panes[j - 1].collapsed || p.collapsed));
+        c.el.insertBefore(sp, p.handleEl);
+      }
+    });
+  });
+  syncPaneOrder();
   panes.forEach((p, i) => {
-    p.el.style.flexGrow = String(p.grow);
-    p.el.style.flexBasis = "0";
-    if (i) host.insertBefore(makeSplit(panes[i - 1], p), p.el);
     // Single-pane selectors — the tests', and anything pasted into a console —
-    // must keep resolving, so the leftmost pane carries the historic ids.
+    // must keep resolving, so the first pane carries the historic ids.
     if (i === 0) { p.barEl.id = "tabbar"; p.hostEl.id = "editor"; }
     else { p.barEl.removeAttribute("id"); p.hostEl.removeAttribute("id"); }
     p.barEl.dataset.testid = "tabbar";
     p.hostEl.dataset.testid = "editor";
   });
   document.body.classList.toggle("split", panes.length > 1);
+  applyMaximize();
 }
 
-// Dragging the handle moves width between exactly two neighbours; the rest of
-// the row keeps its share, so a three-pane layout doesn't reshuffle itself.
-function makeSplit(left, right) {
+// Maximized: one pane fills the editor area and nothing else — dock
+// included — is on screen. Render state, not a change to the layout.
+function applyMaximize() {
+  const on = !!maximizedPaneId && !!paneById(maximizedPaneId);
+  if (!on) maximizedPaneId = null;
+  document.body.classList.toggle("maximized", on);
+  for (const c of columns)
+    c.el.classList.toggle("max-hidden", on && !c.panes.some((p) => p.id === maximizedPaneId));
+  for (const p of allPanes()) {
+    p.el.classList.toggle("maximized", on && p.id === maximizedPaneId);
+    p.el.classList.toggle("max-hidden", on && p.id !== maximizedPaneId);
+  }
+  document.querySelectorAll("#panes .pane-split, #panes .row-split, #term-resizer")
+    .forEach((x) => x.classList.toggle("max-hidden", on));
+  // the phone's full-screen terminal is the dock, maximized — the old class
+  // stays as an alias for the stylesheet's scrim and drawer rules
+  document.body.classList.toggle("term-max", on && !!dockPane && maximizedPaneId === dockPane.id && isMobile());
+  document.querySelector(".editor-wrap").classList.toggle("max-hidden", on && !!dockPane && maximizedPaneId === dockPane.id);
+  applySizes();
+}
+
+// Sizes reach the stylesheet from the VISIBLE items only. A share is a
+// fraction of 1 in the saved record, and flex hands out only sum(flex-grow)
+// of the space when the sum is below 1 — so shares applied verbatim leave a
+// gap the moment a sibling folds, is hidden by a maximize, or leaves. Each
+// visible item gets its share of the visible sum, scaled to average 1
+// (tmux rebalances the same way when a pane is zoomed or killed). One
+// place, for the columns, the groups in each, and the workspace / dock split.
+function applySizes() {
+  const shown = (x) => !x.el.hidden && !x.el.classList.contains("max-hidden") && !x.el.classList.contains("folded");
+  const scale = (items) => {
+    const vis = items.filter(shown);
+    const sum = vis.reduce((a, x) => a + x.grow, 0) || 1;
+    for (const x of items) { x.el.style.flexGrow = String(x.grow / sum * (vis.length || 1)); x.el.style.flexBasis = "0"; }
+  };
+  scale(columns);
+  for (const c of columns) scale(c.panes);
+  if (_workspace.el && dockPane) scale([_workspace, dockPane]);
+}
+
+function setMaximized(paneId) {
+  maximizedPaneId = paneId || null;
+  applyMaximize();
+  renderTabBar();   // the strip shows the state (and the way back)
+  refocus();
+  requestAnimationFrame(refitDisplayedTerminals);
+  saveSession();
+}
+
+function toggleMaximize(p) {
+  p = p || keyPane();
+  if (!p || p.el.hidden) return;
+  // the phone's sheet: full or half, and the choice is remembered
+  if (isDock(p) && isPhone()) { setTermMax(maximizedPaneId !== p.id); return; }
+  setMaximized(maximizedPaneId === p.id ? null : p.id);
+}
+
+// Dragging the handle moves size between exactly two neighbours; the rest of
+// the row (or column) keeps its share, so a three-pane layout doesn't
+// reshuffle itself. `axis` "col": widths between columns; "row": heights
+// between the groups stacked in one column.
+function makeSplit(a, b, axis, onChange, minFrac) {
   const s = document.createElement("div");
-  s.className = "pane-split";
+  const vertical = axis === "row";
+  s.className = vertical ? "row-split" : "pane-split";
   s.title = "Drag to resize";
+  s.setAttribute("role", "separator");
+  s.setAttribute("aria-orientation", vertical ? "horizontal" : "vertical");
+  s.setAttribute("aria-label", vertical ? "Resize the groups above and below" : "Resize the columns");
+  s.tabIndex = 0;
+  const MIN = vertical ? MIN_GROUP_PX : MIN_COL_PX;
+  // a space too small for two minimums splits in half at most — never a
+  // negative share, which flex ignores and the saved layout would keep
+  // …and `minFrac`, if given, keeps either side at least that share of the
+  // pair (the dock's record clamps to [0.1, 0.9]; the drag agrees, so the
+  // release never jumps)
+  const clamp = (v, total) => {
+    const lo = Math.min(Math.max(MIN, (minFrac || 0) * total), total / 2);
+    return Math.min(Math.max(v, lo), total - lo);
+  };
+  const size = (el) => el.getBoundingClientRect()[vertical ? "height" : "width"];
+  const apply = (aw, total, sum) => {
+    a.grow = sum * (aw / total);
+    b.grow = sum - a.grow;
+    applySizes();
+  };
   s.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    const x0 = e.clientX;
-    const lw = left.el.getBoundingClientRect().width;
-    const rw = right.el.getBoundingClientRect().width;
-    const total = lw + rw, sum = left.grow + right.grow, MIN = 160;
-    document.body.classList.add("pane-resizing");
+    // Capture: an artifact iframe under the cursor would otherwise swallow
+    // the move and the release, and the drag would "stick" until a click.
+    try { s.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
+    const x0 = vertical ? e.clientY : e.clientX;
+    const aw0 = size(a.el), total = aw0 + size(b.el), sum = a.grow + b.grow;
+    document.body.classList.add(vertical ? "row-resizing" : "pane-resizing");
     const move = (ev) => {
-      const w = Math.min(Math.max(lw + ev.clientX - x0, MIN), total - MIN);
-      left.grow = sum * (w / total);
-      right.grow = sum - left.grow;
-      left.el.style.flexGrow = String(left.grow);
-      right.el.style.flexGrow = String(right.grow);
+      const d = (vertical ? ev.clientY : ev.clientX) - x0;
+      apply(clamp(aw0 + d, total), total, sum);
     };
     const up = () => {
+      s.removeEventListener("pointermove", move);
+      s.removeEventListener("pointerup", up);
+      s.removeEventListener("pointercancel", up);
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", up);
-      document.body.classList.remove("pane-resizing");
+      document.body.classList.remove(vertical ? "row-resizing" : "pane-resizing");
+      if (onChange) onChange();
+      refitDisplayedTerminals();
       saveSession();
     };
-    document.addEventListener("pointermove", move);
+    s.addEventListener("pointermove", move);
+    s.addEventListener("pointerup", up);
+    s.addEventListener("pointercancel", up);
+    document.addEventListener("pointermove", move);   // for the tests' synthetic events, which capture cannot route
     document.addEventListener("pointerup", up);
+  });
+  // The keyboard's way: arrows move the handle by 24px.
+  s.addEventListener("keydown", (e) => {
+    const dec = vertical ? e.key === "ArrowUp" : e.key === "ArrowLeft";
+    const inc = vertical ? e.key === "ArrowDown" : e.key === "ArrowRight";
+    if (!dec && !inc) return;
+    e.preventDefault();
+    const aw0 = size(a.el), total = aw0 + size(b.el), sum = a.grow + b.grow;
+    apply(clamp(aw0 + (inc ? 24 : -24), total), total, sum);
+    if (onChange) onChange();
+    refitDisplayedTerminals();
+    saveSession();
   });
   return s;
 }
 
-// Clicking anywhere in a pane makes it the one a new file opens into — and, as
-// in VS Code, makes ITS document the active one the header and toolbar describe.
+// ---- collapse: any group folds to a one-line handle and unfolds again ----
+function collapsePane(p, quiet) {
+  if (!p || p.collapsed) return;
+  // The workspace always shows a group: the last open one cannot fold (tmux
+  // keeps its last pane, VS Code its last editor group). The dock always can.
+  if (!isDock(p) && !panes.some((x) => x !== p && !x.collapsed)) {
+    if (!quiet) kbToast("The last open group stays open", "err");
+    return;
+  }
+  p.collapsed = true;
+  p.el.hidden = true;
+  if (maximizedPaneId === p.id) { maximizedPaneId = null; applyMaximize(); }
+  // A folded tab cannot be the one the header describes, the one documents
+  // open beside, or the one the keyboard sits in.
+  const fallback = panes.find((x) => x !== p && !x.collapsed) || panes.find((x) => x !== p) || panes[0];
+  if (focusedPaneId === p.id && fallback) focusedPaneId = fallback.id;
+  if (activePaneId === p.id && fallback) activePaneId = fallback.id;
+  if (isDock(p)) document.body.classList.remove("term-max");
+  normalizeSplits();
+  if (!quiet && active && paneOf(active) === p) {
+    const outside = tabs.filter((x) => paneOf(x) !== p && !paneOf(x).collapsed);
+    activateTab(firstDocTab(paneTabs(focusedPane())) || firstDocTab(outside) || null);
+  } else {
+    renderTabBar();
+    saveSession();
+  }
+  if (!quiet) refocus();
+}
+
+function expandPane(p) {
+  if (!p) return;
+  const was = p.collapsed;
+  p.collapsed = false;
+  if (isDock(p) && !paneTabs(p).length) { p.collapsed = true; p.el.hidden = true; renderTabBar(); return; }   // an empty dock stays out of the way
+  p.el.hidden = false;
+  if (isDock(p)) {
+    closeNav();   // the drawer would cover the panel on a phone
+    if (maximizedPaneId && maximizedPaneId !== p.id) setMaximized(null);
+    if (isPhone()) setTermMax(preferredTermMax());
+  }
+  normalizeSplits();
+  renderTabBar();
+  requestAnimationFrame(refitDisplayedTerminals);
+  if (was) saveSession();
+}
+
+function togglePaneFold(p) {
+  p = p || keyPane();
+  if (!p) return;
+  if (p.collapsed || p.el.hidden) expandPane(p); else collapsePane(p);
+}
+
+// Clicking anywhere in a pane puts the keyboard there. If what it shows is a
+// document, that document becomes the active one the header and toolbar
+// describe — as in VS Code. If it shows a terminal, the terminal gets the
+// focus and the header keeps describing the document you were reading.
+// The keyboard never lands on <body>: when what had it is gone (a closed
+// tab, a removed group, a folded group's editor), the focused group's tab
+// takes it — i3 focuses whatever took the space.
+function refocus() {
+  const ae = document.activeElement;
+  if (ae && ae !== document.body) return;
+  const p = focusedPane();
+  const t = p && p.active;
+  if (!t || p.el.hidden || p.el.classList.contains("max-hidden")) return;
+  if (t.kind === "term") { if (t.term) t.term.focus(); return; }
+  viewKind(t.kind).focus(t);
+}
+
 function focusPane(p) {
-  if (activePaneId === p.id) return;
+  const was = focusedPaneId;
+  focusedPaneId = p.id;
+  const cur = p.active;
+  if (cur && !viewKind(cur.kind).isActiveDocument) {
+    if (cur.kind === "term") noteActiveTerm(cur);
+    if (was !== p.id) { renderTabBar(); saveSession(); }
+    return;
+  }
+  if (activePaneId === p.id) { if (was !== p.id) renderTabBar(); return; }
   activePaneId = p.id;
-  if (p.active) activateTab(p.active);
+  if (cur) activateTab(cur);
   else { renderTabBar(); saveSession(); }
 }
 
@@ -3244,8 +3933,15 @@ function wirePane(p) {
   // between pointerdown and click swallows the click that caused it: the tab
   // you aimed at is gone by the time the browser looks for it.
   p.el.addEventListener("pointerdown", (e) => {
-    if (!e.target.closest(".tab")) focusPane(p);
+    // …nor on the strip's action buttons: focusPane re-renders the strip,
+    // and a button rebuilt between pointerdown and click never gets the click
+    if (!e.target.closest(".tab, .grp-actions")) focusPane(p);
   }, true);
+  // Double-clicking the strip's empty space maximizes the group (the panel
+  // title convention); double-clicking again restores.
+  p.barEl.addEventListener("dblclick", (e) => {
+    if (e.target === p.barEl) toggleMaximize(p);
+  });
   // — the tab strip: drop here to move the tab into this pane at this position
   p.barEl.addEventListener("dragover", (e) => {
     if (!_dragTab) return;
@@ -3263,37 +3959,85 @@ function wirePane(p) {
     endTabDrag();
     moveTabToPane(t, p, barInsertIndex(p, e.clientX));
   });
-  // — the body: middle = move into this pane, an edge = split off a new one
+  // — the body: middle = move into this pane, an edge = split off a new one.
+  // The overlay covers the strip too, so a drop there is the strip's: a
+  // position among its tabs.
+  const overBar = (e) => !p.barEl.hidden && e.clientY <= p.barEl.getBoundingClientRect().bottom;
   p.dropEl.addEventListener("dragover", (e) => {
     if (!_dragTab) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    paintPaneHint(p, dropSide(p, e.clientX));
+    if (overBar(e)) { p.dropEl.classList.remove("over"); markBarInsert(p, e.clientX); return; }
+    clearDropMarks();
+    const side = dropSide(p, e.clientX, e.clientY);
+    if ((side === "in" || isDock(p)) && paneOf(_dragTab) === p) return;   // its own group: nothing would move
+    paintPaneHint(p, side);
   });
   p.dropEl.addEventListener("dragleave", () => p.dropEl.classList.remove("over"));
   p.dropEl.addEventListener("drop", (e) => {
     if (!_dragTab) return;
     e.preventDefault(); e.stopPropagation();
-    const t = _dragTab, side = dropSide(p, e.clientX);
+    const t = _dragTab;
+    if (overBar(e)) { const at = barInsertIndex(p, e.clientX); endTabDrag(); moveTabToPane(t, p, at); return; }
+    const side = dropSide(p, e.clientX, e.clientY);
     endTabDrag();
-    if (side === "in") { moveTabToPane(t, p, paneTabs(p).length); return; }
-    // Splitting a pane's only tab off that same pane would just delete the pane
-    // it came from and rebuild it — nothing moves, so don't pretend it did.
-    if (paneOf(t) === p && paneTabs(p).length === 1) return;
-    const at = panes.indexOf(p) + (side === "right" ? 1 : 0);
-    moveTabToPane(t, insertPane(at), 0);
+    dropTabOn(t, p, side);
   });
 }
 
-function dropSide(p, x) {
+// Where a tab lands when dropped on a pane's body: the middle moves it in, an
+// edge splits a new group off — left / right a new column beside this one,
+// top / bottom a new group above or below it in the same column. The dock
+// takes only "in": it is a place, not something to split.
+// Would a new group fit in column `c`? "Refuse now, squeeze later", like
+// canAddColumn: a column that cannot give every open group MIN_GROUP_PX is
+// refused with a toast; a window that later shrinks squeezes what exists.
+// Under the phone breakpoint the whole workspace is one stack.
+function roomForGroup(c) {
+  const ok = canAddGroup(currentLayout());
+  if (!ok.ok) return ok;
+  const stack = isMobile();
+  const h = (stack ? $("#panes") : c.el).getBoundingClientRect().height;
+  const n = (stack ? panes : c.panes).filter((p) => !p.collapsed).length;
+  if (h && (n + 1) * MIN_GROUP_PX > h) return { ok: false, why: "No room for another group at this height" };
+  return { ok: true };
+}
+
+function dropTabOn(t, p, side) {
+  if ((side === "in" || isDock(p)) && paneOf(t) === p) return;   // its own group: nothing to move
+  if (side === "in" || isDock(p)) { moveTabToPane(t, p, paneTabs(p).length); return; }
+  // Splitting a pane's only tab off that same pane would just delete the pane
+  // it came from and rebuild it — nothing moves, so don't pretend it did.
+  if (paneOf(t) === p && paneTabs(p).length === 1) return;
+  const c = colOf(p);
+  if (side === "left" || side === "right") {
+    const ok = canAddColumn(currentLayout(), $("#panes").getBoundingClientRect().width);
+    if (!ok.ok) { kbToast(ok.why, "err"); return; }
+    moveTabToPane(t, insertPane(columns.indexOf(c) + (side === "right" ? 1 : 0)), 0);
+    return;
+  }
+  const ok = roomForGroup(c);
+  if (!ok.ok) { kbToast(ok.why, "err"); return; }
+  moveTabToPane(t, insertPaneAt(c, c.panes.indexOf(p) + (side === "bottom" ? 1 : 0)), 0);
+}
+
+function dropSide(p, x, y) {
+  if (isDock(p)) return "in";
   const r = p.dropEl.getBoundingClientRect();
-  const f = (x - r.left) / r.width;
-  return f < 0.28 ? "left" : f > 0.72 ? "right" : "in";
+  const fx = (x - r.left) / r.width, fy = (y - r.top) / r.height;
+  // under the phone breakpoint groups stack: above, below, or in
+  if (isMobile()) return fy < 0.3 ? "top" : fy > 0.7 ? "bottom" : "in";
+  // The nearest edge wins, within its outer band; the middle is "in".
+  const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+  const m = Math.min(d.left, d.right, d.top, d.bottom);
+  if (m > 0.28) return "in";
+  return ["left", "right", "top", "bottom"].find((k) => d[k] === m);
 }
 
 function paintPaneHint(p, side) {
   const ind = p.dropEl.querySelector(".pane-drop-ind");
-  ind.style.top = "4px"; ind.style.bottom = "4px";
+  ind.style.top = side === "bottom" ? "50%" : "4px";
+  ind.style.bottom = side === "top" ? "50%" : "4px";
   ind.style.left = side === "right" ? "50%" : "4px";
   ind.style.right = side === "left" ? "50%" : "4px";
   p.dropEl.classList.add("over");
@@ -3303,7 +4047,7 @@ function clearDropMarks() {
   document.querySelectorAll(".tab.drop-before, .tab.drop-after")
     .forEach((e) => e.classList.remove("drop-before", "drop-after"));
   document.querySelectorAll(".tabbar.drop-end").forEach((e) => e.classList.remove("drop-end"));
-  for (const p of panes) p.dropEl.classList.remove("over");
+  for (const p of allPanes()) { p.dropEl.classList.remove("over"); p.handleEl.classList.remove("drop-over"); }
 }
 
 function barInsertIndex(p, x) {
@@ -3326,17 +4070,140 @@ function markBarInsert(p, x) {
 
 function endTabDrag() {
   _dragTab = null;
-  document.body.classList.remove("dragging-tab");
+  document.body.classList.remove("dragging-tab", "touch-drag");
   document.querySelectorAll(".tab.dragging").forEach((e) => e.classList.remove("dragging"));
   clearDropMarks();
 }
 
+// ---- touch: hold a tab to lift it, carry it, let go where it should be -----
+// No HTML5 drag on a finger (Android has none, iOS has its own). A tab held
+// still for a third of a second lifts: a ghost follows the finger, the strips
+// and groups show where it would land — between two tabs, into a group,
+// above or below one, into the panel — and letting go puts it there. Moving
+// the finger before the hold ends is a scroll, and stays one: nothing here
+// touches the gesture until the tab is lifted, and from then on the page
+// does not pan under it.
+function wireTouchTabDrag() {
+  const HOLD = 320, SLOP = 8;
+  let press = null;   // {t, el, x, y, id, timer}
+  let drag = null;    // {t, id, ghost, dx, dy, raf, x, y}
+  const cancelPress = () => { if (press) { clearTimeout(press.timer); press = null; } };
+  const lift = () => {
+    const { t, el, x, y, id } = press;
+    press = null;
+    const r = el.getBoundingClientRect();
+    const ghost = el.cloneNode(true);
+    ghost.className = "tab tab-ghost";
+    ghost.style.width = r.width + "px";
+    document.body.appendChild(ghost);
+    drag = { t, el, id, ghost, dx: x - r.left, dy: y - r.top, raf: 0, x, y };
+    _dragTab = t;
+    document.body.classList.add("dragging-tab", "touch-drag");
+    el.classList.add("dragging");
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) { /* not everywhere */ }
+    place();
+  };
+  const place = () => {
+    if (!drag) return;
+    drag.raf = 0;
+    drag.ghost.style.transform = "translate3d(" + (drag.x - drag.dx) + "px," + (drag.y - drag.dy) + "px,0) scale(1.04)";
+    const hit = touchTarget(drag.x, drag.y);
+    clearDropMarks();
+    if (!hit) return;
+    if (hit.kind === "bar") markBarInsert(hit.p, drag.x);
+    else if (hit.p.el.hidden) hit.p.handleEl.classList.add("drop-over");   // a folded group: its handle lights up
+    else if (!((hit.side === "in" || isDock(hit.p)) && paneOf(drag.t) === hit.p)) paintPaneHint(hit.p, hit.side);
+  };
+  document.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" || drag || !e.isPrimary) return;
+    const el = e.target && e.target.closest ? e.target.closest(".tab") : null;
+    if (!el || !el._tab || e.target.closest(".tab-x")) return;
+    cancelPress();
+    press = { t: el._tab, el, x: e.clientX, y: e.clientY, id: e.pointerId, timer: setTimeout(lift, HOLD) };
+  }, { passive: true });
+  document.addEventListener("pointermove", (e) => {
+    if (press && !drag) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > SLOP) cancelPress();   // a scroll, not a hold
+      return;
+    }
+    if (!drag || e.pointerType !== "touch") return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (!drag.raf) drag.raf = requestAnimationFrame(place);
+  }, { passive: true });
+  const end = (e) => {
+    if (press && (e.type === "pointerup" || e.type === "pointercancel")) cancelPress();
+    if (!drag || e.pointerType !== "touch") return;
+    const d = drag;
+    drag = null;
+    if (d.raf) cancelAnimationFrame(d.raf);
+    const hit = e.type === "pointerup" ? touchTarget(e.clientX, e.clientY) : null;
+    d.ghost.classList.add("drop");
+    setTimeout(() => d.ghost.remove(), 140);
+    endTabDrag();
+    if (!hit) return;
+    if (hit.kind === "bar") moveTabToPane(d.t, hit.p, hit.index);
+    else dropTabOn(d.t, hit.p, hit.side);
+  };
+  document.addEventListener("pointerup", end);
+  document.addEventListener("pointercancel", end);
+  // A lifted tab must not scroll the page under itself, and the hold must
+  // not pop the context menu or select text (the stylesheet handles the rest).
+  document.addEventListener("touchmove", (e) => { if (drag) e.preventDefault(); }, { passive: false });
+  document.addEventListener("contextmenu", (e) => { if (press || drag) e.preventDefault(); });
+}
+
+// Once, the first time a phone has two tabs: the gesture nobody would find.
+function hintHoldToMove() {
+  if (!COARSE_PRIMARY || _restoring || tabs.length !== 2) return;
+  try {
+    if (localStorage.getItem("kbHintHold")) return;
+    localStorage.setItem("kbHintHold", "1");
+  } catch (e) { return; }
+  kbToast("Tip: hold a tab to move it — above or below another" + (isPhone() ? "" : ", or into the panel"), "ok");
+}
+
+// Where a finger is: over a strip (a place among its tabs) or over a group
+// (a side, or the middle). Rectangles, not elementFromPoint: the drop
+// overlays cover everything while a tab is in flight. On a phone the groups
+// stack, so a group's sides are above and below; a desktop's are all four.
+function touchTarget(x, y) {
+  for (const p of allPanes()) {
+    if (p.el.hidden) {   // folded: its handle is the target, and takes the tab in
+      if (p.handleEl.classList.contains("on")) {
+        const h = p.handleEl.getBoundingClientRect();
+        if (x >= h.left && x <= h.right && y >= h.top && y <= h.bottom) return { kind: "body", p, side: "in" };
+      }
+      continue;
+    }
+    if (p.el.classList.contains("max-hidden")) continue;
+    if (!p.barEl.hidden) {
+      const b = p.barEl.getBoundingClientRect();
+      if (x >= b.left && x <= b.right && y >= b.top - 8 && y <= b.bottom + 4)
+        return { kind: "bar", p, index: barInsertIndex(p, x) };
+    }
+    const r = p.el.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+    if (isDock(p)) return { kind: "body", p, side: "in" };
+    const fy = (y - r.top) / r.height;
+    if (isMobile()) return { kind: "body", p, side: fy < 0.3 ? "top" : fy > 0.7 ? "bottom" : "in" };
+    return { kind: "body", p, side: dropSide(p, x, y) };
+  }
+  return null;
+}
+
 // Move a tab into `target` at position `index` of that pane's strip. The tab's
-// live mount travels with it: CodeMirror survives re-parenting untouched, and
-// an artifact iframe reloads — which is what re-parenting an iframe means, and
-// is fine, since an artifact re-runs from its own source either way.
+// live mount travels with it: CodeMirror and xterm survive re-parenting
+// untouched, and an artifact iframe reloads — which is what re-parenting an
+// iframe means, and is fine, since an artifact re-runs from its own source
+// either way.
 function moveTabToPane(t, target, index) {
   const from = paneOf(t);
+  // On a phone the panel is the terminal sheet — a document in it would sit
+  // under the keybar with its bar at the wrong end. It stays a terminal sheet.
+  if (isDock(target) && from !== target && isMobile() && t.kind !== "term") {
+    kbToast("On a phone the panel holds terminals — drop it above the panel", "err");
+    return;
+  }
   const cur = tabs.indexOf(t);
   if (cur >= 0) tabs.splice(cur, 1);
   t.paneId = target.id;
@@ -3347,17 +4214,133 @@ function moveTabToPane(t, target, index) {
     : index >= list.length ? tabs.indexOf(list[list.length - 1]) + 1
       : tabs.indexOf(list[index]);
   tabs.splice(at, 0, t);
-  if (from !== target && !paneTabs(from).length) removePane(from);
-  else if (from !== target && from.active === t) from.active = paneTabs(from)[0] || null;
-  activePaneId = target.id;
+  if (from !== target) {
+    if (!paneTabs(from).length) paneEmptied(from, true);
+    else if (from.active === t) from.active = paneTabs(from)[0] || null;
+    if (isDock(target)) showDock();
+  }
+  if (viewKind(t.kind).isActiveDocument) activePaneId = target.id;
   activateTab(t);
+  if (t.kind === "term") requestAnimationFrame(() => fitTerm(t));
+  else viewKind(t.kind).resize(t);
 }
 
+// Split the focused group's visible tab off into a new group: `dir` 1 / -1 a
+// new column to the right / left, "down" / "up" a new group below / above in
+// the same column. From the dock, "right" means the workspace's far column.
 function splitActiveTab(dir) {
-  if (!active) return;
-  const from = paneOf(active);
-  if (paneTabs(from).length < 2) return;   // nothing left behind = not a split
-  moveTabToPane(active, insertPane(panes.indexOf(from) + (dir > 0 ? 1 : 0)), 0);
+  const p = keyPane();
+  const t = p && p.active;
+  if (!t) return;
+  if (paneTabs(p).length < 2) return;   // nothing left behind = not a split
+  if (isMobile() && (dir === 1 || dir === -1)) dir = dir > 0 ? "down" : "up";   // groups stack on a phone
+  if (dir === "down" || dir === "up") {
+    const c = colOf(p) || columns[columns.length - 1];
+    const ok = roomForGroup(c);
+    if (!ok.ok) { kbToast(ok.why, "err"); return; }
+    const at = isDock(p) ? c.panes.length : c.panes.indexOf(p) + (dir === "down" ? 1 : 0);
+    moveTabToPane(t, insertPaneAt(c, at), 0);
+    return;
+  }
+  const ok = canAddColumn(currentLayout(), $("#panes").getBoundingClientRect().width);
+  if (!ok.ok) { kbToast(ok.why, "err"); return; }
+  const at = isDock(p) ? (dir > 0 ? columns.length : 0)
+    : columns.indexOf(colOf(p)) + (dir > 0 ? 1 : 0);
+  moveTabToPane(t, insertPane(at), 0);
+}
+
+// Move the focused group's visible tab: "left" / "right" into the neighbouring
+// column (a new one at the edge), "up" / "down" into the neighbouring group of
+// its column (a new one at the top or bottom), "dock" into the dock. The
+// palette's path to what the mouse does by dragging — and the accessible one.
+function moveFocusedTab(where) {
+  const p = keyPane();
+  const t = p && p.active;
+  if (!t) return;
+  if (isMobile() && (where === "left" || where === "right")) where = where === "right" ? "down" : "up";   // groups stack on a phone
+  if (where === "dock") { if (isDock(p)) return; moveTabToPane(t, dockPane, paneTabs(dockPane).length); return; }
+  const c = colOf(p);
+  if (!c) {   // from the dock: into the workspace's first or last column
+    const target = where === "left" ? columns[0] : columns[columns.length - 1];
+    moveTabToPane(t, target.panes[0], paneTabs(target.panes[0]).length);
+    return;
+  }
+  if (where === "left" || where === "right") {
+    const i = columns.indexOf(c) + (where === "right" ? 1 : -1);
+    const alone = paneTabs(p).length === 1 && c.panes.length === 1;
+    if (columns[i]) { moveTabToPane(t, columns[i].panes[0], paneTabs(columns[i].panes[0]).length); return; }
+    if (alone) return;   // already at the edge, on its own
+    const ok = canAddColumn(currentLayout(), $("#panes").getBoundingClientRect().width);
+    if (!ok.ok) { kbToast(ok.why, "err"); return; }
+    moveTabToPane(t, insertPane(where === "right" ? columns.length : 0), 0);
+    return;
+  }
+  const j = c.panes.indexOf(p) + (where === "down" ? 1 : -1);
+  if (c.panes[j]) { moveTabToPane(t, c.panes[j], paneTabs(c.panes[j]).length); return; }
+  if (paneTabs(p).length === 1) return;
+  const ok = roomForGroup(c);
+  if (!ok.ok) { kbToast(ok.why, "err"); return; }
+  moveTabToPane(t, insertPaneAt(c, where === "down" ? c.panes.length : 0), 0);
+}
+
+// The keyboard's way between groups: next / previous in reading order, the
+// dock last. Focusing a group focuses what it shows.
+function focusNextPane(d) {
+  // a folded group is in the round: focusing it is focusing its handle
+  // (Enter opens it, Alt+W closes the tab it names)
+  const all = allPanes().filter((p) => (!p.el.hidden || p.handleEl.classList.contains("on"))
+    && (!maximizedPaneId || p.id === maximizedPaneId));
+  if (all.length < 2) return;
+  const i = all.indexOf(keyPane());
+  const p = all[((i < 0 ? 0 : i) + d + all.length) % all.length];
+  if (p.el.hidden) { p.handleEl.focus(); return; }
+  if (p.active) { activateTab(p.active); if (viewKind(p.active.kind).isActiveDocument) viewKind(p.active.kind).focus(p.active); }
+  else focusPane(p);
+}
+
+// The dock's side and size: a bottom band by default, a column on the right
+// or left for a wide monitor. Layout state, not a setting — it is a choice
+// per screen, and it travels with the session record of that browser.
+const _workspace = { el: null, grow: 1 };   // the editor area as one side of the dock's split
+function applyDockSide() {
+  const mc = document.querySelector(".main-col");
+  if (!mc || !dockPane) return;
+  const ws = document.querySelector(".editor-wrap");
+  _workspace.el = ws;
+  const el = dockPane.el;
+  el.style.height = ""; el.style.width = "";
+  // On a phone the dock is the sheet at the bottom and the stylesheet owns
+  // its size (half, or maximized); the desktop side and size come back when
+  // the window grows.
+  mc.dataset.dock = isMobile() ? "bottom" : dock.side;
+  _workspace.grow = 1 - dock.size; dockPane.grow = dock.size;
+  // the split between the workspace and the dock: the same handle as between
+  // any two groups (row-wise for a bottom dock, column-wise for a side one).
+  // The record keeps the dock within [0.1, 0.9] (layout.js), so the drag
+  // does too — the screen never differs from what a reload would show.
+  const old = $("#term-resizer");
+  if (old) old.remove();
+  const onDock = () => {
+    dock.size = Math.min(0.9, Math.max(0.1, dockPane.grow / (dockPane.grow + _workspace.grow)));
+    _workspace.grow = 1 - dock.size; dockPane.grow = dock.size;
+    applySizes();
+  };
+  // a left dock comes first in a row-reverse: the handle's "a" is whatever
+  // is on the left, or dragging it right would shrink what it should grow
+  const h = dock.side === "left" ? makeSplit(dockPane, _workspace, "col", onDock, 0.1)
+    : makeSplit(_workspace, dockPane, dock.side === "bottom" ? "row" : "col", onDock, 0.1);
+  h.id = "term-resizer";
+  mc.insertBefore(h, el);
+  h.classList.toggle("fold-hidden", el.hidden);
+  applyMaximize();   // the rebuilt handle hides while something is maximized; sizes follow
+}
+
+function setDockSide(side) {
+  if (!["bottom", "right", "left"].includes(side) || side === dock.side) return;
+  dock.side = side;
+  applyDockSide();
+  requestAnimationFrame(refitDisplayedTerminals);
+  saveSession();
 }
 
 // ---- editor tabs (VS-Code style) ------------------------------------------
@@ -3417,22 +4400,79 @@ function wireTabStrip() {
   }, true);
 }
 
+function renderHandles() {
+  for (const p of allPanes()) {
+    const list = paneTabs(p);
+    const on = p.el.hidden && list.length > 0 && !(maximizedPaneId && maximizedPaneId !== p.id);
+    p.handleEl.classList.toggle("on", on);
+    if (on) p.handleEl.textContent = "▴ " + (isDock(p) ? "Terminal · " : "") + list.map((t) => viewKind(t.kind).title(t)).join(" · ");
+  }
+  const r = $("#term-resizer");
+  if (r && dockPane) r.classList.toggle("fold-hidden", dockPane.el.hidden);
+  applySizes();   // whatever just folded or came back, the rest fills the space
+  // the touch keybar belongs to whichever group the keyboard is in, if it shows a terminal
+  const fp = focusedPane();
+  document.body.classList.toggle("kb-term", !!(fp && fp.active && fp.active.kind === "term" && !fp.el.hidden));
+}
+
+// The actions every group offers, at the right end of its strip: a new
+// terminal here, maximize / restore, fold. The dock's carry the historic ids.
+function groupActions(p) {
+  const box = document.createElement("div");
+  box.className = "grp-actions";
+  const mk = (act, text, title, testid) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "grp-btn"; b.dataset.act = act;
+    b.textContent = text; b.title = title; b.setAttribute("aria-label", title);
+    if (testid) b.setAttribute("data-testid", testid);
+    b.addEventListener("pointerdown", (e) => e.preventDefault());   // never steal focus from the terminal
+    box.appendChild(b);
+    return b;
+  };
+  const dock = isDock(p);
+  // (no ＋ here: a terminal comes from Ctrl+` / Ctrl+Shift+`, the person's
+  // menu or the palette — a button per strip was noise)
+  const max = maximizedPaneId === p.id;
+  // Maximize is only offered when something else is on screen to step aside
+  // — with one group it does nothing. The phone's sheet keeps its half /
+  // full toggle, which is a different thing wearing the same icon.
+  const others = allPanes().some((x) => x !== p && paneTabs(x).length);
+  if (others || max || (dock && isPhone())) {
+    const bm = mk("max", max ? "⤡" : "⤢", max ? "Restore (Alt+Z)" : "Maximize this group (Alt+Z)", dock ? "term-max" : "grp-max");
+    if (dock) { bm.id = "term-max"; bm.dataset.label = max ? "half" : "full"; }
+    bm.addEventListener("click", () => toggleMaximize(p));
+  }
+  // fold: not offered for the last open group of the workspace — there
+  // would be nothing left to look at (the dock always folds)
+  if (dock || panes.some((x) => x !== p && !x.collapsed)) {
+    const bf = mk("fold", "▾", "Fold away — its tabs stay open" + (dock ? " (Ctrl+`)" : ""), dock ? "term-hide" : "grp-fold");
+    if (dock) bf.id = "term-hide";
+    bf.addEventListener("click", () => collapsePane(p));
+  }
+  return box;
+}
+
 function renderTabBar() {
+  renderHandles();
+  // the chat shows what you have open as context chips: the set changed
+  if (_chatMod) _chatMod.then((m) => m.docsChanged && m.docsChanged()).catch(() => {});
   const dup = {};
   tabs.forEach((t) => { dup[t.name] = (dup[t.name] || 0) + 1; });
-  for (const p of panes) {
+  for (const p of allPanes()) {
     const list = paneTabs(p);
     p.barEl.innerHTML = "";
     // A lone empty pane keeps the placeholder screen; an empty strip in a split
     // cannot happen (a pane is removed when its last tab leaves).
     p.barEl.hidden = list.length === 0;
-    p.el.classList.toggle("focused", p.id === activePaneId);
+    p.el.classList.toggle("focused", p.id === focusedPaneId);
     for (const t of list) p.barEl.appendChild(tabEl(t, dup));
+    if (list.length) p.barEl.appendChild(groupActions(p));
     // The strip's own scroll needs no saving across this: emptying and
     // refilling happens in one task, so layout never runs while the bar has no
     // children and scrollLeft is never clamped to zero. Measured, not assumed.
     revealCurrentTab(p);
   }
+  syncChatRows();
 }
 
 // Chrome keeps the tab you are looking at on screen: switch to one that is
@@ -3445,42 +4485,59 @@ function revealCurrentTab(p) {
   const cur = p.barEl.querySelector(".tab.current");
   if (!cur) return;
   const bar = p.barEl.getBoundingClientRect();
+  // the group's actions sit over the strip's right end: a tab under them is
+  // not in view
+  const acts = p.barEl.querySelector(".grp-actions");
+  const right = bar.right - (acts ? acts.getBoundingClientRect().width : 0);
   const r = cur.getBoundingClientRect();
   if (r.left < bar.left) p.barEl.scrollLeft -= bar.left - r.left;
-  else if (r.right > bar.right) p.barEl.scrollLeft += r.right - bar.right;
+  else if (r.right > right) p.barEl.scrollLeft += r.right - right;
 }
 
 function tabEl(t, dup) {
+  const K = viewKind(t.kind);
   const el = document.createElement("div");
   // .current = the tab this pane is showing; .active = the one the header, the
   // toolbar and every shortcut act on. In a split they are different tabs, and
   // an unfocused pane still has to say which of its files you are looking at.
-  el.className = "tab" + (t === paneOf(t).active ? " current" : "") + (t === active ? " active" : "");
-  el.title = t.path;
-  el.dataset.path = t.path;
+  // A terminal is never .active: the header keeps describing the document.
+  el.className = "tab" + (t === paneOf(t).active ? " current" : "") + (t === active ? " active" : "")
+    + (t.kind === "term" ? " term-tab" : "");
+  el.setAttribute("role", "tab");
+  el.setAttribute("aria-selected", t === paneOf(t).active ? "true" : "false");
+  if (t.attention) el.classList.add("attention");
+  el._tab = t;
+  el.title = K.tooltip(t);
+  el.dataset.kind = t.kind;
+  if (t.path) el.dataset.path = t.path;
+  if (t.sid) el.dataset.sid = t.sid;
   const icon = document.createElement("span");
   icon.className = "tab-icon";
-  icon.innerHTML = t.kind === "artifact" ? I.artifact : t.kind === "secret" ? I.lock : I.doc;
+  icon.innerHTML = K.icon(t);
   const name = document.createElement("span");
   name.className = "tab-name";
-  name.textContent = t.name;
+  name.textContent = K.title(t);
   el.append(icon, name);
-  if (dup[t.name] > 1 && dirName(t.path)) {   // disambiguate same-named files
+  if (t.path && dup[t.name] > 1 && dirName(t.path)) {   // disambiguate same-named files
     const d = document.createElement("span");
     d.className = "tab-dir";
     d.textContent = dirName(t.path);
     el.appendChild(d);
   }
   const x = document.createElement("button");
-  x.className = "tab-x"; x.title = "Close"; x.textContent = "×";
+  x.className = "tab-x" + (t.kind === "term" ? " term-x" : "");
+  x.title = t.kind === "term" ? "Kill terminal" : "Close"; x.textContent = "×";
   x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(t, true); });
   el.appendChild(x);
-  el.addEventListener("click", () => activateTab(t));
+  el.addEventListener("click", () => {
+    activateTab(t);
+    if (t.kind === "term" && t.connected === false && t.term) retryTermsNow();   // a stalled tab retries now
+  });
   el.addEventListener("auxclick", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t, true); } });
   // Drag to reorder, to move into another pane, or onto a pane's edge to split.
   // Deliberately NO text/plain payload: the tree's folder rows and the editor
   // both accept dropped text, and a tab is not a path being pasted somewhere.
-  el.draggable = true;
+  el.draggable = !COARSE_PRIMARY;
   el.addEventListener("dragstart", (e) => {
     _dragTab = t;
     document.body.classList.add("dragging-tab");
@@ -3529,7 +4586,11 @@ function syncUrl(replace) {
 
 async function openDeepLink(p) {
   const existing = tabs.find((t) => t.path === p);
-  if (existing) { activateTab(existing); return; }   // already open (e.g. restored) — don't navigate away
+  // Already open (e.g. restored): don't navigate away. Already the active
+  // document: leave its group showing what it showed — a reload's URL names
+  // the document the app itself wrote there, and its group may rightly be
+  // showing a terminal in front of it.
+  if (existing) { if (existing !== active) activateTab(existing); return; }
   if (isSecretPath(p)) await openPath(p, "secret");
   else if (p.endsWith(".html")) await openPath(p, "artifact");
   else if (p.endsWith(".md")) await openPath(p, "doc");
@@ -3607,15 +4668,19 @@ function clearTabLoading(t) {
 }
 
 function activateTab(t) {
+  if (t && !viewKind(t.kind).isActiveDocument) { showTab(t, true); return; }
   active = t;
-  if (t) { activePaneId = t.paneId; paneOf(t).active = t; }
-  // Each pane shows its OWN active tab — switching panes must not blank the
-  // one you just came from. Only the global `active` follows the click.
-  for (const p of panes) {
-    const list = paneTabs(p);
-    if (!list.includes(p.active)) p.active = list[list.length - 1] || null;
-    for (const o of list) o.el.style.display = o === p.active ? "" : "none";
-  }
+  if (t && paneOf(t).collapsed && !_restoring) expandPane(paneOf(t));   // a restore keeps folded groups folded
+  // …and one hidden behind another group's maximize brings the layout back:
+  // what you asked for is what you see
+  if (t && maximizedPaneId && maximizedPaneId !== t.paneId && !_restoring) { maximizedPaneId = null; applyMaximize(); }
+  if (t) { activePaneId = t.paneId; focusedPaneId = t.paneId; paneOf(t).active = t; }
+  showEachPanesTab();
+  // The formatting dock floats over the active document's own group — not
+  // over the whole editor area, where it would sit on a side column's chat
+  // or on a terminal stacked below. (On a phone it is the keyboard row,
+  // fixed to the viewport, and does not care where it lives.)
+  if (t) seatDocChrome(paneOf(t));
   renderDocTitle(t);
   setAccessBadge(t ? t.access : null);
   document.querySelectorAll(".tree-item").forEach((e) =>
@@ -3634,11 +4699,57 @@ function activateTab(t) {
   syncUrl();
 }
 
+// The document bar (path, history, presence, mode, badge) and the formatting
+// dock belong to the active document, so they live inside its group: the
+// bar right under the strip (a phone puts it at the group's bottom), the
+// dock floating over the text. Both move when the active document does.
+function seatDocChrome(p) {
+  if (!p) return;
+  const bar = document.querySelector(".doc-title-bar");
+  if (bar && bar.parentElement !== p.el) p.el.insertBefore(bar, p.hostEl);
+  const md = $("#mdbar");
+  if (md && md.parentElement !== p.el) p.el.appendChild(md);
+}
+
+// Each pane shows its OWN visible tab — switching panes must not blank the
+// one you just came from. Only the global `active` follows the click.
+function showEachPanesTab() {
+  for (const p of allPanes()) {
+    const list = paneTabs(p);
+    if (!list.includes(p.active)) p.active = list[list.length - 1] || null;
+    for (const o of list) o.el.style.display = o === p.active ? "" : "none";
+    // The document bar and the formatting dock belong to a document: a group
+    // showing a terminal or a chat hides them (an empty group keeps the bar —
+    // it is the "No document open" line).
+    p.el.classList.toggle("showing-doc", !p.active || viewKind(p.active.kind).isActiveDocument);
+  }
+  const fp = focusedPane();
+  document.body.classList.toggle("kb-term", !!(fp && fp.active && fp.active.kind === "term" && !fp.el.hidden));
+}
+
+// Make `t` the tab its group shows, for a kind the header does not describe
+// (a terminal): the keyboard goes there and `active` stays what it was.
+function showTab(t, focus) {
+  const p = paneOf(t);
+  if (p.collapsed && !_restoring) expandPane(p);
+  if (maximizedPaneId && maximizedPaneId !== p.id && !_restoring) { maximizedPaneId = null; applyMaximize(); }
+  p.active = t;
+  focusedPaneId = p.id;
+  showEachPanesTab();
+  t.attention = false;
+  if (t.kind === "term") { activateTerm(t, focus); return; }
+  renderTabBar();
+  saveSession();
+  viewKind(t.kind).activate(t);
+  if (focus) viewKind(t.kind).focus(t);
+}
+
 // `fromPointer` is true only for a close the MOUSE performed on the strip (the
 // × or a middle-click). A keyboard close, or a tab retired because its file was
 // deleted or moved, has no cursor to keep the next × under and must leave the
 // strip free to re-flow.
 function closeTab(t, fromPointer) {
+  if (t.kind === "term" && t.term) { killTerminal(t, fromPointer); return; }
   const i = tabs.indexOf(t);
   if (i < 0) return;
   const p = paneOf(t);
@@ -3646,43 +4757,417 @@ function closeTab(t, fromPointer) {
   const inPane = paneTabs(p);
   const j = inPane.indexOf(t);
   tabs.splice(i, 1);
-  // Full teardown: the provider does NOT destroy its awareness (which keeps a
-  // heartbeat interval) or the Y.Doc — without these, every closed doc tab
-  // leaks an interval + document forever.
-  if (t.view) t.view.destroy();
-  if (t.provider) { t.provider.awareness.destroy(); t.provider.destroy(); }
-  if (t.ydoc) t.ydoc.destroy();
-  t.view = t.provider = t.ydoc = t.frame = null;
+  viewKind(t.kind).close(t);
   t.el.remove();
   // The tab you get next is this pane's neighbour, not some other column's.
   const rest = paneTabs(p);
   if (p.active === t) p.active = rest[j] || rest[j - 1] || null;
   const wasActive = active === t;
-  if (!rest.length && panes.length > 1) removePane(p);
-  if (wasActive) activateTab(p.active || paneTabs(activePane())[0] || tabs[0] || null);
+  if (!rest.length) paneEmptied(p, true);
+  if (wasActive) activateTab(nextActiveAfter(p));
   else { renderTabBar(); saveSession(); }
+  refocus();
+}
+
+// After the active document closes: this pane's neighbour if it is a document,
+// else the first document in the pane documents open into, else the first
+// document anywhere, else nothing.
+function nextActiveAfter(p) {
+  const own = p.active && viewKind(p.active.kind).isActiveDocument ? p.active : null;
+  const inView = (t) => !paneOf(t).collapsed;   // never a document behind a fold — that would open it
+  return own || firstDocTab(paneTabs(activePane()).filter(inView)) || firstDocTab(tabs.filter(inView)) || null;
+}
+
+// A tab that never came alive (a restored terminal whose shell could not be
+// reached): nothing to tear down, just take it off the strip.
+function dropTab(t) {
+  const i = tabs.indexOf(t);
+  if (i < 0) return;
+  const p = paneOf(t);
+  tabs.splice(i, 1);
+  t.el.remove();
+  const rest = paneTabs(p);
+  if (p.active === t) p.active = rest[rest.length - 1] || null;
+  if (!rest.length) paneEmptied(p, true);
+  if (activeTerm === t) { activeTerm = null; window.__kbterm = null; }
+  renderTabBar(); saveSession();
+}
+
+// Full teardown of a document mount: the provider does NOT destroy its
+// awareness (which keeps a heartbeat interval) or the Y.Doc — without these,
+// every closed doc tab leaks an interval + document forever.
+function closeDocMount(t) {
+  if (t.view) t.view.destroy();
+  if (t.provider) { t.provider.awareness.destroy(); t.provider.destroy(); }
+  if (t.ydoc) t.ydoc.destroy();
+  t.view = t.provider = t.ydoc = t.frame = null;
 }
 
 async function openPath(path, kind, paneId) {
-  closeNav();   // on mobile the drawer covers the editor — opening a file is leaving it
-  const existing = tabs.find((t) => t.path === path);
-  if (existing) { activateTab(existing); return; }
-  const pane = (paneId && paneById(paneId)) || activePane();
+  return openView(kind, { path }, paneId);
+}
+
+// Open a view of any registered kind (views.js): a document, an artifact, a
+// secret, a terminal, an agent chat… The shell makes the tab and its element,
+// puts it in a group, and hands the element to the kind to fill.
+async function openView(kind, spec, paneId) {
+  const K = viewKind(kind);
+  if (!K) { kbToast("Nothing here can show a " + kind, "err"); return null; }
+  closeNav();   // on mobile the drawer covers the editor — opening something is leaving it
+  const key = K.key(spec);
+  const existing = key === null ? null
+    : tabs.find((x) => (x.kind === kind ? K.key(K.serialize(x)) === key : (!!x.path && x.path === spec.path)));
+  if (existing) { activateTab(existing); return existing; }
+  const pane = placePane(K, paneId);
   const el = document.createElement("div");
-  el.className = "tab-content";
+  el.className = "tab-content" + (K.contentClass ? " " + K.contentClass : "");
   pane.hostEl.appendChild(el);
-  const t = { id: ++tabSeq, path, kind, name: baseName(path), el, paneId: pane.id,
+  const t = { id: ++tabSeq, kind, path: typeof spec.path === "string" ? spec.path : null,
+              name: "", el, paneId: pane.id,
               view: null, provider: null, ydoc: null, frame: null,
               access: null, synced: false,
               mode: localStorage.getItem("kbEditMode") || "rich", modeComp: null };
+  t.name = t.path ? baseName(t.path) : K.label;
+  if (K.init) K.init(t, spec);
   tabs.push(t);
   unlockTabStrip(pane.barEl);   // a new tab re-flows the strip; the streak is over
-  noteRecent(path);
+  if (t.path) noteRecent(t.path);
   activateTab(t);
-  if (kind === "artifact") mountArtifact(t);
-  else if (kind === "secret") await mountSecret(t);
-  else await mountDoc(t);
+  hintHoldToMove();
+  try { await K.open(t, spec); }
+  catch (e) {
+    if (!e || !e.quiet) { console.error(e); kbToast("Could not open " + t.name, "err"); }
+    if (tabs.includes(t)) closeTab(t);
+    return null;
+  }
+  return tabs.includes(t) ? t : null;
 }
+
+// Which pane a new tab goes to: the one asked for, else the kind's placement —
+// "active" (documents: the group of the active document), "dock" (terminals),
+// "side" (a column on the right or left, made if missing, at the kind's size;
+// on a phone, where columns stack, the active group instead).
+function placePane(K, paneId) {
+  const asked = paneId && paneById(paneId);
+  if (asked) return asked;
+  const pl = K.placement || { target: "active" };
+  // A phone has no terminal panel: the screen holds one group, so a
+  // terminal is a tab in it like everything else. The panel (the dock) is
+  // a desktop idea — a band under the documents you can size and fold.
+  if (pl.target === "dock" && dockPane) return isPhone() ? activePane() : dockPane;
+  // While a group is maximized it is the only one in view, and a document
+  // opens there (VS Code's rule) instead of into a hidden group.
+  const maxed = maximizedPaneId ? paneById(maximizedPaneId) : null;
+  if (maxed && !isDock(maxed) && pl.target !== "side") return maxed;
+  if (pl.target === "side") {
+    const own = tabs.find((x) => x.kind === K.kind);
+    if (own) return paneOf(own);
+    // nothing open at all: the chat takes the empty group, not a third of
+    // the width beside "No document open"; the first document then opens
+    // in a column on the other side (below)
+    if (!tabs.length && panes.length === 1) return panes[0];
+    const ok = canAddColumn(currentLayout(), $("#panes").getBoundingClientRect().width);
+    if (!ok.ok || isMobile()) return activePane();
+    const side = pl.side === "left" ? "left" : "right";
+    const p = insertPane(side === "right" ? columns.length : 0);
+    const size = Math.min(0.5, Math.max(0.15, pl.size || 0.3));
+    const nc = colOf(p);
+    const total = columns.filter((x) => x !== nc).reduce((a, x) => a + x.grow, 0) || 1;
+    nc.grow = (size / (1 - size)) * total;
+    normalizeSplits();
+    return p;
+  }
+  // The only group holds side-kind tabs alone (a chat that opened first): a
+  // document opens in a new column on the other side, at the workspace's
+  // share, and the chat keeps the column it would have asked for.
+  const ap = activePane();
+  const apTabs = paneTabs(ap);
+  const sideOnly = apTabs.length && apTabs.every((x) => ((viewKind(x.kind) || {}).placement || {}).target === "side");
+  if (sideOnly && panes.length === 1 && !isMobile()) {
+    const spl = viewKind(apTabs[0].kind).placement;
+    const ok = canAddColumn(currentLayout(), $("#panes").getBoundingClientRect().width);
+    if (ok.ok) {
+      const p = insertPane(spl.side === "left" ? columns.length : 0);
+      const size = Math.min(0.5, Math.max(0.15, spl.size || 0.3));
+      colOf(p).grow = 1 - size; colOf(ap).grow = size;
+      normalizeSplits();
+      return p;
+    }
+  }
+  return activePane();
+}
+
+// ---- the built-in view kinds ------------------------------------------------
+registerView("doc", {
+  label: "Document",
+  icon: () => I.doc,
+  tooltip: (t) => t.path,
+  key: (spec) => (typeof spec.path === "string" ? spec.path : null),
+  restore: (spec) => (typeof spec.path === "string" && spec.path ? { kind: "doc", path: spec.path } : null),
+  serialize: (t) => ({ kind: "doc", path: t.path }),
+  open: (t) => mountDoc(t),
+  close: closeDocMount,
+  focus: (t) => { if (t.view) t.view.focus(); },
+  isActiveDocument: true,
+});
+registerView("artifact", {
+  label: "Artifact",
+  icon: () => I.artifact,
+  tooltip: (t) => t.path,
+  key: (spec) => (typeof spec.path === "string" ? spec.path : null),
+  restore: (spec) => (typeof spec.path === "string" && spec.path ? { kind: "artifact", path: spec.path } : null),
+  serialize: (t) => ({ kind: "artifact", path: t.path }),
+  open: (t) => { mountArtifact(t); },
+  close: closeDocMount,
+  isActiveDocument: true,
+});
+// ---- the agent chat: a view kind whose code arrives on first use ----------
+// The chat talks to an ACP agent (Claude Code, Codex, Gemini CLI…) through
+// the person's backend; see chat.js and kb_platform/acp.py. Like the terminal
+// chunk, nobody who never opens a chat downloads it.
+let _chatMod = null;
+function warmChat() {
+  if (!_chatMod) _chatMod = import("./chat.js").then((m) => { m.init(chatShell); return m; })
+    .catch((e) => { _chatMod = null; throw e; });
+  return _chatMod;
+}
+let _repoRoot = "";
+// What the chat module may use of the shell — the whole contract, in one place.
+const chatShell = {
+  wsBase, toast: kbToast, prompt: (m, v, o) => kbPrompt(m, v, o),
+  isMobile, isAdmin: () => !$("#admin-btn").hidden,
+  repoRoot: () => _repoRoot,
+  setRepoRoot: (p) => { if (p) _repoRoot = p; },
+  relPath: (abs) => (_repoRoot && abs && abs.startsWith(_repoRoot + "/") ? abs.slice(_repoRoot.length + 1) : abs),
+  openAbs: (abs) => {
+    const rel = chatShell.relPath(abs);
+    if (rel && rel !== abs) openDeepLink(rel);
+    else kbToast(abs + " is outside the knowledgebase", "err");
+  },
+  openTermWith,
+  openChat: (spec) => openChat(spec),
+  agentAvatar, chatsChanged: () => loadChats(), userName: () => whoamiUser,
+  dictation: { ready: dictationReady, toggle: toggleDictation },
+  renameTab: (t, name) => { t.name = name || t.name; renderTabBar(); saveSession(); },
+  attention: (t) => { if (paneOf(t).active !== t || !document.hasFocus()) { t.attention = true; renderTabBar(); } },
+  saveSession,
+  agentName: (id) => { const e = settings.entry("ai.agent"); return e && e.labels ? e.labels[id] : null; },
+  settings,
+  // the chat's context: what the window has open (the visible tab of every
+  // group, the focused one first), and a way to pick anything else
+  openDocs: () => {
+    const seen = new Set(), out = [];
+    for (const t of [active, ...allPanes().map((p) => p.active)]) {
+      // a _secrets/ file never rides along by itself: it is out of the index,
+      // out of git and out of the palette for the same reason
+      if (!t || !t.path || isSecretPath(t.path) || seen.has(t.path)) continue;
+      seen.add(t.path);
+      out.push({ path: t.path, name: t.name || baseName(t.path) });
+    }
+    return out;
+  },
+  pickPath: (o) => pickPath(o),
+  knowsTree: () => !!(_lastTreePaths && _lastTreePaths.size),
+  hasPath: (rel) => !!(_lastTreePaths && _lastTreePaths.has(rel)),
+  abs: (rel) => (rel ? (_repoRoot ? _repoRoot + "/" + rel : rel) : _repoRoot),
+  baseName,
+  openPath: (rel) => openDeepLink(rel),
+};
+registerView("chat", {
+  label: "Agent chat",
+  icon: () => I.chat,
+  title: (t) => t.name,
+  tooltip: (t) => (t.chat && t.chat.sessionId ? t.name + " · " + t.chat.sessionId : t.name),
+  key: (spec) => (spec && spec.sessionId ? "chat:" + spec.sessionId : null),
+  contentClass: "chat",
+  placement: { target: "side", side: "right", size: 0.34 },
+  init: (t, spec) => {
+    t.path = null;
+    t.chat = { agent: spec.agent || defaultChatAgent(), sessionId: spec.sessionId || null,
+               title: spec.title || "", ctx: spec.ctx || null };
+    t.name = spec.title ? spec.title.slice(0, 40) : (spec.sessionId ? (chatShell.agentName(t.chat.agent) || "Chat") : "New chat");
+  },
+  restore: (spec) => ({ kind: "chat", agent: typeof spec.agent === "string" ? spec.agent : undefined,
+                        sessionId: typeof spec.sessionId === "string" ? spec.sessionId : undefined,
+                        title: typeof spec.title === "string" ? spec.title : undefined,
+                        ctx: spec.ctx && typeof spec.ctx === "object" ? spec.ctx : undefined }),
+  serialize: (t) => ({ kind: "chat", agent: t.chat.agent, sessionId: t.chat.sessionId, title: t.chat.title,
+                       ctx: t.chat.ctx || undefined }),
+  open: async (t, spec) => (await warmChat()).open(t, spec),
+  close: (t) => { if (_chatMod) _chatMod.then((m) => m.close(t)).catch(() => {}); },
+  activate: (t) => { t.attention = false; if (_chatMod) _chatMod.then((m) => m.activate(t)).catch(() => {}); },
+  focus: (t) => { if (_chatMod) _chatMod.then((m) => m.focus(t)).catch(() => {}); },
+});
+
+// Which agent a new chat opens with: your own setting when you made one,
+// else the agent you last used on this device, else the company's default.
+function defaultChatAgent() {
+  let device = null;
+  try { device = localStorage.getItem("kbChatAgent"); } catch (e) { /* private mode */ }
+  const src = settings.source ? settings.source("ai.agent") : null;
+  if (src === "user") return settings.get("ai.agent") || device || "claude";
+  return device || settings.get("ai.agent") || "claude";
+}
+
+// The chat button, Alt+C and the palette: a NEW chat with your agent, every
+// time — in the side column the kind asks for (beside the chats you have).
+function openChat(spec) {
+  openView("chat", spec || {});
+}
+
+// An agent's mark: a tinted square with a glyph, the same in the sidebar's
+// chat rows, the composer's chip and the empty screen. Claude's is the
+// spark its terminal prints; the others take a letter.
+const AGENT_MARK = { claude: "✻", codex: "C", gemini: "G", copilot: "Cp", grok: "Gr", qwen: "Q", deepseek: "D", opencode: "O", echo: "E" };
+function agentAvatar(id, size) {
+  const e = document.createElement("span");
+  e.className = "av av-" + (AGENT_MARK[id] ? id : "other") + (size ? " av-" + size : "");
+  e.textContent = AGENT_MARK[id] || (id || "?").slice(0, 1).toUpperCase();
+  e.setAttribute("aria-hidden", "true");
+  return e;
+}
+
+// ---- the sidebar's Chats: new one, recent ones ------------------------------
+// The index the backend keeps (`/api/acp/chats`): every agent's sessions with
+// their titles and last activity. The eight most recent are rows beside the
+// files; the rest are one click away in the chat's Recent chats.
+let _chats = [];
+async function loadChats() {
+  try { _chats = (await (await fetch("/api/acp/chats")).json()).chats || []; }
+  catch (e) { return; }
+  renderChats();
+}
+const CHATS_SHOWN = 5;          // …then ⋯ for the rest
+let _chatsOpen = false;
+function renderChats() {
+  const host = $("#chats");
+  if (!host) return;
+  // a pinned chat stays at the top and is never hidden behind the ⋯
+  const all = _chats.filter((c) => c.title);
+  const pinned = all.filter((c) => c.pinned);
+  const rest = all.filter((c) => !c.pinned);
+  const list = _chatsOpen ? all.slice(0, 40) : pinned.concat(rest.slice(0, Math.max(0, CHATS_SHOWN - pinned.length)));
+  host.innerHTML = "";
+  host.hidden = !all.length;
+  for (const c of list) {
+    const row = document.createElement("div");
+    row.className = "chat-row" + (c.pinned ? " pinned" : ""); row.dataset.sid = c.id;
+    row.tabIndex = 0; row.setAttribute("role", "button");
+    row.title = c.title + " · " + (chatShell.agentName(c.agent) || c.agent);
+    const t = document.createElement("span"); t.className = "chat-row-title"; t.textContent = c.title;
+    const w = document.createElement("span"); w.className = "chat-row-time"; w.textContent = agoShort(c.updatedAt);
+    const open = () => { closeNav(); openChat({ agent: c.agent, sessionId: c.id, title: c.title }); };
+    row.append(agentAvatar(c.agent), t);
+    if (c.pinned) { const p = document.createElement("span"); p.className = "chat-row-pin"; p.innerHTML = I.pin; p.title = "Pinned"; row.append(p); }
+    row.append(w);
+    // the same menu on a pointer and on a finger: right-click, or the ⋯
+    const more = document.createElement("button");
+    more.type = "button"; more.className = "tbtn chat-row-more-btn"; more.textContent = "⋯";
+    more.title = "Pin, rename, delete"; more.setAttribute("aria-label", "Chat actions");
+    more.addEventListener("click", (e) => { e.stopPropagation(); const r = more.getBoundingClientRect(); openChatMenu(c, r.right, r.bottom + 4); });
+    row.append(more);
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    row.addEventListener("contextmenu", (e) => { e.preventDefault(); openChatMenu(c, e.clientX, e.clientY); });
+    host.append(row);
+  }
+  // ⋯ opens the rest in place; when they are all here it closes them again
+  if (all.length > CHATS_SHOWN) {
+    const more = document.createElement("button");
+    more.type = "button"; more.className = "chat-row chat-row-more"; more.dataset.testid = "chats-more";
+    more.textContent = _chatsOpen ? "···" : "···";
+    more.title = _chatsOpen ? "Show fewer chats" : "Show all " + all.length + " chats";
+    more.setAttribute("aria-label", more.title);
+    more.setAttribute("aria-expanded", _chatsOpen ? "true" : "false");
+    more.addEventListener("click", () => { _chatsOpen = !_chatsOpen; renderChats(); });
+    host.append(more);
+  } else if (_chatsOpen) _chatsOpen = false;
+  syncChatRows();
+}
+// What you can do to a chat from the list — the same set the chat's own ⋯
+// offers, plus the pin and the delete a list needs.
+function openChatMenu(c, x, y) {
+  const items = [
+    { icon: I.chat, label: "Open", fn: () => { closeNav(); openChat({ agent: c.agent, sessionId: c.id, title: c.title }); } },
+    { icon: I.pin, label: c.pinned ? "Unpin" : "Pin to the top",
+      fn: () => pinChat(c, !c.pinned) },
+    { icon: I.pencil, label: "Rename…", fn: () => renameChat(c) },
+    "-",
+    { icon: I.trash, label: "Delete", danger: true, fn: () => deleteChat(c) },
+  ];
+  openCtxMenu(items, x, y);
+}
+
+async function chatAction(url, body, fail) {
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" },
+                                 body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) { kbToast(j.error || fail, "err"); return null; }
+    return j;
+  } catch (e) { kbToast(fail, "err"); return null; }
+}
+
+// After a change, take the list from the server rather than patching the
+// row in place: a background refresh may have replaced these objects, and
+// the file is the truth anyway.
+async function pinChat(c, on) {
+  if (!await chatAction("/api/acp/pin", { id: c.id, pinned: on }, "could not pin this chat")) return;
+  await loadChats();
+}
+
+async function renameChat(c) {
+  const name = await kbPrompt("Name this chat", c.title || "", { title: "Rename", ok: "Rename" });
+  if (name === null || name === undefined) return;
+  const clean = String(name).trim();
+  if (!clean) return;
+  const j = await chatAction("/api/acp/rename", { id: c.id, title: clean }, "could not rename this chat");
+  if (!j) return;
+  const title = j.title || clean;
+  for (const t of tabs) if (t.kind === "chat" && t.chat && t.chat.sessionId === c.id) {
+    t.chat.title = title;
+    if (t.chatView) t.chatView.title = title;
+    chatShell.renameTab(t, title.slice(0, 40));
+  }
+  await loadChats();
+}
+
+async function deleteChat(c) {
+  const ok = await kbConfirm("Delete “" + (c.title || "this chat") + "” from your list? "
+                             + "The conversation stays with the agent; this takes it off your list.",
+                             { title: "Delete chat", ok: "Delete", danger: true });
+  if (!ok) return;
+  if (!await chatAction("/api/acp/forget", { id: c.id }, "could not delete this chat")) return;
+  await loadChats();
+  kbToast("Deleted from your chats", "ok");
+}
+
+function agoShort(t) {
+  if (!t) return "";
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return "now";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h";
+  if (s < 7 * 86400) return Math.floor(s / 86400) + "d";
+  return new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+// the row of the chat in view is marked, as the tree marks the open file
+function syncChatRows() {
+  const shown = new Set(tabs.filter((t) => t.kind === "chat" && t.chat && t.chat.sessionId && paneOf(t).active === t).map((t) => t.chat.sessionId));
+  document.querySelectorAll("#chats .chat-row[data-sid]").forEach((r) => r.classList.toggle("active", shown.has(r.dataset.sid)));
+}
+
+registerView("secret", {
+  label: "Secret",
+  icon: () => I.lock,
+  tooltip: (t) => t.path,
+  key: (spec) => (typeof spec.path === "string" ? spec.path : null),
+  restore: (spec) => (typeof spec.path === "string" && spec.path ? { kind: "secret", path: spec.path } : null),
+  serialize: (t) => ({ kind: "secret", path: t.path }),
+  open: (t) => mountSecret(t),
+  close: closeDocMount,
+  isActiveDocument: true,
+});
 
 // ---- secret viewer: masked, reveal/copy/edit — never the collab editor ----
 async function mountSecret(t) {
@@ -3752,6 +5237,35 @@ async function mountSecret(t) {
     editMode(false); paint();
     kbToast("Secret saved", "ok");
   });
+}
+
+// A list's hanging indent is the width of what precedes its text: the
+// marker, the space after it, and the spaces of its nesting. Those widths
+// belong to the theme's fonts, so they are MEASURED once per font and
+// published as --lm-space / --lm-mono; the decorations then do arithmetic
+// with them instead of guessing in em (which was out by 3–8px per level).
+let _lmSig = "";
+function calibrateListMetrics(el) {
+  if (!el) return;
+  const cs = getComputedStyle(el);
+  const sig = cs.fontFamily + "|" + cs.fontSize;
+  if (sig === _lmSig) return;
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;top:-9999px;left:-9999px;margin:0;padding:0";
+  probe.style.font = cs.font || (cs.fontSize + " " + cs.fontFamily);
+  probe.textContent = "          ";                     // ten spaces
+  document.body.appendChild(probe);
+  const space = probe.getBoundingClientRect().width / 10;
+  probe.style.fontFamily = cs.getPropertyValue("--mono") ||
+    getComputedStyle(document.documentElement).getPropertyValue("--mono");
+  probe.textContent = "0000000000";
+  const mono = probe.getBoundingClientRect().width / 10;
+  probe.remove();
+  if (!space || !mono) return;                          // fonts not ready; try again next mount
+  _lmSig = sig;
+  const r = document.documentElement.style;
+  r.setProperty("--lm-space", space.toFixed(2) + "px");
+  r.setProperty("--lm-mono", mono.toFixed(2) + "px");
 }
 
 async function mountDoc(t) {
@@ -3837,6 +5351,7 @@ async function mountDoc(t) {
     state: EditorState.create({ doc: ytext.toString(), extensions }),
     parent: t.el,
   });
+  calibrateListMetrics(t.view.contentDOM);
   // Sync visibility: an editor that is NOT live-syncing must say so — the one
   // thing worse than a broken connection is a silently broken one (you type,
   // your colleague sees nothing). Also self-heal the stale-lineage case: if the
@@ -3919,8 +5434,9 @@ function renderDocBadge(accessOverride) {
   const how = state === "live" ? "live — everyone sees your edits in real time"
             : state === "off" ? "NOT connected to the live session — your edits are not reaching others. Reopen the tab if this persists."
             : "";
-  b.title = how ? `${what} · ${how}` : what;
+  b.title = (how ? `${what} · ${how}` : what) + " · click: who can open this (Alt+S)";
   b.setAttribute("aria-label", b.title);
+  b.setAttribute("role", "button"); b.tabIndex = 0;
   b.hidden = false;
 }
 function renderSyncBadge() { renderDocBadge(); }
@@ -4206,11 +5722,13 @@ async function loadLaunchers() {
 
 function launcherIcon(b) {
   if (b.kind === "term") return "$";
+  if (b.kind === "folder") return I.folder;
   return b.target.endsWith(".html") ? I.artifact : b.target.endsWith(".md") ? I.doc : I.file;
 }
 
 function runLauncher(b) {
   if (b.kind === "term") { openTermWith(b.target); return; }
+  if (b.kind === "folder") { closeNav(); revealFolder(b.target.replace(/^\/+/, "")); return; }
   const p = b.target.replace(/^\/+/, "");
   if (isSecretPath(p)) openPath(p, "secret");
   else if (p.endsWith(".html")) openPath(p, "artifact");
@@ -4231,31 +5749,148 @@ function launcherChip(b, cls) {
   return chip;
 }
 
+// The Pinned section: the ways in you chose, as rows in the same list as
+// the chats and the files. A pin is made by right-clicking what you want
+// (a file, a folder) — the dialog behind ＋ is for editing them in bulk and
+// for the company-wide ones.
 function renderLaunchbar() {
-  // Two hosts, one source of truth: the bar (desktop) and the drawer section
-  // (mobile, where a permanent bar would cost a whole row of screen).
-  for (const [sel, testid] of [["#launchbar", "launcher-manage"],
-                               ["#menu-launchers", "launcher-manage-m"]]) {
-    const host = $(sel);
-    host.textContent = "";
-    for (const [list, cls] of [[launchers.company || [], "company"],
-                               [launchers.mine || [], "mine"]]) {
-      for (const b of list) {
-        if (b.kind === "term" && !canShell) continue;   // viewers have no shell
-        const chip = launcherChip(b, cls);
-        chip.addEventListener("click", () => runLauncher(b));
-        host.appendChild(chip);
-      }
+  const host = $("#pins");
+  if (!host) return;
+  host.textContent = "";
+  const rows = [];
+  for (const [list, scope] of [[launchers.company || [], "company"], [launchers.mine || [], "mine"]]) {
+    for (const b of list) {
+      if (b.kind === "term" && !canShell) continue;   // viewers have no shell
+      rows.push(pinRow(b, scope));
     }
-    const add = document.createElement("button");
-    add.className = "lchip manage";
-    add.title = "Add or edit launcher buttons";
-    add.setAttribute("data-testid", testid);
-    add.setAttribute("aria-label", "Add or edit launcher buttons");
-    add.textContent = "＋";
-    add.addEventListener("click", showLaunchersModal);
-    host.appendChild(add);
   }
+  // nothing pinned, nothing on screen: the section's title goes too. The way
+  // in is the tree's right-click, or "Pinned items" in the user menu.
+  const title = $("#pins-title");
+  if (title) title.hidden = !rows.length;
+  host.hidden = !rows.length;
+  for (const r of rows) host.appendChild(r);
+}
+
+function pinRow(b, scope) {
+  const row = document.createElement("div");
+  row.className = "pin-row " + scope;
+  row.tabIndex = 0; row.setAttribute("role", "button");
+  row.dataset.target = b.target; row.dataset.kind = b.kind;
+  row.title = b.label + " · " + (b.kind === "term" ? b.target : b.kind === "folder" ? "folder " + b.target : b.target)
+    + (scope === "company" ? " · pinned for everyone" : "");
+  const ic = document.createElement("span");
+  ic.className = "pin-row-ic"; ic.innerHTML = launcherIcon(b);
+  const lb = document.createElement("span");
+  lb.className = "pin-row-label"; lb.textContent = b.label;
+  row.append(ic, lb);
+  const more = document.createElement("button");
+  more.type = "button"; more.className = "tbtn pin-row-more"; more.textContent = "⋯";
+  more.title = "Rename, unpin"; more.setAttribute("aria-label", "Pinned item actions");
+  more.addEventListener("click", (e) => { e.stopPropagation(); const r = more.getBoundingClientRect(); openPinMenu(b, scope, r.right, r.bottom + 4); });
+  row.append(more);
+  row.addEventListener("click", () => runLauncher(b));
+  row.addEventListener("keydown", (e) => {
+    if (e.target !== row) return;                       // the ⋯ inside answers for itself
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); runLauncher(b); }
+  });
+  row.addEventListener("contextmenu", (e) => { e.preventDefault(); openPinMenu(b, scope, e.clientX, e.clientY); });
+  return row;
+}
+
+function openPinMenu(b, scope, x, y) {
+  const mine = scope === "mine";
+  const editable = mine || isAdmin;
+  const ic = b.kind === "term" ? I.open : launcherIcon(b);
+  const items = [{ icon: ic, label: b.kind === "term" ? "Run in a terminal" : "Open", fn: () => runLauncher(b) }];
+  if (editable) {
+    items.push({ icon: I.pencil, label: "Rename…", fn: () => renamePin(b, scope) });
+    if (isAdmin)
+      items.push(mine
+        ? { icon: I.share, label: "Pin for everyone", fn: () => movePin(b, "company") }
+        : { icon: I.lock, label: "Keep it just for me", fn: () => movePin(b, "mine") });
+    items.push("-");
+    items.push({ icon: I.pin, label: mine ? "Unpin" : "Unpin for everyone", danger: !mine,
+                 fn: () => unpin(b, scope) });
+  } else {
+    items.push({ note: "Pinned for everyone by an admin" });
+  }
+  items.push("-");
+  items.push({ icon: I.plus, label: "Manage pinned items…", fn: showLaunchersModal });
+  openCtxMenu(items, x, y);
+}
+
+// ---- making and unmaking pins, from anywhere -------------------------------
+async function savePins(scope, buttons) {
+  const url = scope === "company" ? "/admin/launchers" : "/api/launchers";
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" },
+                                 body: JSON.stringify({ buttons }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { kbToast(j.error || "could not save the pinned items", "err"); return false; }
+  } catch (e) { kbToast("could not save the pinned items", "err"); return false; }
+  await loadLaunchers();
+  return true;
+}
+
+const pinnedTargets = () => new Set([...(launchers.company || []), ...(launchers.mine || [])].map((b) => b.target));
+
+async function pinPath(path, isDir) {
+  const label = baseName(path) || path;
+  const mine = (launchers.mine || []).slice();
+  if (mine.some((b) => b.target === path)) { kbToast("Already pinned", "ok"); return; }
+  mine.push({ label: label.slice(0, 48), kind: isDir ? "folder" : "file", target: path });
+  if (await savePins("mine", mine)) kbToast("Pinned “" + label + "”", "ok");
+}
+
+// unpin whatever is pinned at this path, in whichever list it lives (the
+// company's needs an admin; the server says no otherwise)
+async function unpinPath(path) {
+  for (const scope of ["mine", "company"]) {
+    const list = (scope === "company" ? launchers.company : launchers.mine) || [];
+    if (list.some((b) => b.target === path)) {
+      if (scope === "company" && !isAdmin) { kbToast("An admin pinned this for everyone", "err"); return; }
+      const gone = list.find((b) => b.target === path);
+      if (await savePins(scope, list.filter((b) => b.target !== path)))
+        kbToast("Unpinned “" + gone.label + "”", "ok");
+      return;
+    }
+  }
+}
+
+// Promote a pin to the whole company, or take it back to yourself. Written
+// in the order that cannot lose it: the destination first, the source only
+// once that write came back. A duplicate for one render beats a pin nobody
+// has any more.
+async function movePin(b, to) {
+  const from = to === "company" ? "mine" : "company";
+  const same = (x) => x.target === b.target && x.kind === b.kind && x.label === b.label;
+  // Both lists are whole-list writes, and the company one is shared: compute
+  // from what the server has NOW, not from a copy this tab may have been
+  // holding for an hour, or the move quietly restores someone's old list.
+  await loadLaunchers();
+  const dest = ((to === "company" ? launchers.company : launchers.mine) || []).slice();
+  const src = ((from === "company" ? launchers.company : launchers.mine) || []).filter((x) => !same(x));
+  if (!dest.some(same)) dest.push({ label: b.label, kind: b.kind, target: b.target });
+  if (!(await savePins(to, dest))) return;
+  await savePins(from, src);
+  kbToast(to === "company" ? "“" + b.label + "” is pinned for everyone"
+                           : "“" + b.label + "” is pinned for you only", "ok");
+}
+
+async function unpin(b, scope) {
+  const list = (scope === "company" ? launchers.company : launchers.mine) || [];
+  await savePins(scope, list.filter((x) => !(x.target === b.target && x.label === b.label && x.kind === b.kind)));
+}
+
+async function renamePin(b, scope) {
+  const name = await kbPrompt("Name this pinned item", b.label, { title: "Rename", ok: "Rename" });
+  if (name === null || name === undefined) return;
+  const clean = String(name).trim().slice(0, 48);
+  if (!clean) return;
+  const list = ((scope === "company" ? launchers.company : launchers.mine) || [])
+    .map((x) => (x.target === b.target && x.label === b.label && x.kind === b.kind ? { ...x, label: clean } : x));
+  await savePins(scope, list);
 }
 
 function showLaunchersModal() {
@@ -4272,7 +5907,7 @@ function showLaunchersModal() {
     const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" },
                                  body: JSON.stringify({ buttons }) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { kbToast(j.error || "could not save buttons", "err"); return false; }
+    if (!r.ok) { kbToast(j.error || "could not save the pinned items", "err"); return false; }
     await loadLaunchers();
     return true;
   };
@@ -4291,7 +5926,7 @@ function showLaunchersModal() {
     list.className = "lchip-list";
     if (!buttons.length) {
       const none = document.createElement("span");
-      none.className = "muted"; none.textContent = "no buttons yet";
+      none.className = "muted"; none.textContent = "nothing pinned yet";
       list.appendChild(none);
     }
     buttons.forEach((b, i) => {
@@ -4313,20 +5948,35 @@ function showLaunchersModal() {
       const form = document.createElement("div");
       form.className = "admin-form lnch-form";
       form.innerHTML = `
-        <input data-testid="lnch-label-${scope}" placeholder="label" maxlength="24">
+        <input data-testid="lnch-label-${scope}" placeholder="label" maxlength="48">
         <select data-testid="lnch-kind-${scope}">
           <option value="file">opens a file / artifact</option>
+          <option value="folder">reveals a folder in the tree</option>
           ${canShell ? '<option value="term">runs a command in a terminal</option>' : ""}
         </select>
         <input data-testid="lnch-target-${scope}" class="lnch-target" placeholder="path (e.g. company/todos.html)">
-        <button data-testid="lnch-add-${scope}" class="primary">Add button</button>`;
+        <button data-testid="lnch-browse-${scope}" class="mini lnch-browse" title="Choose from the tree">Browse…</button>
+        <button data-testid="lnch-add-${scope}" class="primary">Pin it</button>`;
       const kind = form.querySelector("select");
       const target = form.querySelector(".lnch-target");
-      kind.addEventListener("change", () => {
-        target.placeholder = kind.value === "term"
-          ? "command (e.g. claude)" : "path (e.g. company/todos.html)";
+      const browse = form.querySelector(".lnch-browse");
+      const syncKind = () => {
+        const term = kind.value === "term";
+        target.placeholder = term ? "command (e.g. claude)" : "path (e.g. company/todos.html)";
+        browse.hidden = term;                       // there is nothing to browse for a command
+      };
+      kind.addEventListener("change", syncKind);
+      syncKind();
+      browse.addEventListener("click", async () => {
+        const p = await pickPath({ kind: kind.value === "folder" ? "dir" : "file" });
+        if (p === null) return;
+        target.value = p;
+        const label = form.querySelector("input");
+        if (!label.value.trim()) label.value = (baseName(p) || p).slice(0, 48);
+        target.focus();
       });
-      form.querySelector("button").addEventListener("click", async () => {
+      // by class, not position: the Browse button comes first in the row now
+      form.querySelector("button.primary").addEventListener("click", async () => {
         const label = form.querySelector("input").value.trim();
         const tgt = target.value.trim();
         if (!label || !tgt) { kbToast("label and target are both required", "err"); return; }
@@ -4339,15 +5989,15 @@ function showLaunchersModal() {
 
   function render() {
     card.innerHTML = `
-      <div class="modal-head"><b>Launcher buttons</b>
-        <span class="muted">one tap opens a file — or a shell running a command</span>
+      <div class="modal-head"><b>Pinned items</b>
+        <span class="muted">one click opens a file, reveals a folder, or runs a command</span>
         <button class="modal-x" title="Close">×</button></div>`;
     card.appendChild(section("Company — everyone sees these", "company",
       launchers.company || [], isAdmin,
-      isAdmin ? "" : "Set by admins. Ask one to add a button for the whole company."));
+      isAdmin ? "" : "Set by admins. Ask one to pin something for the whole company."));
     card.appendChild(section("Yours — only you see these", "mine",
       launchers.mine || [], true,
-      "A terminal button types the command into a fresh shell running as you."));
+      "Right-click anything in the tree to pin it. A command pin types itself into a fresh shell running as you."));
     const foot = document.createElement("div");
     foot.className = "modal-foot";
     const close = document.createElement("button");
@@ -5384,7 +7034,18 @@ async function buildAdvanced(host, path, ro) {
 
 function setAccessBadge(access) { renderDocBadge(access === undefined ? null : access); }
 
-async function createAndOpen(path) {
+// "meeting notes" → "meeting notes.md". Typing the extension is a chore and
+// .md is what nearly every new file here is; a name that already carries one
+// (.html for an artifact, .csv, …) is taken exactly as typed, and so is a
+// name whose dot is part of the word ("plan v1.2" keeps its own shape only
+// if you also give it an extension — that is the price of one simple rule).
+function withDefaultExt(path) {
+  const name = baseName(path);
+  return name && !name.includes(".") ? path + ".md" : path;
+}
+
+async function createAndOpen(rawPath) {
+  const path = withDefaultExt(rawPath);
   const r = await fetch("/fs/newfile", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ path }),
@@ -5394,8 +7055,8 @@ async function createAndOpen(path) {
   else kbToast(j.error || "could not create file", "err");
 }
 async function newFileIn(folder) {
-  const name = await kbPrompt("Name — .md for a document, .html for an artifact:", "note.md",
-                              { title: "New file in " + folder, ok: "Create" });
+  const name = await kbPrompt("Name — a plain name becomes a document, .html an artifact:",
+                              "note", { title: "New file in " + folder, ok: "Create" });
   if (name) createAndOpen(folder + "/" + name.trim());
 }
 
@@ -5426,6 +7087,7 @@ async function deleteEntry(n) {
     closeTab(t);
   }
   loadTree(true);
+  await repointPins(n.path, null);      // a pin to something deleted is a dead end
 }
 
 function setupDrop(row, folder) {
@@ -5645,6 +7307,20 @@ function comboLabel(combo) {
 
 const hasDoc = () => !!(active && active.kind === "doc");
 const hasTab = () => !!active;
+// The group the keyboard's tab commands act on: the focused group — or,
+// while the keyboard sits on a folded group's handle, that group: Alt+W
+// closes the tab it names, Alt+] moves it to the next one (which opens the
+// group), and nothing maximizes it.
+function keyPane() {
+  const h = document.activeElement;
+  if (h && h.classList && h.classList.contains("pane-handle")) {
+    const p = allPanes().find((x) => x.handleEl === h);
+    if (p) return p;
+  }
+  return focusedPane();
+}
+// the group has a tab (a terminal counts): what Alt+W, Alt+] act on
+const hasFocusedTab = () => !!(keyPane() && keyPane().active);
 
 // group: null keeps an entry out of the help sheet (it is a mode of another one)
 const BINDINGS = [
@@ -5661,11 +7337,20 @@ const BINDINGS = [
   { id: "gototab", keys: ["Alt+1"], group: "Navigate", term: true,
     label: "Go to tab 1…9", labelKeys: ["Alt+1…9", "Ctrl+Shift+1…9"], run: () => gotoTab(0) },
   { id: "closetab", keys: ["Alt+W"], group: "Navigate", term: true,
-    label: "Close tab", when: hasTab, run: () => { if (active) closeTab(active); } },
-  { id: "splitright", keys: ["Alt+Backslash"], group: "Navigate",
-    when: () => !!active && paneTabs(paneOf(active)).length > 1,
-    label: "Split the editor right", hint: "or drag a tab to a pane's edge",
+    label: "Close tab", when: hasFocusedTab,
+    run: () => { const t = keyPane().active; if (t) closeTab(t); } },
+  { id: "splitright", keys: ["Alt+Backslash"], group: "Navigate", term: true,
+    when: () => hasFocusedTab() && paneTabs(keyPane()).length > 1,
+    label: "Split the editor right", hint: "or drag a tab to a group's edge",
     run: () => splitActiveTab(1) },
+  { id: "splitdown", keys: ["Alt+Shift+Backslash"], group: "Navigate", term: true,
+    when: () => hasFocusedTab() && paneTabs(keyPane()).length > 1,
+    label: "Split the editor below", hint: "or drag a tab to a group's top or bottom edge",
+    run: () => splitActiveTab("down") },
+  { id: "maximize", keys: ["Alt+Z"], group: "Navigate", term: true,
+    when: hasFocusedTab, label: "Maximize / restore the focused group",
+    hint: "or double-click the empty part of its tab strip",
+    run: () => toggleMaximize() },
   { id: "focustree", keys: ["Mod+Shift+E", "Alt+E"], group: "Navigate",
     label: "Focus the file tree", run: focusTree },
   { id: "sidebar", keys: ["Alt+B"], group: "Navigate",
@@ -5696,6 +7381,11 @@ const BINDINGS = [
     label: "Show / hide the terminal", when: () => canShell, run: toggleTerminalPanel },
   { id: "newterm", keys: ["Ctrl+Shift+Backquote"], group: "Terminal", term: true,
     label: "New terminal", when: () => canShell, run: () => openTermWith() },
+
+  // — Agents —
+  { id: "chat", keys: ["Alt+C"], group: "Agents", term: true,
+    label: "Agent chat", hint: "Claude Code, Codex, Gemini… in a side column",
+    run: () => openChat() },
 
   // — Dictation —
   // F9 is the one function key no browser has claimed (F1 help, F3 find, F5
@@ -5731,6 +7421,9 @@ const EXTRA_COMMANDS = [
   { id: "admin", label: "Admin — users, groups, network", when: () => !$("#admin-btn").hidden,
     run: openAdmin },
   { id: "settings", label: "Settings — theme and preferences", run: () => openSettings() },
+  { id: "pinopen", label: "Pin / unpin the open file in the sidebar", when: hasTab,
+    run: () => { if (!active) return;
+      pinnedTargets().has(active.path) ? unpinPath(active.path) : pinPath(active.path, false); } },
   { id: "copypath", label: "Copy the open file's path", when: hasTab,
     run: () => { if (!active) return;
       navigator.clipboard.writeText(active.path)
@@ -5747,6 +7440,23 @@ const EXTRA_COMMANDS = [
     run: () => { releaseMicNow(); kbToast("Microphone released", "ok"); } },
   { id: "speechlang", label: "Dictation language…", when: dictationReady,
     run: dictationLangPrompt },
+  { id: "newchat", label: "New agent chat", run: () => openChat() },
+  // — the layout: what dragging does, for the keyboard —
+  { id: "movetableft", label: "Move tab to the column on the left", when: hasFocusedTab, run: () => moveFocusedTab("left") },
+  { id: "movetabright", label: "Move tab to the column on the right", when: hasFocusedTab, run: () => moveFocusedTab("right") },
+  { id: "movetabup", label: "Move tab to the group above", when: hasFocusedTab, run: () => moveFocusedTab("up") },
+  { id: "movetabdown", label: "Move tab to the group below", when: hasFocusedTab, run: () => moveFocusedTab("down") },
+  // (a phone has no panel: its terminal is a tab like any other)
+  { id: "movetabdock", label: "Move tab into the terminal panel", when: () => !isMobile() && hasFocusedTab() && !isDock(focusedPane()),
+    run: () => moveFocusedTab("dock") },
+  { id: "focusnext", label: "Focus the next group", run: () => focusNextPane(1) },
+  { id: "focusprev", label: "Focus the previous group", run: () => focusNextPane(-1) },
+  // (a phone's dock is always the sheet at the bottom: no side to pick)
+  { id: "dockbottom", label: "Terminal panel: bottom", when: () => !isMobile() && dock.side !== "bottom", run: () => setDockSide("bottom") },
+  { id: "dockright", label: "Terminal panel: right", when: () => !isMobile() && dock.side !== "right", run: () => setDockSide("right") },
+  { id: "dockleft", label: "Terminal panel: left", when: () => !isMobile() && dock.side !== "left", run: () => setDockSide("left") },
+  { id: "maximize2", label: "Maximize / restore the focused group", when: hasFocusedTab, run: () => toggleMaximize() },
+  { id: "fold", label: "Fold / unfold the focused group", when: hasFocusedTab, run: () => togglePaneFold() },
   { id: "signout", label: "Sign out", run: () => { location.href = "/logout"; } },
 ];
 
@@ -5775,9 +7485,9 @@ function allCommands() {
     if (b.when && !b.when()) continue;
     cmds.push({ label: b.label, keys: b.labelKeys ? b.labelKeys[0] : b.keys[0], run: b.run });
   }
-  for (const c of EXTRA_COMMANDS) {
+  for (const c of EXTRA_COMMANDS.concat(registeredCommands())) {
     if (c.when && !c.when()) continue;
-    cmds.push({ label: c.label, keys: null, run: c.run });
+    cmds.push({ label: c.label, keys: c.keys ? c.keys[0] : null, run: c.run });
   }
   return cmds;
 }
@@ -5797,7 +7507,7 @@ function bindingFor(e, inTerm) {
   // reserves Alt+digit for its own tab switching) — one binding, nine targets
   const i = tabIndexFromEvent(e);
   if (i >= 0) return { id: "gototab", term: true, run: () => gotoTab(i) };
-  for (const b of BINDINGS) {
+  for (const b of BINDINGS.concat(registeredCommands().filter((c) => c.keys))) {
     if (inTerm && !b.term) continue;
     if (!b.keys.some((k) => comboMatches(e, k))) continue;
     if (b.when && !b.when()) return null;   // the key is ours, but inert right now
@@ -5828,7 +7538,7 @@ function wireShortcuts() {
       if (e.key === "Escape") closeTopModal();
       return;
     }
-    const inTerm = !!(e.target && e.target.closest && e.target.closest("#terminal-panel"));
+    const inTerm = !!(e.target && e.target.closest && e.target.closest(".tab-content.term"));
     const b = bindingFor(e, inTerm);
     if (!b) return;
     // A bare printable key (`?`) must never be stolen mid-sentence; anything
@@ -5853,19 +7563,23 @@ function closeTopModal() {
   if (x) x.click(); else ov.remove();
 }
 
+// Tab commands act on the FOCUSED group: in the dock they cycle terminals.
 function cycleTab(d) {
-  const list = paneTabs(activePane());
+  const p = keyPane();
+  const list = paneTabs(p);
   if (list.length < 2) return;
-  const i = list.indexOf(active);
+  const i = list.indexOf(p.active);
   activateTab(list[(((i < 0 ? 0 : i) + d) % list.length + list.length) % list.length]);
 }
-function gotoTab(i) { const list = paneTabs(activePane()); if (list[i]) activateTab(list[i]); }
+function gotoTab(i) { const list = paneTabs(keyPane()); if (list[i]) activateTab(list[i]); }
 function toggleSidebar() {
   if (isMobile()) {
     if (document.body.classList.toggle("nav-open")) revealActiveInTree(true);
     return;
   }
-  if (!document.body.classList.toggle("nav-hidden")) revealActiveInTree(true);
+  const hide = !document.body.classList.contains("nav-hidden");
+  setNavHidden(hide);
+  if (!hide) revealActiveInTree(true);
 }
 function saveNow() {
   // Edits stream into the CRDT and land on disk within a second — there is no
@@ -5900,7 +7614,7 @@ function revealActiveInTree(center) {
 function revealActive() {
   if (!active) return;
   if (isMobile()) document.body.classList.add("nav-open");
-  document.body.classList.remove("nav-hidden");
+  setNavHidden(false);
   revealActiveInTree(true);
   treeCursor = active.path;
   paintTreeCursor();
@@ -5954,7 +7668,7 @@ function jumpTo(i) {
   el.scrollIntoView({ block: "nearest" });
 }
 function focusTree() {
-  document.body.classList.remove("nav-hidden");
+  setNavHidden(false);
   if (isMobile()) document.body.classList.add("nav-open");
   const host = $("#tree");
   host.focus();
@@ -6392,12 +8106,14 @@ function revealFolder(path) {
   let acc = "";
   for (const seg of path.split("/")) { acc = acc ? acc + "/" + seg : seg; collapsed.delete(acc); }
   rerenderTree();
-  document.body.classList.remove("nav-hidden");   // Alt+B may have hidden it
+  setNavHidden(false);   // Alt+B may have hidden it
   if (isMobile()) document.body.classList.add("nav-open");
   treeCursor = path;
   paintTreeCursor();
   const el = $("#tree").querySelector('.tree-item[data-path="' + cssEsc(path) + '"]');
   if (el) el.scrollIntoView({ block: "center" });
+  else if (_lastTreePaths && _lastTreePaths.size && !_lastTreePaths.has(path))
+    kbToast(path + " is not there any more", "err");
 }
 
 async function openAtLine(path, line) {
@@ -6520,8 +8236,8 @@ function escapeHtml(s) { const d = document.createElement("div"); d.textContent 
 // Alt+N, or "New document" in the palette. (The top bar had a button for this
 // once; the tree's "New file here" and the palette cover it without the chrome.)
 async function newDocument() {
-  const path = await kbPrompt("Path for the new document:", "company/untitled.md",
-                              { title: "New document", ok: "Create", placeholder: "company/notes.md" });
+  const path = await kbPrompt("Path for the new document:", "company/untitled",
+                              { title: "New document", ok: "Create", placeholder: "company/notes" });
   if (path) createAndOpen(path.trim());
 }
 // Prevent the browser from navigating away if a file is dropped OUTSIDE an
@@ -6547,39 +8263,28 @@ let activeTerm = null;
 // OLD still-running backend doesn't speak: keepalive pings (it would TYPE them
 // into the shell) and offset replay (it always resends its whole buffer).
 let backendV = 0;
+let whoamiUser = "";
 
 function wireTerminal() {
   $("#toggleterm").addEventListener("click", toggleTerminalPanel);
-  $("#term-new").addEventListener("click", () => newTerminal());
-  $("#term-hide").addEventListener("click", hideTerminalPanel);
-  const maxBtn = $("#term-max");   // null-guarded: cached older app.html
-  if (maxBtn) maxBtn.addEventListener("click", () =>
-    setTermMax(!document.body.classList.contains("term-max")));
-  // how to select+copy where a full-screen app (claude code) owns the mouse
-  const hint = $("#term-hint");
-  if (hint) {
-    hint.textContent = SELECT_MODIFIER + "+drag to select · copies on select";
-    hint.title = "In a full-screen terminal app (e.g. claude code) the app owns "
-      + "the mouse, so hold " + SELECT_MODIFIER + " while dragging to select text. "
-      + "Selecting copies it; "
-      + (IS_APPLE ? "⌘V" : "Ctrl+V or Ctrl+Shift+V") + " pastes.";
-  }
+  wireTouchTabDrag();
+  for (const b of document.querySelectorAll(".chat-btn, #chats-new")) b.addEventListener("click", () => { closeNav(); openChat(); });
+
+  defineSlot("topbar", $("#topbar-actions") || document.querySelector(".topbar"));
+  // (the ＋ / ⤢ / ▾ of the dock, like every group's, are drawn by renderTabBar)
   // Ctrl+` lives in BINDINGS with every other shortcut — see wireShortcuts().
   // Refit whenever the terminal area actually changes size (panel resize,
   // window resize) — a single fit-on-open is not enough.
-  new ResizeObserver(() => fitTerm(activeTerm)).observe($("#terminal"));
+  // (each group's host is watched by _fitObserver — see finishPane)
   // If a terminal opened before the webfont finished loading, xterm measured
   // fallback glyphs — poke the font option to re-measure, then refit.
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(() => {
       for (const t of terms) t.term.options.fontFamily = termFont();
-      fitTerm(activeTerm);
+      refitDisplayedTerminals();
     });
   }
-  window.addEventListener("resize", () => {
-    if (!$("#terminal-panel").hidden) fitTerm(activeTerm);
-  });
-  wireTermResizer();
+  window.addEventListener("resize", () => { applyDockSide(); refitDisplayedTerminals(); });
   wireTermKeys();
   wireViewport();
   // Keepalive: a quiet terminal sends no bytes for hours, and idle-timeouting
@@ -6598,6 +8303,7 @@ function wireTerminal() {
     if (!document.hidden) retryTermsNow();
   });
   window.__kbterms = terms;   // test hook
+  window.__kbopenview = openView;   // test hook: open any registered view kind
   window.__kbDictTarget = dictationTarget;   // test hook: routing is testable
 }
 
@@ -6610,9 +8316,25 @@ function wireViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
   let pinned = false;
+  const unpin = () => {
+    document.body.style.height = "";
+    document.querySelectorAll(".pane.maximized").forEach((e) => { e.style.height = ""; });
+    const p = $("#terminal-panel");
+    if (p) p.style.height = "";
+    pinned = false;
+  };
   const apply = () => {
     const covered = window.innerHeight - vv.height;   // ~0 when the browser resizes the layout itself
     const panel = $("#terminal-panel");
+    // A PINCH shrinks the visible viewport the same way a keyboard does.
+    // Pinning the app to it then squeezes the whole page into the zoomed
+    // rectangle — the top is cut off, the document bar looms — and the
+    // scroll handler below would fight every pan. While the page is
+    // zoomed, leave the layout alone and let the browser do its job.
+    if (vv.scale > 1.01) {
+      if (pinned) unpin();
+      return;
+    }
     if (covered > 80) {
       document.body.style.height = vv.height + "px";
       // The full-screen terminal is position:fixed, so the body pinning above
@@ -6620,19 +8342,21 @@ function wireViewport() {
       // and it ends exactly where the keyboard begins (iOS overlays the
       // keyboard instead of resizing the layout; interactive-widget in the
       // meta tag only helps Chrome).
-      if (document.body.classList.contains("term-max"))
-        panel.style.height = vv.height + "px";
+      const maxed = document.querySelector(".pane.maximized");
+      if (maxed && isMobile()) {
+        // the visible viewport, less the keybar's strip when it is up
+        const kb = document.body.classList.contains("kb-term") ? ($("#term-keys").offsetHeight || 0) : 0;
+        maxed.style.height = Math.max(120, vv.height - kb) + "px";
+      }
       window.scrollTo(0, 0);
       pinned = true;
     } else if (pinned) {
-      document.body.style.height = "";
-      panel.style.height = "";
-      pinned = false;
+      unpin();
     }
-    if (!panel.hidden) fitTerm(activeTerm);
+    refitDisplayedTerminals();
   };
   vv.addEventListener("resize", apply);
-  vv.addEventListener("scroll", () => { if (pinned) window.scrollTo(0, 0); });
+  vv.addEventListener("scroll", () => { if (pinned && vv.scale <= 1.01) window.scrollTo(0, 0); });
 }
 
 // ---- touch keybar: the keys a phone keyboard doesn't have -----------------
@@ -6995,6 +8719,22 @@ function wireTouchScroll(t) {
 function wireTermKeys() {
   const bar = $("#term-keys");
   bar.addEventListener("pointerdown", (e) => e.preventDefault());
+  // The bar is fixed over the terminal, so the terminal must end where the
+  // bar begins. Its height is not a constant — the safe-area inset, the
+  // font size and the row's own padding all move it — so it is measured and
+  // published as --kb-h, and the terminal refits to the room that leaves.
+  // (A hardcoded 46px hid the bottom rows of a full-screen app: exactly the
+  // lines Claude Code draws its prompt on.)
+  const publish = () => {
+    const h = bar.offsetHeight || 0;
+    const now = h ? h + "px" : "0px";
+    if (document.documentElement.style.getPropertyValue("--kb-h") === now) return;
+    document.documentElement.style.setProperty("--kb-h", now);
+    requestAnimationFrame(refitDisplayedTerminals);
+  };
+  publish();
+  new ResizeObserver(publish).observe(bar);
+  window.addEventListener("resize", publish);
   bar.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-k]");
     if (!b || !activeTerm) return;
@@ -7056,7 +8796,20 @@ function wireTermKeys() {
 function retintTerminals() {
   const th = termTheme(), font = termFont();
   for (const t of terms) if (t.term) { t.term.options.theme = th; t.term.options.fontFamily = font; }
-  if (activeTerm) fitTerm(activeTerm);
+  refitDisplayedTerminals();
+}
+
+// Every terminal that is on screen, refit — there can be one per group now.
+function refitDisplayedTerminals() {
+  for (const t of terms) if (isDisplayed(t)) fitTerm(t);
+}
+
+// The terminal the keybar, dictation and __kbterm act on: the one most
+// recently focused or activated, wherever its group is.
+function noteActiveTerm(t) {
+  activeTerm = t;
+  window.__kbterm = t && t.term ? t.term : null;   // test hook: the xterm instance
+  paintTermLive(t);
 }
 
 function termFontSize() {
@@ -7068,45 +8821,108 @@ function setTermFontSize(n) {
   n = Math.min(24, Math.max(9, n));
   try { localStorage.setItem("kbTermFont", String(n)); } catch (e) { /* private mode */ }
   for (const t of terms) t.term.options.fontSize = n;
-  fitTerm(activeTerm);
+  refitDisplayedTerminals();
   // No toast: the text visibly changing size IS the feedback, and during a
   // pinch this fires many times a second.
 }
 
-function setTermMax(on) {
-  document.body.classList.toggle("term-max", on);
+// The phone's "full screen" terminal is the dock, maximized — the one
+// mechanism every group has. Remembered as the phone's preference.
+function setTermMax(on, remember) {
+  if (remember === undefined) remember = true;
+  if (!dockPane) return;
   // The keyboard-pinning in wireViewport() sets an inline height on the fixed
-  // panel; carrying that into the other mode would freeze the panel at a stale
-  // size. Clear it — the next visualViewport resize re-applies if needed.
-  $("#terminal-panel").style.height = "";
-  try { localStorage.setItem("kbTermMode", on ? "max" : "half"); } catch (e) { /* private mode */ }
-  const b = $("#term-max");
-  if (b) { b.textContent = on ? "⤡" : "⤢"; b.title = on ? "Shrink to half screen" : "Full screen"; }
-  requestAnimationFrame(() => fitTerm(activeTerm));
+  // group; carrying that into the other mode would freeze it at a stale size.
+  dockPane.el.style.height = "";
+  if (remember) { try { localStorage.setItem("kbTermMode", on ? "max" : "half"); } catch (e) { /* private mode */ } }
+  if (on && !dockPane.el.hidden) { if (maximizedPaneId !== dockPane.id) setMaximized(dockPane.id); }
+  else if (!on && maximizedPaneId === dockPane.id) setMaximized(null);
+  requestAnimationFrame(refitDisplayedTerminals);
 }
 function preferredTermMax() {
+  // A landscape phone has no room for a document above a half-height
+  // terminal: the sheet goes full, and the remembered mode is left alone.
+  if (window.matchMedia("(pointer: coarse) and (max-height: 500px)").matches) return true;
   try { return (localStorage.getItem("kbTermMode") || "max") === "max"; }
   catch (e) { return true; }
 }
 
+// Ctrl+` and the Terminal button. The dock has tabs: show it (and put the
+// keyboard in its terminal) or hide it. The dock is empty but a terminal
+// lives in some other group: go to that terminal — never spawn a second one
+// under a user who dragged their only shell to the right and now wants it
+// back. No terminal anywhere: a fresh one in the dock, as always.
 function toggleTerminalPanel() {
   if (!canShell) return;
-  const panel = $("#terminal-panel");
-  if (panel.hidden) {
-    closeNav();   // the drawer would cover the panel on mobile
-    panel.hidden = false;
-    if (isMobile()) setTermMax(preferredTermMax());
-    if (!terms.length) newTerminal();
-    else if (activeTerm) activateTerm(activeTerm, true);
+  if (isPhone()) { phoneTerminal(); return; }
+  if (maximizedPaneId && maximizedPaneId !== dockPane.id) {
+    // a group is maximized: Ctrl+` means "show me the terminal" — the
+    // layout comes back, and the open dock is simply there again
+    setMaximized(null);
+    if (!dockHidden()) { activateTab(dockPane.active || paneTabs(dockPane)[0]); return; }
+  }
+  if (dockHidden()) {
+    const inDock = paneTabs(dockPane);
+    if (!inDock.length) {
+      const elsewhere = terms.filter((t) => !isDock(paneOf(t)));
+      if (elsewhere.length) {
+        const t = elsewhere.includes(activeTerm) ? activeTerm : elsewhere[elsewhere.length - 1];
+        if (paneOf(t).collapsed) expandPane(paneOf(t));
+        activateTab(t);
+        return;
+      }
+      newTerminal();
+      return;
+    }
+    showDock();
+    activateTab(dockPane.active || inDock[0]);
     saveSession();
   } else {
     hideTerminalPanel();
   }
 }
-function hideTerminalPanel() {
-  $("#terminal-panel").hidden = true;
-  document.body.classList.remove("term-max");
-  saveSession();
+
+// The phone's terminal: a tab beside your documents. Asking for one goes to
+// the terminal you already have (bringing it up out of the panel if a
+// desktop session left it there), or opens a new one in the group you are
+// looking at.
+function phoneTerminal() {
+  const here = terms.filter((t) => !isDock(paneOf(t)));
+  if (here.length) {
+    const t = here.includes(activeTerm) ? activeTerm : here[here.length - 1];
+    if (paneOf(t).collapsed) expandPane(paneOf(t));
+    activateTab(t);
+    return;
+  }
+  const inPanel = paneTabs(dockPane);
+  if (inPanel.length) { liftPanelOntoPhone(); return; }
+  newTerminal();
+}
+
+// A layout made on a desktop, opened on a phone: whatever sits in the panel
+// joins the workspace, and the panel goes away.
+function liftPanelOntoPhone() {
+  const inPanel = paneTabs(dockPane);
+  if (!inPanel.length) return;
+  const target = panes.find((p) => !p.collapsed) || panes[0];
+  for (const t of inPanel) moveTabToPane(t, target, paneTabs(target).length);
+  hideTerminalPanel(true);
+  activateTab(inPanel[inPanel.length - 1]);
+}
+
+// Un-collapse the dock — every door into it honours the mobile mode and gets
+// the drawer out of the way (a full-screen terminal covers the ☰).
+function showDock() {
+  if (!dockHidden()) return;
+  expandPane(dockPane);
+}
+
+// Collapse the dock. `quiet` skips the handover of `active`, for callers that
+// are in the middle of moving things themselves.
+function hideTerminalPanel(quiet) {
+  // the dock folds like any group; empty, it is simply out of the way
+  if (!paneTabs(dockPane).length) { dockPane.collapsed = true; dockPane.el.hidden = true; if (maximizedPaneId === dockPane.id) { maximizedPaneId = null; applyMaximize(); } normalizeSplits(); renderTabBar(); if (!quiet) saveSession(); return; }
+  collapsePane(dockPane, quiet);
 }
 
 function openTermWith(cmd) {
@@ -7115,26 +8931,7 @@ function openTermWith(cmd) {
   newTerminal(cmd);
 }
 
-function renderTermTabs() {
-  const host = $("#term-tabs");
-  host.innerHTML = "";
-  for (const t of terms) {
-    const el = document.createElement("div");
-    el.className = "term-tab" + (t === activeTerm ? " active" : "");
-    const name = document.createElement("span");
-    name.textContent = (t.connected === false ? "⟳ " : "") + t.name;
-    el.appendChild(name);
-    const x = document.createElement("button");
-    x.className = "term-x"; x.title = "Kill terminal"; x.textContent = "×";
-    x.addEventListener("click", (e) => { e.stopPropagation(); killTerminal(t); });
-    el.appendChild(x);
-    el.addEventListener("click", () => {
-      activateTerm(t, true);
-      if (t.connected === false) retryTermsNow();   // clicking a stalled tab retries now
-    });
-    host.appendChild(el);
-  }
-}
+function renderTermTabs() { renderTabBar(); }   // the dock strip is a tab strip like the others
 
 // The modifier that forces a LOCAL text selection when a mouse-tracking app
 // (claude code, htop, vim) owns the mouse: xterm hard-codes Shift on Linux/
@@ -7247,13 +9044,33 @@ function warmTerminal() {
   return _termMod;
 }
 
-async function newTerminal(cmd, sid, savedName) {
-  const wasHidden = $("#terminal-panel").hidden;
-  $("#terminal-panel").hidden = false;
-  // Every door into the terminal honours the mobile mode, not just the toggle —
-  // launcher buttons and session restore land here too, and each of them must
-  // also get the drawer out of the way (a full-screen terminal covers the ☰).
-  if (wasHidden && isMobile()) { closeNav(); setTermMax(preferredTermMax()); }
+// A new terminal: a tab of kind "term", in the dock unless a group is named.
+// Returns the tab (which is also the terminal record), or null.
+async function newTerminal(cmd, sid, savedName, paneId) {
+  return openView("term", { cmd, sid, name: savedName }, paneId);
+}
+
+function randomSid() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// A restored terminal at t=0: its tab and "⟳ name" row are on screen at once;
+// the shell behind it is attached in restoreRest, once whoami has answered.
+function pendingTerminal(p, spec) {
+  const el = document.createElement("div");
+  el.className = "tab-content term term-content connecting";
+  p.hostEl.appendChild(el);
+  const t = { id: ++tabSeq, kind: "term", path: null, name: spec.name || "bash", el, paneId: p.id,
+              sid: spec.sid, pending: true, connected: false, term: null, ws: null, exited: false };
+  tabs.push(t);
+  if (!p.active) p.active = t;
+  return t;
+}
+
+// Put a live xterm into a terminal tab's element and connect it — a new
+// terminal, or a restored one that sat as a placeholder until now. Resolves
+// true when the terminal is running, false when the chunk could not load.
+async function attachTerminal(t, cmd) {
   let xterm;
   try { xterm = await warmTerminal(); }
   catch (e) {
@@ -7261,14 +9078,11 @@ async function newTerminal(cmd, sid, savedName) {
     // A page from before the deploy asking for its first terminal finds
     // nothing at the old name — the honest answer is a reload, not a blank
     // panel that looks like a broken terminal.
-    if (!terms.length && wasHidden) hideTerminalPanel();
     kbToast("A new version was deployed — reload the page to open a terminal", "err");
-    return null;
+    return false;
   }
+  if (!tabs.includes(t) || t.term) return !!t.term;
   const { Terminal, FitAddon } = xterm;
-  const el = document.createElement("div");
-  el.className = "term-content";
-  $("#terminal").appendChild(el);
   // Render size is the user's choice (A−/A+ in the keybar, persisted). The
   // iOS no-focus-zoom constraint (16px minimum on the FOCUSED element) is
   // satisfied in CSS instead, by pinning xterm's hidden textarea to 16px —
@@ -7286,25 +9100,50 @@ async function newTerminal(cmd, sid, savedName) {
                               macOptionClickForcesSelection: true });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  term.open(el);
-  const name = savedName ||
-    (cmd ? cmd.trim().split(/\s+/)[0].slice(0, 14) : "bash " + (termSeq + 1));
-  const t = { id: ++termSeq, name, el, term, fit, ws: null,
-              rx: 0,             // bytes received, in the session's coordinates
-              retries: 0, reTimer: null, exited: false, connected: true, bn: null,
-              cmd, cmdSent: !cmd,
-              sid: sid || Array.from(crypto.getRandomValues(new Uint8Array(8)),
-                                     (b) => b.toString(16).padStart(2, "0")).join("") };
+  term.open(t.el);
+  Object.assign(t, { term, fit, ws: null,
+                     rx: 0,             // bytes received, in the session's coordinates
+                     retries: 0, reTimer: null, exited: false, connected: true, bn: null,
+                     cmd, cmdSent: !cmd, pending: false });
+  t.el.classList.remove("connecting");
   wireTouchScroll(t);
   wireTermClipboard(t);
   connectTerm(t);
   term.onData((d) => sendData(t, d));
   term.onScroll(() => { if (t === activeTerm) paintTermLive(t); });
   terms.push(t);
-  activateTerm(t, true);
-  saveSession();
-  return t;
+  return true;
 }
+
+registerView("term", {
+  label: "Terminal",
+  icon: () => I.term,
+  title: (t) => (t.connected === false ? "⟳ " : "") + t.name,
+  tooltip: (t) => (t.exited ? "exited — " : "") + t.name + (t.pending ? " (connecting)" : ""),
+  key: () => null,          // every terminal is its own thing
+  contentClass: "term term-content",
+  placement: { target: "dock" },
+  init: (t, spec) => {
+    t.path = null;
+    t.sid = spec.sid || randomSid();
+    t.name = spec.name ||
+      (spec.cmd ? spec.cmd.trim().split(/\s+/)[0].slice(0, 14) : "bash " + (++termSeq));
+    t.pending = true; t.connected = false; t.term = null; t.ws = null; t.exited = false;
+  },
+  restore: (spec) => (typeof spec.sid === "string" && spec.sid
+    ? { kind: "term", sid: spec.sid, name: typeof spec.name === "string" ? spec.name : undefined } : null),
+  serialize: (t) => ({ kind: "term", sid: t.sid, name: t.name }),
+  open: async (t, spec) => {
+    if (isDock(paneOf(t))) showDock();
+    const ok = await attachTerminal(t, spec.cmd);
+    if (!ok) { const e = new Error("no terminal chunk"); e.quiet = true; throw e; }
+    activateTerm(t, true);
+    saveSession();
+  },
+  close: () => { /* a live terminal goes through killTerminal; a placeholder has nothing to end */ },
+  focus: (t) => { if (t.term) t.term.focus(); },
+  resize: (t) => fitTerm(t),
+});
 
 function connectTerm(t) {
   if (t.ws && t.ws.readyState <= 1) return;   // already connecting/connected
@@ -7423,33 +9262,38 @@ function retryTermsNow() {
 function paintTermLive(t) {
   const b = $("#tk-live");
   if (!b) return;
-  const buf = t && t.term.buffer.active;
+  const buf = t && t.term && t.term.buffer.active;
   b.classList.toggle("away", !!buf && buf.type === "normal" && buf.viewportY < buf.baseY);
 }
 
 function activateTerm(t, focus) {
-  activeTerm = t;
-  window.__kbterm = t ? t.term : null;   // test hook
-  for (const o of terms) o.el.style.display = o === t ? "" : "none";
-  renderTermTabs();
-  paintTermLive(t);
-  saveSession();   // which terminal is active is part of "where you left off"
+  const p = paneOf(t);
+  p.active = t;
+  focusedPaneId = p.id;
+  noteActiveTerm(t);
+  showEachPanesTab();
+  renderTabBar();
+  saveSession();   // which terminal is showing is part of "where you left off"
   // When the activation wasn't user-initiated (a background shell exited and a
-  // neighbour got promoted), only take focus if it was already in the panel —
+  // neighbour got promoted), only take focus if it was already in the group —
   // never yank the user out of the editor.
   if (focus === undefined) {
-    const panel = $("#terminal-panel");
-    focus = panel.contains(document.activeElement) ||
+    focus = p.el.contains(document.activeElement) ||
       document.activeElement === document.body;
   }
   // Fit only AFTER layout settles, or FitAddon measures a pre-constraint height.
-  requestAnimationFrame(() => { fitTerm(t); if (focus) t.term.focus(); });
+  requestAnimationFrame(() => { fitTerm(t); if (focus && t.term) t.term.focus(); });
 }
 
-function killTerminal(t) {
+function killTerminal(t, fromPointer) {
   const i = terms.indexOf(t);
-  if (i < 0) return;
+  if (i < 0) { dropTab(t); return; }
+  const p = paneOf(t);
+  if (fromPointer) lockTabStrip(p.barEl); else unlockTabStrip(p.barEl);
+  const inPane = paneTabs(p);
+  const j = inPane.indexOf(t);
   terms.splice(i, 1);
+  tabs.splice(tabs.indexOf(t), 1);
   if (t.unwireTouchScroll) t.unwireTouchScroll();   // window listeners + fling + timers
   t.ws.onclose = null;
   if (t.reTimer) { clearTimeout(t.reTimer); t.reTimer = null; }
@@ -7470,17 +9314,27 @@ function killTerminal(t) {
     } catch (e) { /* offline — nothing to reach */ }
   }
   try { t.ws.close(); } catch (e) { /* already closed */ }
-  saveSession();
+  const hadFocus = p.el.contains(document.activeElement) || document.activeElement === document.body;
   t.term.dispose();
   t.el.remove();
-  if (activeTerm === t) { activeTerm = null; window.__kbterm = null; }
-  if (!terms.length) { hideTerminalPanel(); renderTermTabs(); return; }
-  if (!activeTerm) activateTerm(terms[Math.min(i, terms.length - 1)]);
-  else renderTermTabs();
+  // The tab you get next is this group's neighbour, not some other column's.
+  const rest = paneTabs(p);
+  if (p.active === t) p.active = rest[j] || rest[j - 1] || null;
+  if (activeTerm === t) {
+    activeTerm = null; window.__kbterm = null;
+    const next = (p.active && p.active.kind === "term") ? p.active : terms.find(isDisplayed) || terms[terms.length - 1] || null;
+    if (next) noteActiveTerm(next);
+  }
+  if (!rest.length) paneEmptied(p);
+  if (p.active && p.active.kind === "term" && paneById(p.id)) activateTerm(p.active, hadFocus);
+  else if (p.active && paneById(p.id) && hadFocus && viewKind(p.active.kind).isActiveDocument) activateTab(p.active);
+  else { showEachPanesTab(); renderTabBar(); }
+  refocus();
+  saveSession();
 }
 
 function fitTerm(t) {
-  if (!t || $("#terminal-panel").hidden) return;
+  if (!t || !t.term || !isDisplayed(t)) return;
   try { t.fit.fit(); } catch (e) { /* container not laid out yet */ }
   sendResize(t);
 }
@@ -7492,33 +9346,7 @@ function sendResize(t) {
 
 // Drag the panel's top edge to resize it, like the VS-Code panel divider.
 // Pointer events (with capture) cover mouse, touch and pen with one handler.
-function wireTermResizer() {
-  // Free-drag resize is a desktop affordance. On touch the handle is a 6px
-  // target that fights scrolling and the keyboard — the ⤢ snap states replace
-  // it there (the CSS hides the handle; this spares the dead listeners).
-  if (window.matchMedia("(pointer: coarse)").matches) return;
-  const handle = $("#term-resizer");
-  const panel = $("#terminal-panel");
-  handle.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    handle.setPointerCapture(e.pointerId);
-    const startY = e.clientY;
-    const startH = panel.getBoundingClientRect().height;
-    const move = (ev) => {
-      const h = Math.min(Math.max(startH + (startY - ev.clientY), 110),
-                         Math.round(window.innerHeight * 0.8));
-      panel.style.height = h + "px";
-    };
-    const up = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", up);
-      handle.removeEventListener("pointercancel", up);
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up);
-    handle.addEventListener("pointercancel", up);
-  });
-}
+// (the dock is resized by the split handle applyDockSide() makes)
 
 // ---- session expiry -------------------------------------------------------
 
@@ -7562,6 +9390,9 @@ async function boot() {
   // Before anything else, so even the boot requests below are covered.
   installSessionGuard();
   insertPane(0);   // there is always at least one editor pane
+  adoptDock();     // and the terminal panel is a group like it
+  applyDockSide();
+  seatDocChrome(panes[0]);   // the document bar and the formatting dock start in it
   // Safety net: a drag cancelled with Escape, or dropped on the desktop, still
   // ends — and the pane drop overlays (which sit on top of the editor) must
   // come back down even when no drop handler of ours ever ran.
@@ -7571,7 +9402,7 @@ async function boot() {
   // once a minute, so the poll alone can feel slow at exactly the moment you
   // are looking at it).
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && !_sessionGone) settings.fetch();   // the tree: events.js wake()
+    if (!document.hidden && !_sessionGone) { settings.fetch(); loadChats(); }   // the tree: events.js wake()
   });
   // Everything the first paint needs leaves NOW, together. The tree is the
   // slow one — a permission-checked walk of the whole repo — and it used to
@@ -7584,6 +9415,7 @@ async function boot() {
   const deepLinksP = fetch("/company", { method: "HEAD" }).then((r) => r.ok, () => false);
   const whoamiP = loadWhoami();
   const settingsP = settings.fetch();      // same burst; awaited with whoami below
+  loadChats();                             // the sidebar's recent chats, whenever they land
   // Read the pasted URL BEFORE restoring: restoring activates every tab it
   // reopens, and activateTab → syncUrl() replaceState()s the address bar onto
   // that tab — so reading location afterwards yields the RESTORED path, not the
@@ -7603,6 +9435,8 @@ async function boot() {
   if (keysBtn) keysBtn.addEventListener("click", openShortcuts);
   const settingsBtn = $("#settings-btn");
   if (settingsBtn) settingsBtn.addEventListener("click", () => openSettings());
+  const pinsBtn = $("#pins-btn");
+  if (pinsBtn) pinsBtn.addEventListener("click", showLaunchersModal);
   // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.
@@ -7655,8 +9489,8 @@ async function boot() {
         b.addEventListener("click", openAdmin);
       }
     } catch (e) { /* not admin */ }
-    // The launcher bar renders with isAdmin in hand — after the answer, so it
-    // paints once and right, rather than as a non-admin's until the 30 s poll.
+    // The Pinned rows render with isAdmin in hand — after the answer, so they
+    // paint once and right, rather than as a non-admin's until the 30 s poll.
     loadLaunchers();
   })();
   // A backend from before whoami carried `v` still answers it on /api/cron;
@@ -7693,11 +9527,13 @@ async function boot() {
   });
   // the context menu follows the pointer, and dies with it
   document.addEventListener("click", closeCtxMenu);
+  // A right-click anywhere closes the menu — except on something that opens
+  // one of its own (it has just opened it).
   document.addEventListener("contextmenu", (e) => {
-    if (!e.target.closest(".tree-item")) closeCtxMenu();
+    if (!e.target.closest(".tree-item, .chat-row, .lchip, .pin-row")) closeCtxMenu();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCtxMenu(); }, true);
-  $("#tree").addEventListener("scroll", closeCtxMenu, true);
+  (document.querySelector(".sb-scroll") || $("#tree")).addEventListener("scroll", closeCtxMenu, true);
   window.addEventListener("blur", closeCtxMenu);
   syncTestHooks();
   window.__kbrerender = rerenderTree;   // test hook: force a tree repaint

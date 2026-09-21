@@ -35,6 +35,7 @@ import aiohttp
 from aiohttp import WSMsgType, web
 
 from . import common, pam_auth, uploads
+from . import acp as kbacp
 from . import settings as kbsettings
 
 PLATFORM_ROOT = Path(os.environ.get("KB_PLATFORM_ROOT", "/opt/kb-platform"))
@@ -1654,6 +1655,83 @@ class Hub:
         url = "http://kb/pty" + ("?" + request.query_string if request.query_string else "")
         return await self._bridge_ws(request, sess, url, {"X-KB-User": user})
 
+    async def proxy_acp(self, request: web.Request) -> web.StreamResponse:
+        """The agent chat's socket: to the person's backend, which runs the
+        agent as them (see acp.py). ?agent=<id> picks the agent."""
+        user = self.current_user(request)
+        if not user:
+            return web.Response(status=401)
+        sess = await self.ensure_backend(user)
+        url = "http://kb/acp" + ("?" + request.query_string if request.query_string else "")
+        return await self._bridge_ws(request, sess, url, {"X-KB-User": user})
+
+    # One install at a time, into the shared prefix every backend spawns
+    # agents from. Root does the npm work; the log is the progress report.
+    _agent_install: dict | None = None
+
+    async def admin_agents(self, request: web.Request) -> web.Response:
+        if not self._require_admin(request):
+            return web.json_response({"error": "admin only"}, status=403)
+        job = self._agent_install
+        return web.json_response({
+            "prefix": str(kbacp.AGENTS_PREFIX),
+            "agents": [{"id": a["id"], "name": a["name"], "vendor": a["vendor"], "npm": a["npm"],
+                        "installed": kbacp.bin_path(a) is not None} for a in kbacp.CATALOGUE],
+            "job": job,
+        })
+
+    async def admin_agents_install(self, request: web.Request) -> web.Response:
+        admin = self._require_admin(request)
+        if not admin:
+            return web.json_response({"error": "admin only"}, status=403)
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.json_response({"error": "bad json"}, status=400)
+        aid = body.get("id") if isinstance(body, dict) else None
+        agent = kbacp.BY_ID.get(aid)
+        if not agent:
+            return web.json_response({"error": "unknown agent"}, status=400)
+        if not agent.get("npm"):
+            # …or the installer would fall back to its default package list
+            return web.json_response({"error": agent["name"] + " is not an npm package: each person "
+                                                              "installs it in their own home"}, status=400)
+        if self._agent_install and self._agent_install.get("running"):
+            return web.json_response({"error": "an install is already running", "job": self._agent_install}, status=409)
+        job = self._agent_install = {"id": aid, "running": True, "ok": None, "started": int(time.time()),
+                                     "log": ""}
+        _audit("agents.install", admin, agent=aid)
+
+        async def run():
+            prefix = kbacp.AGENTS_PREFIX
+            script = str(Path(__file__).resolve().parents[1] / "scripts" / "install-agents.sh")
+            try:
+                # the script fetches the private Node 22 first if it is missing
+                proc = await asyncio.create_subprocess_exec(
+                    "bash", script, *agent["npm"],
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                    env=dict(os.environ, HOME="/root", NO_UPDATE_NOTIFIER="1",
+                             KB_AGENTS_PREFIX=str(prefix)))
+                out = b""
+                while True:
+                    chunk = await proc.stdout.read(4096)
+                    if not chunk:
+                        break
+                    out += chunk
+                    job["log"] = out[-8000:].decode("utf-8", "replace")
+                code = await proc.wait()
+                job["ok"] = code == 0 and kbacp.bin_path(agent) is not None
+                if job["ok"] is False and code == 0:
+                    job["log"] += "\ninstalled, but " + agent["bin"] + " is not in " + str(kbacp.BIN_DIR)
+            except Exception as e:   # noqa: BLE001
+                job["ok"] = False
+                job["log"] += "\n" + str(e)
+            finally:
+                job["running"] = False
+                job["finished"] = int(time.time())
+        asyncio.create_task(run())
+        return web.json_response({"ok": True, "job": job})
+
     async def doc_epoch(self, request: web.Request) -> web.Response:
         """The doc's CRDT lineage id (from syncd) — the editor fetches this and
         presents it when joining the live session; stale lineages are refused."""
@@ -2998,6 +3076,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/vc/{op}", hub.vc_proxy)
     app.router.add_get("/ws/doc/{path:.*}", hub.proxy_doc)
     app.router.add_get("/pty", hub.proxy_pty)
+    app.router.add_get("/acp", hub.proxy_acp)
     # Privileged filesystem admin (hub handles these as root; NOT proxied).
     app.router.add_post("/fs/newfile", hub.fs_newfile)
     app.router.add_post("/fs/upload", hub.fs_upload)
@@ -3020,6 +3099,8 @@ def make_app() -> web.Application:
     app.router.add_post("/admin/groups/delete", hub.admin_delete_group)
     app.router.add_post("/admin/launchers", hub.admin_launchers)
     app.router.add_post("/admin/settings", hub.admin_settings)
+    app.router.add_get("/admin/agents", hub.admin_agents)
+    app.router.add_post("/admin/agents/install", hub.admin_agents_install)
     app.router.add_post("/admin/brand/logo", hub.admin_brand_logo)
     app.router.add_get("/brand/logo", hub.brand_logo)
     app.router.add_get("/admin/egress", hub.admin_egress_get)
