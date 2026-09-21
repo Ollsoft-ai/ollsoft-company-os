@@ -83,6 +83,9 @@ it opens the file itself.
   a link as `[@name](file:///srv/kb/…)` in the prompt text, Codex's and
   Gemini's take `resource_link` directly. An agent that ignored it would
   simply miss the hint — nothing breaks.
+- **The paths an agent writes are links.** An answer that says
+  `/srv/kb/company/notes.md` renders as a link that opens that document in
+  this window; the hub redirects the same URL from anywhere else.
 - **The message keeps its receipts**: the bubble you sent lists the chips
   that went with it, and clicking one opens that file.
 - The context lives with the tab, so a reload brings it back. It is never

@@ -2576,6 +2576,7 @@ function mkBtn(html, title, fn) {
 
 // ---- context menu (right-click / long-press on tree rows) ------------------
 let _ctxMenu = null;
+let _ctxOpenedAt = 0;      // a menu ignores the scroll its own opening caused
 function closeCtxMenu() {
   if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
 }
@@ -2607,6 +2608,7 @@ function openCtxMenu(items, x, y) {
     m.appendChild(b);
   }
   document.body.appendChild(m);
+  _ctxOpenedAt = performance.now();
   const r = m.getBoundingClientRect();
   m.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
   m.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
@@ -9533,7 +9535,13 @@ async function boot() {
     if (!e.target.closest(".tree-item, .chat-row, .lchip, .pin-row")) closeCtxMenu();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCtxMenu(); }, true);
-  (document.querySelector(".sb-scroll") || $("#tree")).addEventListener("scroll", closeCtxMenu, true);
+  // Scrolling the list under an open menu closes it — but NOT the scroll the
+  // opening click itself caused: right-clicking a row moves the tree cursor,
+  // which scrolls the row into view, which used to shut the menu before it
+  // was ever seen (three context-menu tests, 2026-09-21).
+  (document.querySelector(".sb-scroll") || $("#tree")).addEventListener("scroll", () => {
+    if (performance.now() - _ctxOpenedAt > 350) closeCtxMenu();
+  }, true);
   window.addEventListener("blur", closeCtxMenu);
   syncTestHooks();
   window.__kbrerender = rerenderTree;   // test hook: force a tree repaint

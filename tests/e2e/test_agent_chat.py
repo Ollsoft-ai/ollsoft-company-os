@@ -6,7 +6,7 @@ import json
 
 import pytest
 from conftest import BASE, dlg_fill, dlg_ok, expand_folder, login, open_doc, wait_path
-from kbenv import AREA, doc
+from kbenv import AREA, doc, full
 
 
 def open_echo_chat(page):
@@ -487,4 +487,23 @@ def test_a_message_typed_mid_turn_is_queued_not_lost(browser):
     page.wait_for_function("() => !document.querySelector('.chat-msg.user.queued')", timeout=25000)
     page.wait_for_function("() => document.querySelectorAll('.chat-msg.agent').length >= 2", timeout=25000)
     assert "one more thing" in page.text_content(".chat-log")
+    ctx.close()
+
+
+def test_a_filesystem_path_in_an_answer_is_a_link_into_the_app(browser):
+    """Agents answer with the paths they see — `/srv/kb/company/notes.md`.
+    In the transcript that is a link to the document, opened here rather
+    than in a new tab (and the hub redirects the same URL typed into a
+    browser, so the link works from anywhere)."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    abs_path = str(full(doc("overview.md")))
+    ask_echo(page, f"see [the overview]({abs_path}) for the rest")
+    link = page.locator(".chat-msg.agent a", has_text="the overview").first
+    link.wait_for(timeout=10000)
+    assert link.get_attribute("data-open-path") == abs_path
+    assert link.get_attribute("target") is None, "a document opens here, not in a new tab"
+    link.click()
+    wait_path(page, doc("overview.md"), timeout=10000)
     ctx.close()

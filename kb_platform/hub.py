@@ -1551,6 +1551,19 @@ class Hub:
             raise web.HTTPFound("/login?next=" + urllib.parse.quote(request.rel_url.raw_path))
         return web.FileResponse(STATIC_DIR / "app.html", headers=self.NO_STORE)
 
+    async def abs_deep_link(self, request: web.Request) -> web.Response:
+        """The same document, addressed the way an agent writes it.
+
+        Agents answer with filesystem paths — `/srv/kb/company/notes.md` —
+        because that is what they see. Pasted after the host, that 404'd
+        while `/company/notes.md` worked. One redirect makes both the same
+        URL, so a link out of a chat (or a terminal, or an email) opens the
+        document instead of a dead end."""
+        target = "/" + request.match_info["path"]
+        if request.query_string:
+            target += "?" + request.query_string
+        raise web.HTTPFound(target)
+
     async def vc_proxy(self, request: web.Request) -> web.Response:
         """Version-history reads (log/show/diff/activity) — proxied to syncd
         with the caller's hub-verified identity; syncd re-checks per file that
@@ -3071,6 +3084,10 @@ def make_app() -> web.Application:
     # The pattern is anchored to the three top-level areas, so it can never
     # shadow /api, /fs, /admin, /static, /ws, /pty or /egress.
     app.router.add_get("/{path:(?:company|projects|users)(?:/.*)?}", hub.deep_link)
+    # …and the same path with the repo root in front of it (what an agent
+    # prints), which redirects onto the line above.
+    app.router.add_get("/" + str(common.REPO_ROOT).strip("/")
+                       + "/{path:(?:company|projects|users)(?:/.*)?}", hub.abs_deep_link)
     app.router.add_get("/api/doc-epoch", hub.doc_epoch)
     app.router.add_get("/api/presence", hub.presence)
     app.router.add_get("/api/vc/{op}", hub.vc_proxy)

@@ -75,8 +75,35 @@ const renderer = {
   },
 };
 marked.use({ gfm: true, breaks: false, renderer });
+// A link the agent wrote that points into the knowledgebase opens IN the
+// app, not in a new tab: `file:///srv/kb/company/notes.md` (how an ACP
+// resource link comes back), `/srv/kb/company/notes.md` (how an agent
+// prints a path) and `/company/notes.md` all mean the same document.
+function inAppPath(href) {
+  const root = (shell && shell.repoRoot && shell.repoRoot()) || "";
+  let p = null;
+  if (/^file:\/\//i.test(href)) {
+    try { p = decodeURI(href.replace(/^file:\/\//i, "").split(/[?#]/)[0]); } catch (e) { return null; }
+  } else {
+    let u;
+    try { u = new URL(href, location.href); } catch (e) { return null; }
+    if (u.origin !== location.origin) return null;
+    try { p = decodeURIComponent(u.pathname); } catch (e) { p = u.pathname; }
+  }
+  if (!p) return null;
+  if (root && p.startsWith(root + "/")) return p;
+  if (/^\/(company|projects|users)(\/|$)/.test(p)) return root ? root + p : p;
+  return null;
+}
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A") { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+  if (node.tagName !== "A") return;
+  const inApp = inAppPath(node.getAttribute("href") || "");
+  if (inApp) {
+    node.setAttribute("data-open-path", inApp);   // the log's click handler opens it
+    node.removeAttribute("target");               // …in this window, beside the chat
+    return;
+  }
+  node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer");
 });
 // a task list's checkboxes stay (disabled: the transcript is not a form);
 // every other input goes

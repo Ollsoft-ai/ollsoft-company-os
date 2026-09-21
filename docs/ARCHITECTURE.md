@@ -417,6 +417,14 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   them as ACP `resource_link` blocks and the folder goes in `session/new`.
   The picker behind ＋ is `pickPath()` in `app.js` — the palette's shape, but
   it returns a path. See [agent-chat.md](agent-chat.md).
+- **A path is a link, however it is written.** `/company/notes.md` has always
+  been a route; `/srv/kb/company/notes.md` — the path an agent prints, and
+  what people paste after the host — now redirects onto it (`abs_deep_link`
+  in the hub, registered from `common.REPO_ROOT`, and only for the three
+  areas). In a chat transcript such a link opens the document in this window
+  instead of a new tab: the markdown sanitiser turns any href inside the
+  knowledgebase (a `file://` resource link, an absolute path, a same-origin
+  route) into `data-open-path`.
 - **Pinned things are rows, and you pin by right-clicking.** The sidebar's
   first section lists what the company pinned (its icon takes the accent, and
   its tooltip and menu say so — the row carried the word "company" until
