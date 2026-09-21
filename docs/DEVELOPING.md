@@ -155,6 +155,27 @@ buttons in the chrome go into a named slot (`slot("topbar")`).
 These were designed during the build (some deliberately deferred) and are the
 natural next steps.
 
+- **Notifications.** An append-only inbox per person,
+  `users/<u>/.os/inbox.jsonl`, written by the processes that already see the
+  event: the indexer for a new `@mention` of a real account (it already scans
+  for them with `ASSIGNEE_RE`), the backend for a share, cron for a job that
+  failed, the ACP bridge for an agent that finished while you were away. A
+  dot on the person's ⋯, an Inbox view, and the SSE channel that already
+  exists to push them live. A file rather than a table because everything
+  else here is a file: agents can read it, backup already covers it, and no
+  schema has to migrate.
+- **Comments, as Markdown.** A comment is a callout block written into the
+  document right after what it comments on — `> [!note] @krystof · 21 Sep` —
+  rendered as a quiet card by the rich editor, with Reply (a nested callout)
+  and Resolve (delete, or turn into `> [!done]`). It lives in the file, so
+  agents read and answer it, git records the discussion, and the document
+  stays readable in any editor; the cost is that anchoring is positional and
+  a comment moves the text. The alternative, a sidecar keyed by `block_ref`
+  (the column exists), keeps documents untouched and needs real anchor
+  machinery — worth it only if comments must not change the file.
+- **Public sharing.** A folder or file handed to someone with no account,
+  served by a separate container that can only see what was bind-mounted in
+  front of it. Fully designed in [public-sharing.md](public-sharing.md).
 - **Encrypted secrets store.** `_secrets/` already exists: creator-owned files,
   born `0600` and shareable from the permissions panel like anything else, that
   syncd refuses to sync, kept out of git history, with server-side injection
