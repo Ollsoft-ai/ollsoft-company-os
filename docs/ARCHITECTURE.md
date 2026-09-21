@@ -439,6 +439,16 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   them as ACP `resource_link` blocks and the folder goes in `session/new`.
   The picker behind ＋ is `pickPath()` in `app.js` — the palette's shape, but
   it returns a path. See [agent-chat.md](agent-chat.md).
+- **A link for someone with no account.** The share panel's last section
+  makes one: read or edit, an optional password, a deadline (14 days by
+  default, 90 at most). The platform grants `kbshare` an ACL on that subtree,
+  bind-mounts it into `/srv/kb-public/data/<id>` (read-only unless the link
+  may edit) and writes a config file that never names the real path; the
+  `kb-share` container serves it and nothing else. The URL exists exactly
+  once, in the answer that created it — only hashes are stored. Revoking
+  unmounts. `GET/POST /fs/public`, `POST /fs/public/revoke` (hub, root);
+  `kb_platform/publicshare.py` is the host half, `public/serve.py` the
+  container, and [public-sharing.md](public-sharing.md) the whole design.
 - **The inbox: what happened while you were elsewhere.** One append-only file
   per person, `users/<u>/.os/inbox.jsonl`, written by whichever root process
   actually saw the event — syncd when a document you were newly `@named` in

@@ -34,7 +34,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import WSMsgType, web
 
-from . import common, pam_auth, uploads
+from . import common, pam_auth, publicshare, uploads
 from . import acp as kbacp
 from . import settings as kbsettings
 
@@ -2403,6 +2403,59 @@ class Hub:
             "state": _share_state(p, rel, user),
         })
 
+    # --- public links: a folder or a file handed to someone with no account ---
+    async def public_list(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        mine = publicshare.listing(None if _is_admin(user) else user)
+        return web.json_response({"shares": mine, "base": os.environ.get("KB_SHARE_BASE", ""),
+                                  "maxDays": publicshare.MAX_DAYS,
+                                  "defaultDays": publicshare.DEFAULT_DAYS})
+
+    async def public_create(self, request: web.Request) -> web.Response:
+        """Put something on the internet. Only the owner of the thing (or an
+        admin) may, never a secret, and the token comes back exactly once."""
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        data = await request.json()
+        p = common.resolve_repo_path(data.get("path", ""))
+        if p is None or not p.exists():
+            return web.json_response({"error": "not found"}, status=404)
+        if not _owns_or_admin(p, user):
+            return web.json_response(
+                {"error": "only the owner (or an admin) can publish this"}, status=403)
+        try:
+            share = await asyncio.to_thread(
+                publicshare.create, data.get("path", ""), by=user,
+                mode=str(data.get("mode") or "view"),
+                days=int(data.get("days") or publicshare.DEFAULT_DAYS),
+                password=str(data.get("password") or ""),
+                title=str(data.get("title") or ""))
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("public share failed for %s: %s", data.get("path"), e)
+            return web.json_response({"error": "could not publish it"}, status=500)
+        _audit("public.create", user, path=share["path"], id=share["id"],
+               mode=share["mode"], expires=share["expires"], password=share["password"])
+        return web.json_response({"ok": True, "share": share})
+
+    async def public_revoke(self, request: web.Request) -> web.Response:
+        user = self.current_user(request)
+        if not user:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        data = await request.json()
+        row = publicshare.get(str(data.get("id", "")))
+        if row is None:
+            return web.json_response({"error": "no such link"}, status=404)
+        if row.get("by") != user and not _is_admin(user):
+            return web.json_response({"error": "that link is not yours"}, status=403)
+        gone = await asyncio.to_thread(publicshare.revoke, row["id"])
+        _audit("public.revoke", user, path=row["path"], id=row["id"])
+        return web.json_response({"ok": True, "share": gone})
+
     # --- admin: user & group management (sudo-group admins only, runs as root) ---
     def _require_admin(self, request: web.Request) -> str | None:
         user = self.current_user(request)
@@ -3137,6 +3190,9 @@ def make_app() -> web.Application:
     app.router.add_get("/fs/props", hub.fs_props_get)
     app.router.add_post("/fs/props", hub.fs_props_set)
     app.router.add_get("/fs/share", hub.fs_share_get)
+    app.router.add_get("/fs/public", hub.public_list)
+    app.router.add_post("/fs/public", hub.public_create)
+    app.router.add_post("/fs/public/revoke", hub.public_revoke)
     app.router.add_post("/fs/share", hub.fs_share_set)
     # Admin (sudo-group only): user + group management, run as root.
     app.router.add_get("/admin/me", hub.admin_me)

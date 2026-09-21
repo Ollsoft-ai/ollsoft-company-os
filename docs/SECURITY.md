@@ -244,6 +244,17 @@ it can only show what the caller could already open.
   a trash indefinitely is precisely the exposure `_secrets/` exists to
   prevent — and nothing in the trash expires on its own, so "indefinitely" is
   the literal word.
+- **Public links live in a container that can see nothing else.** A link
+  hands a stranger one file or one folder, so the thing that serves them is
+  not this platform: it is `kb-share`, a separate container with no database,
+  no session key, no `/srv/kb` and — verified from inside — no way to open a
+  connection to anything, not the internet and not the host. It sees only
+  per-share bind mounts (read-only in the kernel unless the link may edit)
+  and a config file per share that never contains the real path. Revoking is
+  an unmount, so a leaked link dies in a second; expiry is enforced by a
+  host timer AND by the container. A `_secrets/` path can never be published,
+  and a shared `.html` artifact is served as source rather than run.
+  Full threat model: [public-sharing.md](public-sharing.md).
 - **`kb-convert` parses untrusted binaries.** Anything a user uploads (docx,
   pptx, xlsx, pdf) is fed to third-party parsers. It runs as the non-root
   `kbindexer` in its own venv with a memory cap, so a parser exploit is

@@ -1,9 +1,12 @@
-# Public sharing — a separate, isolated service (DESIGNED, NOT BUILT)
+# Public sharing — a separate, isolated service
 
 A folder or a file, handed to someone who has no account here: a client, a
 lawyer, a candidate. They open a link, they see it, and — if the share says so
 — they can edit it. No Cloudflare Access login, because they have nothing to
 log in with.
+
+**Built and running on this box** (`kb-share.service`); the last step is a
+Cloudflare hostname, which is at the end of this document.
 
 That single sentence puts a door on the internet, so the design is mostly
 about where the door leads. **The public service is a separate container that
@@ -20,8 +23,9 @@ moment, and nothing else.
                                      ▼
                     ┌───────────────────────────────────┐
                     │ container kb-share                │
-                    │  user 10001, read-only rootfs     │
+                    │  runs as kbshare, read-only rootfs│
                     │  cap-drop ALL, no-new-privileges  │
+                    │  own bridge, NO egress at all     │
                     │  /conf  (ro)  one json per share  │
                     │  /data  per-share bind mounts     │
                     └───────────────────────────────────┘
@@ -48,18 +52,25 @@ In the app: right-click a file or folder → **Share publicly…**
 
 The hub (root) then, in this order:
 
-1. `id` = 16 random bytes base32; `token` = 32 random bytes.
-2. `mkdir /srv/kb-public/data/<id>` and `mount --bind` the target onto it,
-   remounted `ro` unless the share is editable.
-3. Write `/srv/kb-public/conf/<id>.json` (root:kbshare 0640): mode, argon2id
-   password hash, expiry, title, token hash. **Never the real path.**
-4. Record the share in `/var/lib/kb-shares/shares.json` (root 0600): real
-   path, creator, both hashes, expiry, audit line.
-5. For an editable share, add one ACL entry granting the host user `kbshare`
-   write on exactly that subtree; remove it when the share ends.
+1. `id` = 10 random bytes as lowercase base32; `token` = 24 random bytes,
+   url-safe. Only their SHA-256 hashes are kept.
+2. One ACL entry lets `kbshare` in: `rX` for a read link, `rwX` (plus a
+   default ACL) for an editable one, on exactly that subtree. Mode bits alone
+   would not do — a `0640` document is unreadable to the container, and a
+   public link must not depend on a file happening to be world-readable.
+3. `mkdir /srv/kb-public/data/<id>` and `mount --bind` the target onto it —
+   a FOLDER onto the directory itself, a FILE onto `data/<id>/<name>` so its
+   siblings are never exposed — remounted `ro` unless the link may edit.
+4. Write `/srv/kb-public/conf/<id>.json` (root:kbshare 0640): mode, expiry,
+   title, the file's name, the scrypt password hash and the token hash.
+   **Never the real path.**
+5. Record it in `/var/lib/kb-shares/shares.json` (root 0600) and audit the
+   line (`public.create`, `public.revoke`).
 
-The container watches `/conf` with inotify. No restart, no privileged call
-from inside, no way for it to create a share of its own.
+The container reads `/conf/<id>.json` per request. No restart, no privileged
+call from inside, no way for it to create a share of its own. `kb_platform/
+publicshare.py` is the whole host half; `public/serve.py` is the whole
+container.
 
 **Revocation is an unmount.** Deleting a share removes the bind mount, so a
 leaked token reaches an empty directory a second later — no cache, no
@@ -72,9 +83,9 @@ leaked token reaches an empty directory a second later — no cache, no
 - `Referrer-Policy: no-referrer`, so the token does not travel to sites the
   document links to.
 - A password share shows a form first, then sets a cookie signed with a key
-  generated at container start (in tmpfs, gone on restart) and scoped to that
-  share id. Argon2id, and a lockout that is per share AND per IP (10 attempts
-  a minute, then exponential), with Cloudflare rate limiting in front of it.
+  generated at container start (in memory, gone on restart) and scoped to
+  that share's path, for 24 hours. `hashlib.scrypt`, and a lockout per share
+  AND per IP (10 attempts a minute), with Cloudflare rate limiting in front.
 - The token is checked in constant time. A wrong id and a wrong token give the
   same 404 after the same delay.
 
@@ -92,23 +103,26 @@ leaked token reaches an empty directory a second later — no cache, no
   origin per share, not a v1 default.
 
 A write lands as the host user `kbshare`, which owns nothing else and belongs
-to no group. Git history therefore shows the change as `kbshare` with the
-share id in the commit trailer: you can always tell what came in from
-outside.
+to no group, so `ls -l` tells you an edit came from outside. Git history does
+not yet say so: syncd attributes a commit from the author hints the app
+writes, and the container writes none, so an edit through a link lands in the
+unattributed sweep commit. Naming it is one of the open questions below.
 
 ## Hardening (the checklist the container must pass)
 
 | | |
 |---|---|
-| Process | `USER 10001`, no shell in the image, distroless or Alpine pinned by digest |
-| Filesystem | `--read-only`, `--tmpfs /tmp:rw,noexec,nosuid,size=64m`, `/conf` ro |
-| Privileges | `--cap-drop ALL`, `--security-opt no-new-privileges`, seccomp default, AppArmor profile |
-| Network | own bridge; ingress only from the Cloudflare tunnel; egress to RFC1918 and the host's loopback **dropped** |
-| Limits | memory, CPU and PIDs capped; request body capped; a slow-loris timeout |
-| Data | only per-share bind mounts; `ro` unless the share is editable |
-| Secrets | none in the image or the environment; the cookie key is generated per boot into tmpfs |
-| Updates | image rebuilt weekly for CVEs; the platform never trusts its output |
-| Logs | structured to stdout → journald; the daily triage reads failed password attempts and 404 storms |
+| Process | runs as the host's `kbshare` (a system account with no shell, no home, no groups); `python:3.12-alpine`, two pure-Python packages, nothing else installed |
+| Filesystem | `--read-only`, `--tmpfs /tmp:rw,noexec,nosuid,size=16m`, `/conf` read-only |
+| Privileges | `--cap-drop ALL`, `--security-opt no-new-privileges`, Docker's default seccomp and AppArmor profiles |
+| Network | its own bridge (`kb-share-net`), published only on `127.0.0.1`, and two `DOCKER-USER` rules: answers to requests are allowed, **anything the container starts is dropped** — no internet, no host services. Verified by trying, from inside |
+| Limits | `--memory 256m --cpus 0.5 --pids-limit 200`, a 4 MB body cap, a 20 s socket timeout |
+| Data | only per-share bind mounts; `ro` in the kernel unless the link may edit, and an ACL that admits `kbshare` only to that subtree |
+| Secrets | none in the image or the environment; the cookie key is made at start and lives in memory |
+| Logs | one line per request to stdout → journald |
+
+Not done yet, and worth doing: pinning the base image by digest, a custom
+seccomp profile, and a weekly rebuild for CVEs.
 
 Expiry runs on the host: a timer every 15 minutes unmounts and removes what
 has expired, and the container independently refuses a conf whose expiry has
@@ -126,11 +140,32 @@ timer did not run.
 - Reuse `os.<domain>`. A separate hostname means a cookie for the app is never
   sent to the public service, and the Access policy on the app stays absolute.
 
+## Installing it
+
+```
+sudo bash scripts/install-public-share.sh          # user, dirs, image, units
+sudo bash scripts/install-public-share.sh --remove # …and back out again
+```
+
+It makes the `kbshare` system account (no shell, no home, no groups), the two
+directories, the image, `kb-share.service` (the container) and
+`kb-share-sweep.timer` (expiry and re-mounting after a reboot, every 15
+minutes). Then, in Cloudflare Zero Trust → Networks → Tunnels → this tunnel →
+Public hostnames: `share.<domain>` → `http://127.0.0.1:8402`, **with no Access
+policy** and WAF plus rate limiting on. Finally tell the platform its own
+address, so the links it hands out are whole:
+
+```
+echo 'KB_SHARE_BASE=https://share.<domain>' >> /etc/kb/kb.env
+systemctl restart kb-hub
+```
+
 ## Open questions for the build
 
-1. Does an edit share need a name field ("who are you?") so history shows
-   more than `kbshare`? A free-text name in the commit trailer is cheap and
-   unverifiable — worth it or noise?
+1. Attribution for an edit that came through a link. The cheapest honest
+   version: syncd checks whether the path is inside a live public share and
+   commits it as `kbshare (public link <id>)`. A free-text "who are you?"
+   field on the edit page is cheap too, and unverifiable — worth it or noise?
 2. Folder shares: recursive, or one level? Recursive is what people expect;
    it also means one wrong click shares a subtree.
 3. Should a share notify its creator when it is first opened, and when it is

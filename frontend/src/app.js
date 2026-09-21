@@ -6946,6 +6946,102 @@ function shWho(a) {
   return (a.group || "its group") + (a.people ? ` (${a.people} ${a.people === 1 ? "person" : "people"})` : "");
 }
 
+// ---- a link for someone with no account --------------------------------
+// The platform mounts the file or folder in front of a separate container
+// (see docs/public-sharing.md); this is only the panel that asks for one.
+// The URL exists exactly once, in the answer to the request that made it.
+async function wirePublicShare(host, s) {
+  if (!host) return;
+  const secret = !!s.secret;
+  const paint = (shares, base) => {
+    host.textContent = "";
+    if (secret) {
+      host.append(el2("div", "muted", "A secret is never put on the internet."));
+      return;
+    }
+    const mine = (shares || []).filter((x) => x.path === s.path);
+    for (const sh of mine) {
+      const row = el2("div", "sh-public-row");
+      row.setAttribute("data-testid", "sh-public-row");
+      const when = sh.expires ? "until " + new Date(sh.expires * 1000).toLocaleDateString() : "no end date";
+      row.append(el2("span", "sh-public-what",
+                     (sh.mode === "edit" ? "Anyone with the link can edit" : "Anyone with the link can read")
+                     + (sh.password ? ", with the password" : "")),
+                 el2("span", "sh-public-when", when));
+      const off = el2("button", "mini", "Stop sharing"); off.type = "button";
+      off.setAttribute("data-testid", "sh-public-off");
+      off.addEventListener("click", async () => {
+        const r = await fetch("/fs/public/revoke", { method: "POST", headers: { "content-type": "application/json" },
+                                                     body: JSON.stringify({ id: sh.id }) });
+        if (!r.ok) { kbToast("could not stop that link", "err"); return; }
+        kbToast("The link no longer works", "ok");
+        load();
+      });
+      row.append(off);
+      host.append(row);
+    }
+    if (mine.length) return;
+    // …no link yet: the form that makes one
+    const form = el2("div", "sh-public-form");
+    const mode = document.createElement("select");
+    mode.setAttribute("data-testid", "sh-public-mode");
+    mode.innerHTML = '<option value="view">can read it</option><option value="edit">can read and edit it</option>';
+    const days = document.createElement("input");
+    days.type = "number"; days.min = "1"; days.max = "90"; days.value = "14";
+    days.className = "sh-public-days"; days.setAttribute("data-testid", "sh-public-days");
+    days.title = "Days until the link stops working";
+    const pw = document.createElement("input");
+    pw.type = "password"; pw.placeholder = "password (optional)"; pw.autocomplete = "new-password";
+    pw.setAttribute("data-testid", "sh-public-pw");
+    const go = el2("button", "mini", "Create a link"); go.type = "button";
+    go.setAttribute("data-testid", "sh-public-create");
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      let j = {};
+      try {
+        const r = await fetch("/fs/public", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: s.path, mode: mode.value, days: Number(days.value) || 14,
+                                 password: pw.value }) });
+        j = await r.json().catch(() => ({}));
+        if (!r.ok) { kbToast(j.error || "could not create the link", "err"); go.disabled = false; return; }
+      } catch (e) { kbToast("could not reach the server", "err"); go.disabled = false; return; }
+      showLinkOnce(host, (base || "") + j.share.url, load);
+    });
+    form.append(el2("span", "muted", "Anyone with the link"), mode, days,
+                el2("span", "muted", "days"), pw, go);
+    host.append(form);
+  };
+  const load = async () => {
+    try {
+      const r = await fetch("/fs/public");
+      const j = r.ok ? await r.json() : { shares: [] };
+      paint(j.shares, j.base);
+    } catch (e) { paint([], ""); }
+  };
+  load();
+}
+
+// The token is in the URL and nowhere else: shown once, with a copy button,
+// and a plain warning that it will not be shown again.
+function showLinkOnce(host, url, done) {
+  host.textContent = "";
+  const box = el2("div", "sh-public-new");
+  const field = document.createElement("input");
+  field.readOnly = true; field.value = url; field.className = "sh-public-url";
+  field.setAttribute("data-testid", "sh-public-url");
+  field.addEventListener("focus", () => field.select());
+  const copy = el2("button", "mini", "Copy"); copy.type = "button";
+  copy.addEventListener("click", () => navigator.clipboard.writeText(url)
+    .then(() => kbToast("Link copied", "ok"), () => kbToast("Clipboard blocked", "err")));
+  const ok = el2("button", "mini", "Done"); ok.type = "button";
+  ok.addEventListener("click", done);
+  box.append(el2("div", "muted", "Copy it now — this is the only time it is shown."),
+             field, el2("div", "sh-public-acts", ""));
+  box.querySelector(".sh-public-acts").append(copy, ok);
+  host.append(box);
+  field.focus();
+}
+
 async function openPerms(path) {
   const [r, pr] = await Promise.all([
     fetch("/fs/share?path=" + encodeURIComponent(path)),
@@ -7006,6 +7102,8 @@ function showShareModal(s, principals) {
         <option value="view">can view</option><option value="edit">can edit</option></select>
       <button id="sh-addbtn" data-testid="sh-addbtn">Add</button>
     </div>
+    <div class="acl-title">Anyone with a link</div>
+    <div id="sh-public" class="sh-public" data-testid="sh-public">…</div>
     <details class="sh-adv"><summary>Advanced — owner, group, mode, raw ACLs</summary>
       <div id="sh-advbody" class="sh-advbody muted">loading…</div>
     </details>
@@ -7019,6 +7117,7 @@ function showShareModal(s, principals) {
   const peopleHost = card.querySelector("#sh-people");
   const hintHost = card.querySelector("#sh-hint");
   const addHost = card.querySelector("#sh-add");
+  wirePublicShare(card.querySelector("#sh-public"), s);
 
   function editable() { return !ro && scope === "people"; }
 

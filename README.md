@@ -237,6 +237,7 @@ ollsoft-company-os/
 /opt/kb-convert-venv  kb-convert's parser venv — heavy deps, kept separate on purpose
 /srv/kb               the knowledgebase: git repo of markdown + attachments
 /srv/kb/.os/          platform config in the repo: launchers, egress allow-list, company settings
+/srv/kb-public/       what the public-link container can see: per-share bind mounts + configs
 **/.trash/            a deleted file waits in one of these, beside where it lived
 /etc/kb/kb.env        runtime configuration read by the systemd units
 /etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it

@@ -169,9 +169,6 @@ natural next steps.
   a comment moves the text. The alternative, a sidecar keyed by `block_ref`
   (the column exists), keeps documents untouched and needs real anchor
   machinery — worth it only if comments must not change the file.
-- **Public sharing.** A folder or file handed to someone with no account,
-  served by a separate container that can only see what was bind-mounted in
-  front of it. Fully designed in [public-sharing.md](public-sharing.md).
 - **Encrypted secrets store.** `_secrets/` already exists: creator-owned files,
   born `0600` and shareable from the permissions panel like anything else, that
   syncd refuses to sync, kept out of git history, with server-side injection

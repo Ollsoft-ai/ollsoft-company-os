@@ -1739,6 +1739,25 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
    comes back. Deliberately quiet — no red bin, no shouting: the row under
    the tree appears only when something is in it, and "Delete for good" is
    the only control that takes the danger colour, on hover. */
+/* a link for someone with no account: the quietest thing in the panel, and
+   the only place where the URL is ever shown */
+.sh-public { display: flex; flex-direction: column; gap: .4rem; margin: .2rem 0 .3rem; }
+.sh-public-form { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; font-size: .82rem; }
+.sh-public-form select, .sh-public-form input { font: inherit; padding: .22rem .4rem; border-radius: calc(var(--r) - 2px);
+  border: 1px solid var(--border); background: var(--panel2); color: var(--ink); }
+.sh-public-days { width: 4rem; }
+.sh-public-row { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--muted); flex-wrap: wrap; }
+.sh-public-what { color: var(--ink); }
+.sh-public-when { color: var(--faint); }
+.sh-public-row .mini { margin-left: auto; }
+.sh-public-row .mini:hover { color: var(--danger); border-color: var(--danger); }
+.sh-public-new { display: flex; flex-direction: column; gap: .4rem; padding: .5rem .6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--r);
+  background: var(--accent-wash); }
+.sh-public-url { width: 100%; font-family: var(--mono); font-size: .76rem; padding: .35rem .45rem;
+  border-radius: calc(var(--r) - 2px); border: 1px solid var(--border); background: var(--panel); color: var(--ink); }
+.sh-public-acts { display: flex; gap: .4rem; }
+
 /* the inbox: a list of what happened, and the one dot that says so */
 .inbox-n { margin-left: auto; font-family: var(--mono); font-size: .7rem; color: var(--accent); }
 .inbox-n:empty { display: none; }
