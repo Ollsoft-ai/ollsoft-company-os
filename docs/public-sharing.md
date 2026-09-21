@@ -150,10 +150,25 @@ sudo bash scripts/install-public-share.sh --remove # …and back out again
 It makes the `kbshare` system account (no shell, no home, no groups), the two
 directories, the image, `kb-share.service` (the container) and
 `kb-share-sweep.timer` (expiry and re-mounting after a reboot, every 15
-minutes). Then, in Cloudflare Zero Trust → Networks → Tunnels → this tunnel →
-Public hostnames: `share.<domain>` → `http://127.0.0.1:8402`, **with no Access
-policy** and WAF plus rate limiting on. Finally tell the platform its own
-address, so the links it hands out are whole:
+minutes).
+
+Then the hostname, in Cloudflare Zero Trust → Networks → Tunnels → this
+tunnel → **Published application routes** (NOT "Hostname routes", which is
+WARP steering for your own people): subdomain `share`, your domain, type
+HTTP, URL `127.0.0.1:8402`. It writes the DNS record itself. Attach **no
+Access policy**: the people using these links have no account to log in with.
+
+*Why the tunnel and not simply a proxied A record at the box?* An orange
+cloud still needs the origin to accept inbound connections, which means a
+port open on the machine and anyone who learns the address can walk past
+Cloudflare straight to it (unless you also pin the firewall to Cloudflare's
+ranges, for ever). The tunnel dials out, so there is no listening port at
+all, `kb-share` stays bound to `127.0.0.1`, and the same ingress that already
+carries the app carries this — one hostname to Access and the app, another
+to no Access and the container.
+
+Finally tell the platform its own address, so the links it hands out are
+whole:
 
 ```
 echo 'KB_SHARE_BASE=https://share.<domain>' >> /etc/kb/kb.env
