@@ -510,6 +510,39 @@ def write_attrib_hint(op: str, *rel_paths: str) -> None:
         pass
 
 
+# ── the trash ────────────────────────────────────────────────────────────────
+# A delete is a move, not an unlink: the thing goes into the `.trash/` of the
+# folder that owns its audience, so restoring it is a move back and nothing
+# ever crosses a permission boundary on the way. A dot-directory, so the tree
+# hides it, the indexer skips it and search never turns up a deleted document
+# — while an agent with a shell can read it like any other folder.
+TRASH_DIRNAME = ".trash"
+TRASH_KEEP_DAYS = 30
+
+
+def trash_domain(rel: str) -> str | None:
+    """The folder whose `.trash` a deleted path belongs in.
+
+    `company/plans/x.md` → `company`; `projects/acme/notes.md` → `projects/acme`;
+    `users/bob/todo.md` → `users/bob`. A top-level area itself has no domain
+    (it cannot be deleted), and a secret has none either — a copy of a secret
+    lingering for thirty days is the opposite of what `_secrets/` is for, so
+    those are deleted outright.
+    """
+    parts = [seg for seg in rel.strip("/").split("/") if seg]
+    if len(parts) < 2 or is_secret_path(rel):
+        return None
+    if parts[0] in ("projects", "users") and len(parts) >= 3:
+        return "/".join(parts[:2])
+    return parts[0]
+
+
+def is_trash_path(rel: str) -> bool:
+    """Inside somebody's `.trash/` — already deleted, never deleted again into
+    itself, and never restored onto its own path."""
+    return TRASH_DIRNAME in rel.strip("/").split("/")
+
+
 def is_secret_path(rel: str) -> bool:
     """True if the repo-relative path lives inside a `_secrets/` folder.
     Secrets are ordinary kernel-protected files, but the platform treats them

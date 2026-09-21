@@ -2152,14 +2152,24 @@ function trayDone(id) {
   trayRender();
 }
 
-function kbToast(msg, kind) {
+function kbToast(msg, kind, action) {
   const host = toastHost();
   const t = document.createElement("div");
   t.className = "toast" + (kind ? " " + kind : "");
   t.setAttribute("data-testid", "toast");
   t.textContent = msg;
+  // one action, for the thing you just did and might not have meant (Undo).
+  // It lives in the toast because a dialog before every delete is the tax
+  // this replaces.
+  if (action && action.label) {
+    const b = document.createElement("button");
+    b.className = "toast-act"; b.type = "button"; b.textContent = action.label;
+    b.setAttribute("data-testid", "toast-act");
+    b.addEventListener("click", () => { t.remove(); action.fn(); });
+    t.appendChild(b);
+  }
   host.appendChild(t);
-  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 350); }, 4200);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 350); }, action ? 8000 : 4200);
 }
 
 // ---- chrome: the mobile file-tree drawer, and the user menu (bottom left) ---
@@ -5029,6 +5039,136 @@ function agentAvatar(id, size) {
   return e;
 }
 
+// ---- the trash: deleting is a move, so it can come back ---------------------
+// `.trash/` inside the folder that owns the audience (company/, a project, a
+// person's own folder). It is a dot-directory, so the tree hides it, the
+// index skips it and search never turns up a deleted document — while an
+// agent with a shell reads it like any other folder. Nothing red anywhere:
+// deleting says "Moved to the trash" with an Undo, and this view is a list.
+let trashCount = 0;
+
+async function loadTrash() {
+  try {
+    const r = await fetch("/api/fs/trash");
+    if (!r.ok) return null;
+    const j = await r.json();
+    trashCount = (j.entries || []).length;
+    renderTrashRow();
+    return j;
+  } catch (e) { return null; }
+}
+function trashChanged() {
+  loadTrash().then((j) => { for (const t of tabs.filter((x) => x.kind === "trash")) paintTrash(t, j); });
+}
+async function restoreTrash(id) {
+  let j = {};
+  try {
+    const r = await fetch("/api/fs/restore", { method: "POST", headers: { "content-type": "application/json" },
+                                               body: JSON.stringify({ id }) });
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) { kbToast(j.error || "could not restore it", "err"); return null; }
+  } catch (e) { kbToast("could not reach the server", "err"); return null; }
+  await loadTree(true);
+  trashChanged();
+  kbToast(j.renamed ? "Restored as “" + baseName(j.path) + "”" : "Restored “" + baseName(j.path) + "”", "ok");
+  return j.path;
+}
+async function purgeTrash(body, what) {
+  try {
+    const r = await fetch("/api/fs/trash-purge", { method: "POST", headers: { "content-type": "application/json" },
+                                                   body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { kbToast(j.error || "could not empty the trash", "err"); return false; }
+  } catch (e) { kbToast("could not reach the server", "err"); return false; }
+  kbToast(what, "ok");
+  trashChanged();
+  return true;
+}
+
+// The trash lives behind the person's ⋯, beside Settings — a rare action
+// does not need a row of the sidebar. What it does need is to say that it
+// holds something, so the menu item carries the count.
+function renderTrashRow() {
+  const n = document.querySelector("#trash-btn .trash-row-n");
+  if (n) n.textContent = trashCount ? String(trashCount) : "";
+}
+
+function openTrash() { openView("trash", {}); }
+
+function paintTrash(t, data) {
+  const host = t.el.querySelector(".trash-list");
+  if (!host) return;
+  const note = t.el.querySelector(".trash-note");
+  if (!data) { host.textContent = ""; host.append(el2("div", "trash-empty muted", "Could not read the trash.")); return; }
+  if (note) note.textContent = "Deleted things wait here for " + (data.keepDays || 30) + " days, then go for good.";
+  const empty = t.el.querySelector(".trash-empty-btn");
+  if (empty) empty.hidden = !(data.entries || []).length;
+  host.textContent = "";
+  if (!(data.entries || []).length) {
+    host.append(el2("div", "trash-empty muted", "Nothing in the trash."));
+    return;
+  }
+  for (const e of data.entries) {
+    const row = el2("div", "trash-item");
+    row.setAttribute("data-testid", "trash-item");
+    row.dataset.id = e.id;
+    const ic = el2("span", "trash-ic");
+    ic.innerHTML = e.dir ? I.folder : e.path.endsWith(".html") ? I.artifact : e.path.endsWith(".md") ? I.doc : I.file;
+    const body = el2("div", "trash-body");
+    body.append(el2("div", "trash-name", e.name),
+                el2("div", "trash-from", e.path + " · " + (e.deletedBy || "someone") + " · " + agoShort(e.deletedAt)));
+    const acts = el2("div", "trash-acts");
+    const back = el2("button", "mini", "Restore"); back.type = "button";
+    back.setAttribute("data-testid", "trash-restore");
+    back.addEventListener("click", () => restoreTrash(e.id));
+    const gone = el2("button", "mini trash-forget", "Delete for good"); gone.type = "button";
+    gone.addEventListener("click", async () => {
+      if (!await kbConfirm("Delete “" + e.name + "” for good?", { title: "Delete for good", ok: "Delete", danger: true })) return;
+      purgeTrash({ id: e.id }, "Gone for good");
+    });
+    acts.append(back, gone);
+    row.append(ic, body, acts);
+    host.append(row);
+  }
+}
+
+function el2(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+registerView("trash", {
+  label: "Trash",
+  icon: () => I.trash,
+  title: () => "Trash",
+  tooltip: () => "Deleted files, and the way back",
+  key: () => "trash",
+  contentClass: "trash-view",
+  restore: () => ({ kind: "trash" }),
+  serialize: () => ({ kind: "trash" }),
+  init: (t) => { t.path = null; t.name = "Trash"; },
+  open: async (t) => {
+    t.el.textContent = "";
+    const head = el2("div", "trash-head");
+    head.append(el2("h2", "trash-title", "Trash"), el2("div", "trash-note muted", ""));
+    const empty = el2("button", "mini trash-empty-btn", "Empty the trash");
+    empty.type = "button"; empty.hidden = true;
+    empty.addEventListener("click", async () => {
+      if (!await kbConfirm("Delete everything in the trash for good?",
+                           { title: "Empty the trash", ok: "Empty it", danger: true })) return;
+      purgeTrash({ all: true }, "The trash is empty");
+    });
+    head.append(empty);
+    const list = el2("div", "trash-list");
+    list.setAttribute("data-testid", "trash-list");
+    t.el.append(head, list);
+    paintTrash(t, await loadTrash());
+  },
+  activate: (t) => { loadTrash().then((j) => paintTrash(t, j)); },
+});
+
 // ---- the sidebar's Chats: new one, recent ones ------------------------------
 // The index the backend keeps (`/api/acp/chats`): every agent's sessions with
 // their titles and last activity. The eight most recent are rows beside the
@@ -7077,13 +7217,24 @@ async function newFolderIn(folder) {
 
 async function deleteEntry(n) {
   const what = n.dir ? `folder "${n.path}" and everything inside it` : `"${n.path}"`;
-  if (!await kbConfirm(`Delete ${what}?`, { title: "Delete", ok: "Delete", danger: true })) return;
+  // A secret is never copied aside, and something already in the trash has
+  // nowhere further to go: those two ask the old, red question.
+  const forGood = isSecretPath(n.path) || n.path.split("/").includes(".trash");
+  const ok = forGood
+    ? await kbConfirm(`Delete ${what} for good? Secrets are not kept in the trash.`,
+                      { title: "Delete for good", ok: "Delete", danger: true })
+    : await kbConfirm(`Move ${what} to the trash?`, { title: "Move to trash", ok: "Move to trash" });
+  if (!ok) return;
   const r = await fetch("/api/fs/delete", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path: n.path }),
+    body: JSON.stringify({ path: n.path, permanent: forGood }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { kbToast(j.error || "could not delete", "err"); return; }
+  if (j.trashed) {
+    kbToast("Moved to the trash", "ok", { label: "Undo", fn: () => restoreTrash(j.trashed) });
+    trashChanged();
+  }
   // Retire any tabs that were showing the deleted path (or anything under it).
   for (const t of tabs.filter((t) => t.path === n.path || t.path.startsWith(n.path + "/"))) {
     closeTab(t);
@@ -7430,6 +7581,7 @@ const EXTRA_COMMANDS = [
     run: () => { if (!active) return;
       navigator.clipboard.writeText(active.path)
         .then(() => kbToast("Path copied", "ok"), () => kbToast("Clipboard blocked", "err")); } },
+  { id: "trash", label: "Trash — restore something you deleted", run: openTrash },
   { id: "reload", label: "Reload the file tree", run: () => loadTree(true).then(() => kbToast("Tree reloaded", "ok")) },
   { id: "retryspeech", label: "Retry the last dictation", when: dictationReady,
     run: retryDictation },
@@ -9439,6 +9591,9 @@ async function boot() {
   if (settingsBtn) settingsBtn.addEventListener("click", () => openSettings());
   const pinsBtn = $("#pins-btn");
   if (pinsBtn) pinsBtn.addEventListener("click", showLaunchersModal);
+  const trashBtn = $("#trash-btn");
+  if (trashBtn) trashBtn.addEventListener("click", openTrash);
+  loadTrash();
   // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.

@@ -279,7 +279,23 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
 - **File tree actions** (on hover): `＋` new file, `⊞` new folder, `⇪` upload files
   (all three only on folders you can write), `⚙` permissions, `✕` delete (only
   where you can write the parent). Deleting a file/folder retires any tabs
-  showing it. The context menu (right-click, or `⋯` on touch) adds the rest,
+  showing it.
+- **Deleting is moving.** `✕` renames the thing into the `.trash/` of the
+  folder that owns its audience — `company/.trash/`, `projects/<p>/.trash/`,
+  `users/<u>/.trash/` — beside a `meta.json` that records where it came from,
+  who deleted it and when. Nothing is copied, so a folder of any size goes in
+  an instant and its ACLs travel with it; nothing crosses a permission
+  boundary, so the people who could delete it are the people who can put it
+  back. The toast that follows carries an Undo, the person's ⋯ menu holds
+  **Trash** (with a count) and its view restores or deletes for good, and an
+  entry older than `common.TRASH_KEEP_DAYS` (30) is swept the first time
+  anyone opens the list. `.trash/` is a dot-directory, so the tree hides it,
+  the indexer skips it and a deleted document leaves search — while an agent
+  with a shell reads it like any other folder. Two things are still deleted
+  outright, with the old red question: a secret (a copy of one lingering for
+  a month is the opposite of what `_secrets/` is for) and something already
+  in the trash. `POST /api/fs/delete` (`permanent` to skip the trash),
+  `GET /api/fs/trash`, `POST /api/fs/restore`, `POST /api/fs/trash-purge`. The context menu (right-click, or `⋯` on touch) adds the rest,
   including **Upload folder** and **Download as ZIP**. Two inputs that used to
   be typed are now chosen: **Move to…** opens the folder picker (`pickPath`,
   the same one the chat's ＋ uses — filter, ⏎, done; a folder is never offered

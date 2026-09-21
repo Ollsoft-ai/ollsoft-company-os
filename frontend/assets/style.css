@@ -1734,6 +1734,46 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
    sidebar (ChatGPT's compose sits in its list too), and the collapsed-panel
    corner keeps one within reach */
 .topbar-actions:empty { display: none; }
+/* ── The trash: a list, not a warning ───────────────────────────────────────
+   Deleting moves a thing into `.trash/`; this is where it waits and how it
+   comes back. Deliberately quiet — no red bin, no shouting: the row under
+   the tree appears only when something is in it, and "Delete for good" is
+   the only control that takes the danger colour, on hover. */
+/* the count beside "Trash" in the user menu: there is something in it */
+.trash-row-n { margin-left: auto; font-family: var(--mono); font-size: .7rem; color: var(--faint); }
+.trash-row-n:empty { display: none; }
+
+.tab-content.trash-view { overflow: auto; background: var(--bg); }
+.trash-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+  padding: 1.1rem var(--content-x) .5rem; max-width: 52rem; margin: 0 auto; }
+.trash-title { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--ink); }
+.trash-note { font-size: .8rem; }
+.trash-empty-btn { margin-left: auto; }
+.trash-empty-btn:hover { color: var(--danger); border-color: var(--danger); }
+.trash-list { display: flex; flex-direction: column; gap: 1px; padding: .2rem var(--content-x) 2rem;
+  max-width: 52rem; margin: 0 auto; }
+.trash-item { display: flex; align-items: center; gap: .6rem; padding: .5rem .55rem;
+  border-radius: var(--r); color: var(--muted); min-width: 0; }
+.trash-item:hover { background: var(--panel2); }
+.trash-ic { flex: 0 0 auto; color: var(--faint); display: inline-flex; }
+.trash-ic .icon { width: 16px; height: 16px; }
+.trash-body { flex: 1 1 auto; min-width: 0; }
+.trash-name { color: var(--ink); font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-from { font-size: .74rem; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-acts { flex: 0 0 auto; display: flex; gap: .3rem; opacity: 0; transition: opacity .1s ease; }
+.trash-item:hover .trash-acts, .trash-item:focus-within .trash-acts { opacity: 1; }
+@media (hover: none) { .trash-acts { opacity: 1; } }
+.trash-forget:hover { color: var(--danger); border-color: var(--danger); }
+.trash-empty { padding: 1.5rem .55rem; font-size: .88rem; }
+/* the toast's one action (Undo, after a delete) */
+/* the host is pointer-events: none so a toast never blocks the page; the one
+   button in it has to take them back, or Undo is a decoration */
+.toast:has(.toast-act) { pointer-events: auto; }
+.toast-act { margin-left: .7rem; border: 0; background: transparent; color: var(--accent);
+  font: 600 .82rem/1 var(--sans); cursor: pointer; padding: .1rem .2rem; text-decoration: underline;
+  pointer-events: auto; }
+.toast-act:hover { color: var(--ink); }
+
 /* ── Pinned: the things you keep coming back to, as rows like every other ──
    row in this panel. They used to be blue and violet pills glued above the
    tree; a pill says "chip", and a chip in a list of rows reads as an alien.
