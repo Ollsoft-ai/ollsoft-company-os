@@ -280,23 +280,28 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   (all three only on folders you can write), `⚙` permissions, `✕` delete (only
   where you can write the parent). Deleting a file/folder retires any tabs
   showing it.
-- **Deleting is moving.** `✕` renames the thing into the `.trash/` of the
-  folder that owns its audience — `company/.trash/`, `projects/<p>/.trash/`,
-  `users/<u>/.trash/` — beside a `meta.json` that records where it came from,
-  who deleted it and when. Nothing is copied, so a folder of any size goes in
-  an instant and its ACLs travel with it; nothing crosses a permission
-  boundary, so the people who could delete it are the people who can put it
-  back. The toast that follows carries an Undo, and the person's ⋯ menu holds
-  **Trash** (with a count) whose view restores or deletes for good. **Nothing
-  is swept on a timer**: a knowledgebase that quietly eats what you deleted a
-  month ago is worse than a folder that grows, so the trash empties only when
-  someone empties it. `.trash/` is a dot-directory, so the tree hides it,
-  the indexer skips it and a deleted document leaves search — while an agent
-  with a shell reads it like any other folder. Two things are still deleted
-  outright, with the old red question: a secret (a copy of one lingering for
-  a month is the opposite of what `_secrets/` is for) and something already
-  in the trash. `POST /api/fs/delete` (`permanent` to skip the trash),
-  `GET /api/fs/trash`, `POST /api/fs/restore`, `POST /api/fs/trash-purge`. The context menu (right-click, or `⋯` on touch) adds the rest,
+- **Deleting is moving.** `✕` renames the thing into a `.trash/` in its own
+  folder: `company/plans/x.md` becomes `company/plans/.trash/x.md`. There is
+  no id, no manifest and no metadata, because the filesystem already knows
+  everything — where it came from is the folder the `.trash` sits in, when it
+  went is the inode's ctime (a rename updates it), whose it is the file's own
+  owner. **The permissions therefore take care of themselves**: the new
+  directory inherits the folder's group, setgid bit and default ACL, the
+  rename carries the file's own owner, mode and ACLs untouched, and nothing
+  crosses an audience boundary because nothing leaves the folder. Restoring
+  is the move back up one level (and an empty `.trash` is tidied away). The
+  toast that follows a delete carries an Undo, and the person's ⋯ menu holds
+  **Trash** (with a count) whose view puts things back or deletes for good.
+  **Nothing is swept on a timer**: a knowledgebase that quietly eats what you
+  deleted a month ago is worse than a folder that grows. `.trash/` is a
+  dot-directory, so the tree hides it, the indexer skips it and a deleted
+  document leaves search — while an agent with a shell reads it like any
+  other folder. Two things are still deleted outright, with the old red
+  question: a secret (a readable copy waiting in a trash is what `_secrets/`
+  exists to prevent) and something already in a trash.
+  `POST /api/fs/delete` (`permanent` to skip the trash), `GET /api/fs/trash`,
+  `POST /api/fs/restore`, `POST /api/fs/trash-purge` — the last three take
+  the path of the thing inside the `.trash`. The context menu (right-click, or `⋯` on touch) adds the rest,
   including **Upload folder** and **Download as ZIP**. Two inputs that used to
   be typed are now chosen: **Move to…** opens the folder picker (`pickPath`,
   the same one the chat's ＋ uses — filter, ⏎, done; a folder is never offered

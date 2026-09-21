@@ -1778,6 +1778,7 @@ const I = {
   upload: svgIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'),
   folderUp: svgIcon('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="9.5 14 12 11.5 14.5 14"/><line x1="12" y1="11.5" x2="12" y2="17"/>'),
   download: svgIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'),
+  mention: svgIcon('<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>'),
   share: svgIcon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>'),
   trash: svgIcon('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
   more: svgIcon('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
@@ -5039,6 +5040,111 @@ function agentAvatar(id, size) {
   return e;
 }
 
+// ---- the inbox: what happened while you were elsewhere ---------------------
+// Events are written by whoever saw them — syncd when a document you were
+// @named in is committed, the hub when something is shared with you — into
+// your own `users/<you>/.os/inbox.jsonl`. The app only reads that file and
+// marks lines read. A dot on the person, a count in their menu, a list.
+let inboxUnread = 0;
+
+async function loadInbox() {
+  try {
+    const r = await fetch("/api/inbox");
+    if (!r.ok) return null;
+    const j = await r.json();
+    inboxUnread = j.unread || 0;
+    renderInboxCount();
+    return j;
+  } catch (e) { return null; }
+}
+function renderInboxCount() {
+  const n = document.querySelector("#inbox-btn .inbox-n");
+  if (n) n.textContent = inboxUnread ? String(inboxUnread) : "";
+  const btn = $("#user-btn");
+  if (btn) btn.classList.toggle("has-news", !!inboxUnread);
+}
+function inboxChanged() {
+  loadInbox().then((j) => { for (const t of tabs.filter((x) => x.kind === "inbox")) paintInbox(t, j); });
+}
+async function markInbox(body) {
+  try {
+    const r = await fetch("/api/inbox/read", { method: "POST", headers: { "content-type": "application/json" },
+                                               body: JSON.stringify(body || {}) });
+    if (!r.ok) return false;
+  } catch (e) { return false; }
+  inboxChanged();
+  return true;
+}
+function openInbox() { openView("inbox", {}); }
+
+// "kbt_p12_alice" and "tomas_vargosko" both want to read as a person
+const shortName = (u) => String(u || "").replace(/^kbt_[a-z0-9]+_/, "").split(/[._-]+/)[0];
+
+const INBOX_WORD = {
+  mention: "mentioned you in",
+  share: "shared",
+  agent: "finished in",
+};
+
+function paintInbox(t, data) {
+  const host = t.el.querySelector(".inbox-list");
+  if (!host) return;
+  host.textContent = "";
+  const events = (data && data.events) || [];
+  const clear = t.el.querySelector(".inbox-clear");
+  if (clear) clear.hidden = !events.length;
+  if (!events.length) {
+    host.append(el2("div", "trash-empty muted", "Nothing new. Mentions and things shared with you land here."));
+    return;
+  }
+  for (const e of events) {
+    const row = el2("button", "inbox-item" + (e.read ? "" : " unread"));
+    row.type = "button";
+    row.setAttribute("data-testid", "inbox-item");
+    row.dataset.id = e.id;
+    const ic = el2("span", "inbox-ic");
+    ic.innerHTML = e.kind === "share" ? I.share : e.kind === "agent" ? I.chat : I.mention;
+    const body = el2("div", "inbox-body");
+    const who = e.actor ? shortName(e.actor) : "Someone";
+    body.append(el2("div", "inbox-line", who + " " + (INBOX_WORD[e.kind] || "touched") + " " + baseName(e.path)));
+    if (e.text) body.append(el2("div", "inbox-quote", e.text));
+    body.append(el2("div", "inbox-when", e.path + " · " + agoShort(e.at)));
+    row.append(ic, body);
+    row.addEventListener("click", async () => {
+      await markInbox({ ids: [e.id] });
+      if (e.path) openAtLine(e.path, e.line || 0);
+    });
+    host.append(row);
+  }
+}
+
+registerView("inbox", {
+  label: "Inbox",
+  icon: () => I.mention,
+  title: () => "Inbox",
+  tooltip: () => "Mentions, and what was shared with you",
+  key: () => "inbox",
+  contentClass: "trash-view",
+  restore: () => ({ kind: "inbox" }),
+  serialize: () => ({ kind: "inbox" }),
+  init: (t) => { t.path = null; t.name = "Inbox"; },
+  open: async (t) => {
+    t.el.textContent = "";
+    const head = el2("div", "trash-head");
+    head.append(el2("h2", "trash-title", "Inbox"),
+                el2("div", "trash-note muted", "Mentions, and what people shared with you."));
+    const clear = el2("button", "mini inbox-clear", "Mark all read");
+    clear.type = "button"; clear.hidden = true;
+    clear.addEventListener("click", () => markInbox({}));
+    head.append(clear);
+    const list = el2("div", "inbox-list");
+    list.setAttribute("data-testid", "inbox-list");
+    t.el.append(head, list);
+    paintInbox(t, await loadInbox());
+  },
+  activate: (t) => { loadInbox().then((j) => paintInbox(t, j)); },
+});
+
 // ---- the trash: deleting is a move, so it can come back ---------------------
 // `.trash/` inside the folder that owns the audience (company/, a project, a
 // person's own folder). It is a dot-directory, so the tree hides it, the
@@ -5060,11 +5166,11 @@ async function loadTrash() {
 function trashChanged() {
   loadTrash().then((j) => { for (const t of tabs.filter((x) => x.kind === "trash")) paintTrash(t, j); });
 }
-async function restoreTrash(id) {
+async function restoreTrash(path) {
   let j = {};
   try {
     const r = await fetch("/api/fs/restore", { method: "POST", headers: { "content-type": "application/json" },
-                                               body: JSON.stringify({ id }) });
+                                               body: JSON.stringify({ path }) });
     j = await r.json().catch(() => ({}));
     if (!r.ok) { kbToast(j.error || "could not restore it", "err"); return null; }
   } catch (e) { kbToast("could not reach the server", "err"); return null; }
@@ -5100,7 +5206,7 @@ function paintTrash(t, data) {
   if (!host) return;
   const note = t.el.querySelector(".trash-note");
   if (!data) { host.textContent = ""; host.append(el2("div", "trash-empty muted", "Could not read the trash.")); return; }
-  if (note) note.textContent = "Nothing here is removed on its own — it waits until you empty it.";
+  if (note) note.textContent = "Deleted things wait in a .trash folder beside where they lived, until you empty it.";
   const empty = t.el.querySelector(".trash-empty-btn");
   if (empty) empty.hidden = !(data.entries || []).length;
   host.textContent = "";
@@ -5111,20 +5217,20 @@ function paintTrash(t, data) {
   for (const e of data.entries) {
     const row = el2("div", "trash-item");
     row.setAttribute("data-testid", "trash-item");
-    row.dataset.id = e.id;
+    row.dataset.path = e.path;
     const ic = el2("span", "trash-ic");
-    ic.innerHTML = e.dir ? I.folder : e.path.endsWith(".html") ? I.artifact : e.path.endsWith(".md") ? I.doc : I.file;
+    ic.innerHTML = e.dir ? I.folder : e.name.endsWith(".html") ? I.artifact : e.name.endsWith(".md") ? I.doc : I.file;
     const body = el2("div", "trash-body");
     body.append(el2("div", "trash-name", e.name),
-                el2("div", "trash-from", e.path + " · " + (e.deletedBy || "someone") + " · " + agoShort(e.deletedAt)));
+                el2("div", "trash-from", "in " + (e.folder || "/") + " · " + agoShort(e.at)));
     const acts = el2("div", "trash-acts");
-    const back = el2("button", "mini", "Restore"); back.type = "button";
+    const back = el2("button", "mini", "Put back"); back.type = "button";
     back.setAttribute("data-testid", "trash-restore");
-    back.addEventListener("click", () => restoreTrash(e.id));
+    back.addEventListener("click", () => restoreTrash(e.path));
     const gone = el2("button", "mini trash-forget", "Delete for good"); gone.type = "button";
     gone.addEventListener("click", async () => {
       if (!await kbConfirm("Delete “" + e.name + "” for good?", { title: "Delete for good", ok: "Delete", danger: true })) return;
-      purgeTrash({ id: e.id }, "Gone for good");
+      purgeTrash({ path: e.path }, "Gone for good");
     });
     acts.append(back, gone);
     row.append(ic, body, acts);
@@ -7581,6 +7687,7 @@ const EXTRA_COMMANDS = [
     run: () => { if (!active) return;
       navigator.clipboard.writeText(active.path)
         .then(() => kbToast("Path copied", "ok"), () => kbToast("Clipboard blocked", "err")); } },
+  { id: "inbox", label: "Inbox — mentions and what was shared with you", run: openInbox },
   { id: "trash", label: "Trash — restore something you deleted", run: openTrash },
   { id: "reload", label: "Reload the file tree", run: () => loadTree(true).then(() => kbToast("Tree reloaded", "ok")) },
   { id: "retryspeech", label: "Retry the last dictation", when: dictationReady,
@@ -9593,7 +9700,14 @@ async function boot() {
   if (pinsBtn) pinsBtn.addEventListener("click", showLaunchersModal);
   const trashBtn = $("#trash-btn");
   if (trashBtn) trashBtn.addEventListener("click", openTrash);
+  const inboxBtn = $("#inbox-btn");
+  if (inboxBtn) inboxBtn.addEventListener("click", openInbox);
   loadTrash();
+  loadInbox();
+  // the inbox is a file somebody else writes: look again when the window comes
+  // back, and on the heartbeat the event stream already sends
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadInbox(); });
+  setInterval(loadInbox, 120000);
   // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.

@@ -91,7 +91,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 34   # a delete is a move into .trash/ (+ /api/fs/trash, restore, purge)
+BACKEND_V = 35   # /api/inbox (mentions, shares); a delete is a move into .trash/
 
 
 def _name_key(name: str):
@@ -619,161 +619,201 @@ async def fs_mkdir(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "path": str(p.relative_to(common.REPO_ROOT.resolve()))})
 
 
+# ---- the inbox: what happened while you were elsewhere ----------------------
+
+async def inbox_get(request: web.Request) -> web.Response:
+    """Your events, newest first, with how many are unread. The file is yours
+    (0600 in your own `.os/`); root wrote it, you own it, and you can read it
+    in a terminal exactly as this does."""
+    items = common.read_inbox(ME)
+    items.reverse()
+    return web.json_response({"events": items,
+                              "unread": sum(1 for e in items if not e.get("read"))})
+
+
+async def inbox_read(request: web.Request) -> web.Response:
+    """Mark events read — a list of ids, or `all`. Marking is a rewrite of
+    your own file, so it happens as you and needs nobody else."""
+    try:
+        data = await request.json()
+    except ValueError:
+        data = {}
+    ids = data.get("ids")
+    want = set(ids) if isinstance(ids, list) else None
+    items = common.read_inbox(ME)
+    if data.get("clear"):
+        items = [] if want is None else [e for e in items if e["id"] not in want]
+    else:
+        for e in items:
+            if want is None or e["id"] in want:
+                e["read"] = True
+    p = common.inbox_path(ME)
+    try:
+        p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = p.with_suffix(".kbtmp")
+        with open(tmp, "w") as f:
+            for e in items:
+                f.write(json.dumps(e) + "\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True, "unread": sum(1 for e in items if not e.get("read"))})
+
+
 # ---- the trash -------------------------------------------------------------
-# Everything here runs AS the user: a delete is a rename into the `.trash/` of
-# the folder that owns the audience, a restore is the rename back, and the
-# kernel decides both. Nothing is copied, so a folder of any size moves in an
-# instant and its ACLs travel with it.
+# Deleting moves the thing into a `.trash/` beside it — `company/plans/x.md`
+# becomes `company/plans/.trash/x.md`. That is the whole design: no ids, no
+# manifest, no metadata. Where it came from is the folder the `.trash` is in,
+# when it went is the inode's ctime (a rename updates it), whose it is the
+# file's own owner. Everything runs AS the user, so the kernel decides what
+# may move and what may come back, and an agent with a shell sees exactly
+# what the app sees.
 
-def _trash_dir(domain: str) -> Path:
-    return common.REPO_ROOT / domain / common.TRASH_DIRNAME
-
-
-def _ensure_trash(domain: str) -> Path:
-    """The domain's `.trash`, made on demand with the domain's own mode — so
-    the people who can delete in `company/` can also restore from its trash,
-    and a person's trash is as private as their folder."""
-    d = _trash_dir(domain)
-    if d.is_dir():
-        return d
-    parent = common.REPO_ROOT / domain
-    mode = stat.S_IMODE(os.stat(parent).st_mode)
-    try:
-        os.mkdir(d, mode)
-        os.chmod(d, mode)          # mkdir's mode is cut by the umask
-    except FileExistsError:
-        pass
-    return d
+def _trash_name(trash: Path, name: str) -> Path:
+    """A free name inside that `.trash` — deleting two things called notes.md
+    keeps both."""
+    target = trash / name
+    if not os.path.lexists(target):
+        return target
+    stem, dot, ext = name.partition(".")
+    for n in range(2, 500):
+        cand = trash / (stem + " " + str(n) + (dot + ext if dot else ""))
+        if not os.path.lexists(cand):
+            return cand
+    return trash / (name + "." + secrets.token_hex(3))
 
 
-def _trash_domains() -> list[str]:
-    """Every trash this account could have something in: the shared area, each
-    project, and their own folder. Other people's folders are theirs."""
-    out = ["company"]
-    try:
-        for p in sorted((common.REPO_ROOT / "projects").iterdir()):
-            if p.is_dir() and not p.name.startswith("."):
-                out.append("projects/" + p.name)
-    except OSError:
-        pass
-    out.append("users/" + ME)
+def _free_name(target: Path) -> Path:
+    """…and the same courtesy on the way back: restoring never writes over
+    something that has taken the name in the meantime."""
+    if not os.path.lexists(target):
+        return target
+    stem, dot, ext = target.name.partition(".")
+    n = 0
+    while True:
+        n += 1
+        suffix = " (restored)" if n == 1 else f" (restored {n})"
+        cand = target.with_name(stem + suffix + (dot + ext if dot else ""))
+        if not os.path.lexists(cand):
+            return cand
+
+
+def _trash_dirs() -> list[Path]:
+    """Every `.trash` in the repo this account can look into. A full walk, but
+    only when someone opens the trash: `_secrets` and `.git` are pruned, and a
+    folder the kernel refuses is simply not there."""
+    out = []
+    root = common.REPO_ROOT.resolve()
+    for dirpath, dirnames, _ in os.walk(root, onerror=lambda e: None):
+        dirnames[:] = [d for d in dirnames
+                       if d not in (".git", "_secrets") and not d.startswith(".trash")]
+        d = Path(dirpath) / common.TRASH_DIRNAME
+        if d.is_dir():
+            out.append(d)
+        # a `.trash` is never walked into: what is in it is a flat list
+        dirnames[:] = [d2 for d2 in dirnames if d2 != common.TRASH_DIRNAME]
     return out
 
 
-def _trash_entry(domain: str, eid: str) -> Path | None:
-    """`company/20260921-220301-9f3a` → the entry folder, or None if the id is
-    not one (no traversal, no other folder, no file)."""
-    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", eid or ""):
-        return None
-    if domain not in _trash_domains():
-        return None
-    return _trash_dir(domain) / eid
-
-
-def _trash_meta(entry: Path) -> dict | None:
-    try:
-        meta = json.loads((entry / "meta.json").read_text())
-    except (OSError, ValueError):
-        return None
-    if not isinstance(meta, dict) or not isinstance(meta.get("path"), str):
-        return None
-    return meta
-
-
-def _trash_payload(entry: Path, meta: dict) -> Path | None:
-    name = os.path.basename(meta.get("name") or meta["path"])
-    p = entry / name
-    return p if name and os.path.lexists(p) else None
-
-
 async def fs_trash(request: web.Request) -> web.Response:
-    """What is in the trash, newest first. Nothing is swept on a timer: what
-    you deleted stays until someone empties it."""
+    """What is in every `.trash` you can read, newest first."""
+    root = common.REPO_ROOT.resolve()
     items = []
-    for domain in _trash_domains():
-        d = _trash_dir(domain)
+    for d in _trash_dirs():
         try:
-            ids = sorted(os.listdir(d))
+            names = sorted(os.listdir(d))
         except OSError:
             continue
-        for eid in ids:
-            entry = d / eid
-            meta = _trash_meta(entry)
-            if meta is None:
+        for name in names:
+            p = d / name
+            try:
+                st = os.lstat(p)
+            except OSError:
                 continue
-            when = int(meta.get("deletedAt") or 0)
-            items.append({"id": domain + "/" + eid, "path": meta["path"],
-                          "name": meta.get("name") or os.path.basename(meta["path"]),
-                          "dir": bool(meta.get("dir")), "deletedAt": when,
-                          "deletedBy": meta.get("deletedBy") or "", "domain": domain,
-                          "gone": _trash_payload(entry, meta) is None})
-    items.sort(key=lambda x: x["deletedAt"], reverse=True)
+            items.append({
+                "path": str(p.relative_to(root)),
+                "from": str((d.parent / name).relative_to(root)),
+                "folder": str(d.parent.relative_to(root)),
+                "name": name,
+                "dir": stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode),
+                "at": int(st.st_ctime),
+                "size": st.st_size,
+            })
+    items.sort(key=lambda x: x["at"], reverse=True)
     return web.json_response({"entries": items})
 
 
-async def fs_restore(request: web.Request) -> web.Response:
-    """Put it back where it came from. If something has taken the name in the
-    meantime the restored copy sits beside it rather than over it, and if the
-    folder it lived in is gone it is made again."""
-    data = await request.json()
-    ident = str(data.get("id", ""))
-    domain, _, eid = ident.rpartition("/")
-    entry = _trash_entry(domain, eid)
-    if entry is None:
-        return web.json_response({"error": "bad id"}, status=400)
-    meta = _trash_meta(entry)
-    if meta is None:
-        return web.json_response({"error": "not found"}, status=404)
-    payload = _trash_payload(entry, meta)
-    if payload is None:
-        return web.json_response({"error": "the deleted item is no longer there"}, status=404)
-    target = common.resolve_repo_path(meta["path"])
-    if target is None or common.is_trash_path(meta["path"]):
+def _in_trash(raw: str) -> Path | web.Response:
+    p = common.resolve_repo_path(str(raw or ""))
+    if p is None:
         return web.json_response({"error": "bad path"}, status=400)
-    stem, dot, ext = target.name.partition(".")
-    n = 0
-    while os.path.lexists(target):
-        n += 1
-        suffix = " (restored)" if n == 1 else f" (restored {n})"
-        target = target.with_name(stem + suffix + (dot + ext if dot else ""))
+    rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+    parts = rel.split("/")
+    if len(parts) < 2 or parts[-2] != common.TRASH_DIRNAME:
+        return web.json_response({"error": "that is not something in a trash"}, status=400)
+    if not os.path.lexists(p):
+        return web.json_response({"error": "not found"}, status=404)
+    return p
+
+
+def _tidy_trash(trash: Path) -> None:
+    """An empty `.trash` is noise: take it away again."""
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(payload, target)
+        if not os.listdir(trash):
+            os.rmdir(trash)
+    except OSError:
+        pass
+
+
+async def fs_restore(request: web.Request) -> web.Response:
+    """Up one level, which is where it came from."""
+    data = await request.json()
+    p = _in_trash(data.get("path"))
+    if isinstance(p, web.Response):
+        return p
+    target = _free_name(p.parent.parent / p.name)
+    try:
+        os.rename(p, target)
     except PermissionError:
         return web.json_response({"error": "permission denied"}, status=403)
     except OSError as e:
         return web.json_response({"error": str(e)}, status=400)
-    shutil.rmtree(entry, ignore_errors=True)
+    _tidy_trash(p.parent)
     rel = str(target.relative_to(common.REPO_ROOT.resolve()))
     common.write_attrib_hint("restore", *_versioned_under(target, rel))
-    return web.json_response({"ok": True, "path": rel, "renamed": rel != meta["path"]})
+    return web.json_response({"ok": True, "path": rel, "renamed": target.name != p.name})
 
 
 async def fs_trash_purge(request: web.Request) -> web.Response:
-    """Out of the trash for good — one entry, or everything in it."""
+    """Out of the trash for good — one thing, or everything you can reach."""
     data = await request.json()
     if data.get("all"):
-        for domain in _trash_domains():
-            d = _trash_dir(domain)
-            try:
-                ids = sorted(os.listdir(d))
-            except OSError:
-                continue
-            for eid in ids:
-                if _trash_meta(d / eid) is not None:
-                    shutil.rmtree(d / eid, ignore_errors=True)
+        for d in _trash_dirs():
+            for name in (os.listdir(d) if d.is_dir() else []):
+                p = d / name
+                try:
+                    if p.is_dir() and not p.is_symlink():
+                        shutil.rmtree(p)
+                    else:
+                        os.unlink(p)
+                except OSError:
+                    pass
+            _tidy_trash(d)
         return web.json_response({"ok": True})
-    ident = str(data.get("id", ""))
-    domain, _, eid = ident.rpartition("/")
-    entry = _trash_entry(domain, eid)
-    if entry is None or _trash_meta(entry) is None:
-        return web.json_response({"error": "bad id"}, status=400)
+    p = _in_trash(data.get("path"))
+    if isinstance(p, web.Response):
+        return p
     try:
-        shutil.rmtree(entry)
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        else:
+            os.unlink(p)
     except PermissionError:
         return web.json_response({"error": "permission denied"}, status=403)
     except OSError as e:
         return web.json_response({"error": str(e)}, status=400)
+    _tidy_trash(p.parent)
     return web.json_response({"ok": True})
 
 
@@ -800,19 +840,15 @@ async def fs_delete(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=400)
     is_dir = stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode)
     touched = _versioned_under(p, rel)   # collect BEFORE they're gone
-    domain = common.trash_domain(rel)
-    if domain and not data.get("permanent") and not common.is_trash_path(rel):
-        eid = time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
+    if common.trashable(rel) and not data.get("permanent"):
         try:
-            trash = _ensure_trash(domain)
-            entry = trash / eid
-            mode = stat.S_IMODE(os.stat(trash).st_mode)
-            os.mkdir(entry, mode)
-            os.chmod(entry, mode)
-            os.rename(p, entry / p.name)
-            (entry / "meta.json").write_text(json.dumps(
-                {"path": rel, "name": p.name, "dir": is_dir,
-                 "deletedAt": int(time.time()), "deletedBy": ME}, indent=1))
+            trash = p.parent / common.TRASH_DIRNAME
+            if not trash.is_dir():
+                mode = stat.S_IMODE(os.stat(p.parent).st_mode)
+                os.mkdir(trash, mode)
+                os.chmod(trash, mode)      # mkdir's mode is cut by the umask
+            moved = _trash_name(trash, p.name)
+            os.rename(p, moved)
         except PermissionError:
             return web.json_response(
                 {"error": "permission denied (you need write access to the containing folder)"},
@@ -821,7 +857,7 @@ async def fs_delete(request: web.Request) -> web.Response:
             return web.json_response({"error": str(e)}, status=400)
         common.write_attrib_hint("delete", *touched)
         return web.json_response({"ok": True, "deleted": rel, "was_dir": is_dir,
-                                  "trashed": domain + "/" + eid})
+                                  "trashed": str(moved.relative_to(common.REPO_ROOT.resolve()))})
     try:
         if is_dir:
             shutil.rmtree(p)
@@ -2595,6 +2631,8 @@ def make_app() -> web.Application:
     app.router.add_post("/api/file", create_file)
     app.router.add_post("/api/fs/mkdir", fs_mkdir)
     app.router.add_post("/api/fs/delete", fs_delete)
+    app.router.add_get("/api/inbox", inbox_get)
+    app.router.add_post("/api/inbox/read", inbox_read)
     app.router.add_get("/api/fs/trash", fs_trash)
     app.router.add_post("/api/fs/restore", fs_restore)
     app.router.add_post("/api/fs/trash-purge", fs_trash_purge)

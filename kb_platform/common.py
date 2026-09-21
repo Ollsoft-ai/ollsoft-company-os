@@ -12,6 +12,8 @@ import json
 import os
 import grp
 import pwd
+import re
+import secrets
 import stat as stat_mod
 import time
 from pathlib import Path
@@ -510,6 +512,77 @@ def write_attrib_hint(op: str, *rel_paths: str) -> None:
         pass
 
 
+# ── the inbox: what happened while you were elsewhere ────────────────────────
+# One append-only file per person, `users/<u>/.os/inbox.jsonl`, written by
+# whichever process actually saw the event: syncd when a document you were
+# mentioned in is committed, the hub when something is shared with you. A file
+# and not a table, because everything here is a file — an agent can read it,
+# the backup already covers it, and no schema has to migrate. Root writes it
+# (only root can reach into someone else's 0700 folder) and chowns it to them,
+# so their own backend can mark things read.
+INBOX_FILE = "inbox.jsonl"
+INBOX_MAX = 500                       # oldest lines fall off the top
+MENTION_RE = re.compile(r"(?:^|\s)@([A-Za-z0-9_][A-Za-z0-9_-]*)")
+
+
+def inbox_path(user: str) -> Path:
+    return user_config(user, INBOX_FILE)
+
+
+def read_inbox(user: str) -> list[dict]:
+    """Every event, oldest first. A line that is not JSON is skipped, never
+    fatal: this file is also editable by the person it belongs to."""
+    try:
+        raw = inbox_path(user).read_text()
+    except OSError:
+        return []
+    out = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and isinstance(ev.get("id"), str):
+            out.append(ev)
+    return out[-INBOX_MAX:]
+
+
+def add_inbox_event(user: str, event: dict) -> bool:
+    """Append one event to `user`'s inbox, as root, leaving the file theirs.
+
+    Best-effort in the same way attribution is: a notification must never be
+    able to break the thing it is about.
+    """
+    try:
+        info = pwd.getpwnam(user)
+    except KeyError:
+        return False
+    try:
+        d = REPO_ROOT / "users" / user / CONFIG_DIRNAME
+        if not d.is_dir():
+            d.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if os.geteuid() == 0:
+                os.chown(d, info.pw_uid, info.pw_gid)
+        p = d / INBOX_FILE
+        keep = read_inbox(user)
+        keep.append({**event, "id": event.get("id") or secrets.token_hex(8),
+                     "at": int(event.get("at") or time.time()), "read": False})
+        tmp = d / (INBOX_FILE + ".kbtmp")
+        with open(tmp, "w") as f:
+            for ev in keep[-INBOX_MAX:]:
+                f.write(json.dumps(ev) + "\n")
+        os.chmod(tmp, 0o600)
+        if os.geteuid() == 0:
+            os.chown(tmp, info.pw_uid, info.pw_gid)
+        os.replace(tmp, p)
+        return True
+    except OSError:
+        return False
+
+
 # ── the trash ────────────────────────────────────────────────────────────────
 # A delete is a move, not an unlink: the thing goes into the `.trash/` of the
 # folder that owns its audience, so restoring it is a move back and nothing
@@ -522,21 +595,20 @@ TRASH_DIRNAME = ".trash"
 # It empties when someone empties it (krystof, 2026-09-21).
 
 
-def trash_domain(rel: str) -> str | None:
-    """The folder whose `.trash` a deleted path belongs in.
+def trashable(rel: str) -> bool:
+    """Can this be moved into a `.trash/` instead of removed?
 
-    `company/plans/x.md` → `company`; `projects/acme/notes.md` → `projects/acme`;
-    `users/bob/todo.md` → `users/bob`. A top-level area itself has no domain
-    (it cannot be deleted), and a secret has none either — a copy of a secret
-    lingering for thirty days is the opposite of what `_secrets/` is for, so
-    those are deleted outright.
+    Not a top-level area (nothing to be trashed beside), not a secret (a
+    readable copy waiting in a trash is exactly what `_secrets/` exists to
+    prevent), and not something already in a trash. Everything else goes
+    into a `.trash/` in its OWN folder, which is why the permissions take
+    care of themselves: the folder's group, setgid bit and default ACL are
+    inherited by the new directory, and a rename carries the file's own
+    owner, mode and ACLs untouched. Nothing crosses an audience boundary
+    because nothing leaves the folder.
     """
     parts = [seg for seg in rel.strip("/").split("/") if seg]
-    if len(parts) < 2 or is_secret_path(rel):
-        return None
-    if parts[0] in ("projects", "users") and len(parts) >= 3:
-        return "/".join(parts[:2])
-    return parts[0]
+    return len(parts) >= 2 and not is_secret_path(rel) and not is_trash_path(rel)
 
 
 def is_trash_path(rel: str) -> bool:

@@ -233,10 +233,13 @@ it can only show what the caller could already open.
   rest: root, and anyone who can read the file, can read the secret. Full-disk encryption and a real encrypted store (see the roadmap in
   [DEVELOPING.md](DEVELOPING.md)) are still worth having.
 - **The trash never widens an audience, and never holds a secret.** A delete
-  is a rename into the `.trash/` of the folder that owns the thing, so a
-  private file stays in a `0700` home and a company document stays in
-  `company/` — nobody sees anything they could not see a moment earlier, and
-  the people who could delete it are exactly the people who can restore it.
+  is a rename into a `.trash/` in the same folder, so the thing does not move
+  in any sense that matters: the new directory inherits that folder's group,
+  setgid bit and default ACL, and the rename carries the file's own owner,
+  mode and ACLs. Nobody sees anything they could not see a moment earlier,
+  and the people who could delete it are exactly the people who can restore
+  it. The listing is a walk done AS the caller, so a `.trash` inside a folder
+  they cannot enter is not in their list.
   A `_secrets/` file is deleted outright instead: a readable copy sitting in
   a trash indefinitely is precisely the exposure `_secrets/` exists to
   prevent — and nothing in the trash expires on its own, so "indefinitely" is

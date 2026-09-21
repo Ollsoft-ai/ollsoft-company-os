@@ -164,30 +164,9 @@ hand; from now on every seeded item is recorded and only recorded items go.
 EOF
     exit 1
   fi
-  # A test that deleted one of its own files MOVED it into a `.trash/`, which
-  # lives outside the namespace and so is not in the manifest. Those entries
-  # are this run's too: take them, and nothing else.
-  python3 - "$REPO" "${NS:-}" <<'TRASH'
-import json, os, shutil, sys
-repo, ns = sys.argv[1], sys.argv[2]
-if ns:
-    marks = ("kbtest-" + ns, "kbt_" + ns + "_")
-    roots = [os.path.join(repo, "company", ".trash")]
-    for area in ("projects", "users"):
-        base = os.path.join(repo, area)
-        for name in (os.listdir(base) if os.path.isdir(base) else []):
-            roots.append(os.path.join(base, name, ".trash"))
-    for root in roots:
-        for eid in (os.listdir(root) if os.path.isdir(root) else []):
-            meta = os.path.join(root, eid, "meta.json")
-            try:
-                path = json.load(open(meta)).get("path", "")
-            except (OSError, ValueError):
-                continue
-            if any(m in path for m in marks):
-                shutil.rmtree(os.path.join(root, eid), ignore_errors=True)
-                print("  trash " + path)
-TRASH
+  # (A test that deletes one of its own files moves it into a `.trash/` in
+  # the same folder — inside this namespace's own tree, so the sweep below
+  # takes it with everything else. Nothing special to do.)
   # Reverse order: files before the directories that contain them.
   tac "$MANIFEST" | while IFS=$'\t' read -r kind val; do
     [ -n "${kind:-}" ] || continue
