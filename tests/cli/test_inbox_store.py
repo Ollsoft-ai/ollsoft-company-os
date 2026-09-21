@@ -123,3 +123,29 @@ def test_a_secret_never_notifies(repo, monkeypatch):
     (root / "company" / "_secrets" / "k.md").write_text(f"@{me} the password is hunter2\n")
     s._notify_mentions("company/_secrets/k.md", "someone", {})
     assert common.read_inbox(me) == []
+
+
+def test_a_symlinked_config_dir_cannot_steer_a_root_write(repo, monkeypatch):
+    """A home belongs to the person living in it: they can replace their own
+    `.os` with a symlink. syncd and the hub write inboxes AS ROOT, so every
+    step is O_NOFOLLOW — otherwise "you were mentioned" becomes "root wrote a
+    file wherever I pointed"."""
+    root, me = repo
+    victim = root / "elsewhere"
+    victim.mkdir()
+    os.symlink(victim, root / "users" / me / ".os")
+    assert common.add_inbox_event(me, {"kind": "mention", "path": "company/x.md"}) is False
+    assert list(victim.iterdir()) == [], "nothing may be written through the link"
+
+
+def test_a_symlinked_home_cannot_either(repo):
+    root, me = repo
+    victim = root / "elsewhere2"
+    victim.mkdir()
+    home = root / "users" / me
+    for p in home.iterdir():
+        p.unlink()
+    home.rmdir()
+    os.symlink(victim, home)
+    assert common.add_inbox_event(me, {"kind": "mention", "path": "company/x.md"}) is False
+    assert list(victim.iterdir()) == []

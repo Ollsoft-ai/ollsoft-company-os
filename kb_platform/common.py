@@ -536,6 +536,10 @@ def read_inbox(user: str) -> list[dict]:
         raw = inbox_path(user).read_text()
     except OSError:
         return []
+    return _parse_inbox(raw)
+
+
+def _parse_inbox(raw: str) -> list[dict]:
     out = []
     for line in raw.splitlines():
         line = line.strip()
@@ -551,7 +555,14 @@ def read_inbox(user: str) -> list[dict]:
 
 
 def add_inbox_event(user: str, event: dict) -> bool:
-    """Append one event to `user`'s inbox, as root, leaving the file theirs.
+    """Append one event to `user`'s inbox — usually as ROOT, from syncd or the
+    hub, and the file stays theirs.
+
+    Every step is on a file descriptor opened `O_NOFOLLOW`, because a home
+    directory belongs to the person living in it: they may replace their own
+    `.os` (or their whole home) with a symlink, and a root process that wrote
+    through it would be writing wherever they pointed. `_open_user_config_dir`
+    pins the same way; this adds the ownership root has to hand back.
 
     Best-effort in the same way attribution is: a notification must never be
     able to break the thing it is about.
@@ -560,27 +571,53 @@ def add_inbox_event(user: str, event: dict) -> bool:
         info = pwd.getpwnam(user)
     except KeyError:
         return False
+    dfd = None
     try:
-        d = REPO_ROOT / "users" / user / CONFIG_DIRNAME
-        if not d.is_dir():
-            d.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if os.geteuid() == 0:
-                os.chown(d, info.pw_uid, info.pw_gid)
-        p = d / INBOX_FILE
-        keep = read_inbox(user)
+        dfd = _open_user_config_dir(user)
+        if os.geteuid() == 0:
+            os.fchown(dfd, info.pw_uid, info.pw_gid)
+        keep = _read_inbox_fd(dfd)
         keep.append({**event, "id": event.get("id") or secrets.token_hex(8),
                      "at": int(event.get("at") or time.time()), "read": False})
-        tmp = d / (INBOX_FILE + ".kbtmp")
-        with open(tmp, "w") as f:
-            for ev in keep[-INBOX_MAX:]:
-                f.write(json.dumps(ev) + "\n")
-        os.chmod(tmp, 0o600)
-        if os.geteuid() == 0:
-            os.chown(tmp, info.pw_uid, info.pw_gid)
-        os.replace(tmp, p)
+        body = "".join(json.dumps(ev) + "\n" for ev in keep[-INBOX_MAX:]).encode()
+        tmp = f".{INBOX_FILE}.{os.urandom(6).hex()}.kbtmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+        try:
+            try:
+                _write_all(fd, body)
+                os.fchmod(fd, 0o600)
+                if os.geteuid() == 0:
+                    os.fchown(fd, info.pw_uid, info.pw_gid)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.rename(tmp, INBOX_FILE, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
         return True
     except OSError:
         return False
+    finally:
+        if dfd is not None:
+            os.close(dfd)
+
+
+def _read_inbox_fd(dfd: int) -> list[dict]:
+    """The inbox as it is now, read through the pinned directory fd."""
+    try:
+        fd = os.open(INBOX_FILE, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except OSError:
+        return []
+    try:
+        with os.fdopen(fd, "r", closefd=True) as f:
+            raw = f.read(4 * 1024 * 1024)
+    except OSError:
+        return []
+    return _parse_inbox(raw)
 
 
 # ── the trash ────────────────────────────────────────────────────────────────

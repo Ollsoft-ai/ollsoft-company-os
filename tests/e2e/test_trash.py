@@ -51,8 +51,27 @@ def test_a_deleted_file_waits_beside_where_it_lived_and_comes_back():
     assert r.status_code == 200, r.text
     assert r.json()["path"] == path and r.json()["renamed"] is False
     assert full(path).read_text() == "# keep me\n"
-    assert not full(f"{AREA}/.trash").exists(), "an empty .trash is tidied away"
+    assert all(e["path"] != trashed for e in trash(c)["entries"])
     c.post("/api/fs/delete", json={"path": path, "permanent": True})
+
+
+def test_an_emptied_trash_folder_is_tidied_away():
+    # In a folder of its own, where no other test can leave something behind.
+    c = api("alice")
+    folder = doc(f"trash-tidy-{int(time.time())}")
+    assert c.post("/api/fs/mkdir", json={"path": folder}).status_code == 200
+    try:
+        write(c, f"{folder}/x.md")
+        trashed = c.post("/api/fs/delete", json={"path": f"{folder}/x.md"}).json()["trashed"]
+        assert full(f"{folder}/.trash").is_dir()
+        c.post("/api/fs/restore", json={"path": trashed})
+        assert not full(f"{folder}/.trash").exists(), "an empty .trash is tidied away"
+        # …and the same on the way out, when the last thing in it is purged
+        trashed = c.post("/api/fs/delete", json={"path": f"{folder}/x.md"}).json()["trashed"]
+        c.post("/api/fs/trash-purge", json={"path": trashed})
+        assert not full(f"{folder}/.trash").exists()
+    finally:
+        c.post("/api/fs/delete", json={"path": folder, "permanent": True})
 
 
 def test_the_permissions_take_care_of_themselves():
