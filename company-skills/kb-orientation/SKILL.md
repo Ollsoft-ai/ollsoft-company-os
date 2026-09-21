@@ -21,7 +21,7 @@ This is good news: you can act freely and safely. The worst you can do is limite
 ├── projects/<name>/  restricted to that project's team (you may not see all of these)
 ├── users/<you>/      your own private space (only you can read it)
 │   └── .os/settings.json   your settings (see the kb-settings skill)
-├── .os/              platform config: launcher buttons, egress allow-list, company settings.json
+├── .os/              platform config: pinned items (launchers.json), egress allow-list, company settings.json
 └── .git/             version history — 0700 root-only, you cannot read it
 ```
 
@@ -137,3 +137,19 @@ line, and `sudo -u kbindexer test -r <path>` answers the search question.
 2. If something is denied, respect it. It reflects a real permission boundary.
 3. Persist anything important as **markdown in `/srv/kb`** — that's the backed-up source of truth. Databases and scratch files are convenience, not durability.
 4. Prefer small, reversible changes. Git has your history if you need to look back.
+
+## The screen: groups, the dock, the agent chat
+
+Everything open is a tab in a group; groups stack in columns; the terminal
+panel at the bottom is the *dock*, a group like the others. A person can drag
+any tab — a document, a terminal, an agent chat — beside, above or below any
+other, split with Alt+\ / Alt+Shift+\, maximize a group with Alt+Z, and put
+the dock on the right from the palette. The layout is per browser
+(localStorage), never a file in the knowledgebase.
+
+The top-right chat button (Alt+C) opens an **agent chat**: Claude Code,
+Codex, Gemini CLI or another ACP agent, running as the person in the
+knowledgebase — the same access you have in a terminal, with streamed
+answers, tool calls, diffs and permission prompts on screen. Sign-in is per
+person, from the chat's picker. `docs/agent-chat.md` has the details; the
+default agent for new chats is the `ai.agent` setting (see kb-settings).

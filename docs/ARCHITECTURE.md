@@ -280,7 +280,14 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   (all three only on folders you can write), `⚙` permissions, `✕` delete (only
   where you can write the parent). Deleting a file/folder retires any tabs
   showing it. The context menu (right-click, or `⋯` on touch) adds the rest,
-  including **Upload folder** and **Download as ZIP**.
+  including **Upload folder** and **Download as ZIP**. Two inputs that used to
+  be typed are now chosen: **Move to…** opens the folder picker (`pickPath`,
+  the same one the chat's ＋ uses — filter, ⏎, done; a folder is never offered
+  itself or its own children), and a **new file's name needs no extension** —
+  a plain name becomes a `.md` document (`withDefaultExt`), while anything
+  with a dot is taken exactly as typed, `.html` included. Moving or renaming
+  something carries its pins with it (`repointPins`), and deleting it takes
+  them away — your own list always, the company list when you may write it.
 - **Download as ZIP** (`GET /api/folder-zip`, `user_server.folder_zip`): the same
   right-click gesture a single file already had, on a folder. The archive is
   built by the per-user backend, so the kernel decides what goes in: symlinks are
@@ -404,13 +411,40 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   needs no special case. Destinations are read from the syntax tree via
   `linkTarget()` (which also unwraps the `<…>` form), never by regex over the
   source: a regex stops at the space and yields a truncated path.
+- **A chat is pointed at what you have open.** Chips above the message box
+  name the visible document of every group (automatic, dashed), the files you
+  added by hand, and the folder the session stands in; every prompt carries
+  them as ACP `resource_link` blocks and the folder goes in `session/new`.
+  The picker behind ＋ is `pickPath()` in `app.js` — the palette's shape, but
+  it returns a path. See [agent-chat.md](agent-chat.md).
+- **Pinned things are rows, and you pin by right-clicking.** The sidebar's
+  first section lists what the company pinned (its icon takes the accent, and
+  its tooltip and menu say so — the row carried the word "company" until
+  krystof called it a word too many) and what you pinned yourself, as rows
+  shaped exactly like the tree's — a pin is a file to open, a folder to reveal, or a command to run in
+  a fresh shell (`kind: file | folder | term`). They were pills in two colours
+  above the tree until 2026-09-21; a pill in a list of rows reads as an alien,
+  and the colours encoded something a word says better. A tree row's menu
+  offers "Pin to the sidebar" (and the reverse once it is pinned), and a pin
+  row's own menu offers Open, Rename and Unpin — and, for an admin, the move
+  between the two lists ("Pin for everyone" / "Keep it just for me", which
+  writes the destination list before clearing the source, so a failed write
+  can duplicate a pin but never lose one). With nothing pinned the
+  section is not drawn at all; the dialog that writes a pin by hand — the only
+  way to pin a *command*, and where an admin edits the company list — is
+  "Pinned items" in the user menu, beside Settings. Personal pins live
+  in `users/<you>/.os/launchers.json` (private, written by your own backend),
+  the company's in `.os/launchers.json` (written only by the hub, admin-only);
+  the API keeps the older name `launchers`.
+
 - **The person, bottom left.** The sidebar ends in the signed-in user; one
   click opens the user menu with everything that is not a file or the search:
-  Settings, Admin (admins and network delegates), Cron, Terminal, Dictation
-  history, Keyboard shortcuts, Sign out. The top bar keeps only the brand, the
-  search and the mic. On a phone the same menu sits at the bottom of the drawer,
-  with the launcher chips just above it. New documents come from the tree's
-  "New file here", Alt+N, or the palette — there is no button for it.
+  Settings, Pinned items, Admin (admins and network delegates), Cron,
+  Terminal, Dictation history, Keyboard shortcuts, Sign out. The top bar keeps
+  only the brand, the search and the mic. On a phone the same menu sits at the bottom of the drawer,
+  under the same Pinned / Chats / Files list a desktop shows. New documents
+  come from the tree's "New file here", Alt+N, or the palette — there is no
+  button for it.
 - **Themes are token blocks.** `frontend/assets/style.css` names no colour
   outside `:root` and the `:root[data-theme=…]` blocks; every rule uses a token
   or a `color-mix()` of one (washes, borders, shadows derive from ~40 base
@@ -596,34 +630,140 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   deep-link test in a *fresh* browser context exercises the one case that never
   broke, so the ordering test deliberately reuses a context that already has a
   saved session.
-- **Editor panes (split view)**: the tab strip and editor host are per **pane**;
-  dragging a tab onto another pane moves it, onto a pane's left/right edge splits
-  a new column off. `tabs` stays the one flat list (a tab's `paneId` says which
-  column it is in), each pane remembers its own current tab, and the document
-  header and the formatting dock describe the **active** one. Layout and
-  column widths persist in `localStorage` with the open tabs. A pane retires when
-  its last tab leaves; the leftmost pane keeps the historic `#tabbar`/`#editor`
-  ids. Split handles are rebuilt freely, pane elements never are — re-inserting a
-  pane would reload the artifact iframes inside it.
+- **Groups, columns and the dock (one layout for everything)**: the editor
+  area is a *workspace* of *columns*, each column a stack of *groups* — a tab
+  strip, a host and one visible tab — plus the *dock*: the group that lives
+  outside the workspace as the bottom panel (or a column on the right or left)
+  and holds the terminals by default. A terminal is a tab like a document; so
+  is an agent chat. Drag a tab onto a group's left or right edge for a new
+  column, its top or bottom edge for a new group above or below, its middle to
+  move it in; the dock takes drops but is never split. On a phone or tablet
+  the same drag is a hold: a tab held still for a third of a second lifts
+  (a ghost follows the finger, a swipe before that stays a scroll) and lands
+  on a strip, in a group, above or below one, or in the panel. Alt+\ and Alt+Shift+\
+  split the focused group's tab right and below. Every strip ends in the same
+  actions — ⤢ maximize (Alt+Z, or a double-click on the strip's empty space;
+  the other groups are hidden, not closed, and ⤡ restores) and ▾ fold — and
+  each appears only when it would do something: maximize is absent while a
+  group is the only one holding tabs, fold is absent on the last open group.
+  (There is no per-strip ＋: a terminal comes from Ctrl+`, Ctrl+Shift+`, the
+  person's menu or the palette.) The same rules hold everywhere: a folded group is a
+  one-line handle naming its tabs (a column of folded groups a thin rail) that
+  a click, a tab activation or a dropped tab opens; the last open group of
+  the workspace never folds (the dock always can); a group whose last tab
+  leaves goes, and the last group of all stays open; while a group is
+  maximized a document opens into it, and activating a tab that lives in a
+  hidden group brings the layout back — what you asked for is what you see.
+  Sizes reach the stylesheet as shares of the *visible* groups only, so a
+  fold, a maximize or a close never leaves a gap (a saved share is a fraction
+  of 1, and flex would hand out only that fraction). The keyboard on a folded
+  group's handle acts on that group (Alt+W closes the tab the handle names,
+  as does a middle-click on it); Ctrl+` while a group is maximized restores
+  the layout and goes to the terminal. Under the phone breakpoint groups
+  only stack — a drop on a group's left or right edge is a drop above or
+  below it — and a stack refuses a group it cannot give 110px, as a row
+  refuses a column it cannot give 160px. The sheet's automatic "full" and
+  its remembered half / full are a *phone's* (narrow and touched): a desktop
+  window dragged narrow renders the phone layout but keeps its record. The
+  keyboard never lands on `<body>` — after a close, a fold or a maximize the
+  focused group's tab takes it, and "Focus the next group" visits folded
+  groups by their handles. A strip narrower than 240px gives up ▾ before it
+  truncates a name; a group narrower than 420px or shorter than
+  240px hides the floating toolbar on a mouse screen. The palette moves
+  tabs and picks the dock's side (not on a phone, where the dock is always
+  the sheet). `tabs` stays the one flat list (a tab's `paneId` says which
+  group), `panes` the workspace groups in reading order, `columns` their
+  stacking; the dock is `dockPane`, the terminal panel's own markup adopted as
+  a group so every id and test hook stays. Two notions stay apart: the
+  **active document** (`active`, what the header, toolbar, badge and URL
+  describe — a terminal never becomes it) and the **focused group** (where the
+  keyboard is; Alt+] / Alt+[ / Alt+1…9 / Alt+W act there, so in the dock they
+  cycle and kill terminals). The rules — what a valid layout is, how a
+  pre-2026-09 session record maps onto it, how a phone renders it — are the
+  DOM-free `frontend/src/layout.js` (`node --test tests/js`); the session
+  record is v2 (`columns`, `dock`, `focused`, `maximized`) written beside
+  every v1 field derived from it, so a browser on the previous bundle still
+  restores its tabs. Group elements are never re-inserted (an artifact iframe
+  would reload); a tab's element moves. The design and its reasoning:
+  [unified-views.md](unified-views.md).
+- **View kinds**: what a tab can show is a registration in
+  `frontend/src/views.js` — label, icon, `open(t, spec)`, `serialize`,
+  `restore`, default `placement` (the active group, the dock, a side column),
+  whether it is a document the header describes. Documents, artifacts, secrets
+  and terminals register from `app.js`; the agent chat from its own lazily
+  loaded chunk. The shell knows no kind by name. Modules add palette commands
+  with `registerCommand` and chrome buttons through a named slot.
+- **The chrome**: on every screen the brand row is ☰ · logo · the product's
+  name (which gives way only under ~190px of panel); the ☰ is a borderless
+  icon that takes a background on hover, while the corner's floating one
+  keeps its edge because it sits over the document, and on a desktop it is the head of
+  the file panel and the editor column starts at the top of the window, so
+  every top group's tab strip is the top of the screen; under the search sits
+  **Pinned**, then **Chats** (a compose button, the five most recent
+  conversations, and a ⋯ row that opens the rest in place) and **Files** —
+  one scrolling list with sticky section headers, not a fixed block above a
+  scrolling tree. ☰ (or Alt+B) collapses the panel to nothing, remembered
+  per browser (`kbNavHidden`), and a corner control keeps ☰ and a compose
+  button reachable. A tab strip is 38px in deep blue and 44px in the
+  Notion-style themes, and 44px on any touch screen. The divider between two
+  groups is a hairline with a 5px invisible grab zone around it (a painted
+  5px handle read as a trough of page background between the panes), and it
+  is the only line there — the panes draw no border of their own against it. On a phone the brand row is a full-width top bar
+  with the strip directly beneath it, holding ☰ and the brand only — a new
+  chat comes from the drawer's Chats section. The document bar (path, history,
+  presence, Rich | Source, the pencil, the access badge — the pen / eye is a button that opens "who can open this") is one element that
+  lives inside the active document's group — under its strip on a desktop, at
+  the group's bottom on a phone, where it steps aside for the keyboard row.
+  The formatting dock floats over the same group. Only a group's visible tab
+  is highlighted; the document the header describes keeps its `.active`
+  class for the tests and the URL, not a look.
+- **The written column**: one inset (`--gutter`, computed per pane on
+  `.cm-editor`) positions the text, and everything that sits with it —
+  quotations, tables, list markers. A code block is a card aligned to that
+  column in the Notion-style themes on a desktop, where the gutter is wide,
+  and a full-bleed tint in deep blue and on any phone, where it is not
+  (`--block-inset`). List lines hang: the marker sits in the margin and
+  wrapped lines line up under the first word (`.cm-listline`, `--list-hang`
+  measured from the marker actually there).
+- **Zoom is not a keyboard**: a pinch (a phone's, or a trackpad's) shrinks
+  `visualViewport` exactly as a soft keyboard does. Both handlers — the
+  keyboard row's lift and the viewport pinning that keeps a terminal above
+  the keyboard — check `visualViewport.scale` first and stand down while the
+  page is zoomed, or the app is squeezed into the zoomed rectangle (the top
+  cut off, the document bar looming) and the scroll handler fights every pan.
 - **File tree width**: dragged on the gutter between tree and editor, clamped to
   [140px, 60% of the window], remembered in `localStorage` (`kbSidebarW`) and
   applied at module eval so the tree never snaps after boot. Truncated row names
   reveal themselves as a native tooltip, set on hover only when the label is
   actually cut off.
-- **Terminal panel**: a docked, resizable bottom panel with its own terminal
-  tabs (`＋` spawns, `×` kills, shell `exit` retires its tab — announced by the
-  server's `{"exit":true}` frame). A tab only dies when the *shell* dies: a
-  dropped connection dims the terminal, badges it "reconnecting…", and
-  reattaches on its own (1–15 s backoff; instantly on network-online or
-  tab-visible), replaying only the missed bytes. Reloading the page — or coming
-  back hours later — reattaches to the same running shells (session ids +
-  names persist in `localStorage`, the processes in the backend). Hiding the
-  panel (`▾` / Ctrl+`` ` ``) keeps shells running; killing the last terminal
-  hides it too. The panel is in the page flow, not an overlay — closed means
-  the editor gets the space back. The panel is a second, separate system
-  next to the editor panes; the designed successor — one grid of tab groups
-  where a terminal is a tab kind — is in [unified-views.md](unified-views.md)
-  (not built).
+- **Terminals**: tabs of kind `term` — xterm + PTY websocket each — in the
+  dock unless dragged elsewhere. `＋` spawns in the dock, `×` kills, shell
+  `exit` retires its tab (the server's `{"exit":true}` frame). A tab only dies
+  when the *shell* dies: a dropped connection dims the terminal, badges it
+  "reconnecting…", and reattaches on its own (1–15 s backoff; instantly on
+  network-online or tab-visible), replaying only the missed bytes. Reloading
+  the page reattaches the same running shells wherever their tabs were
+  (session ids + names persist with the layout, the processes in the
+  backend); a restored terminal is a "⟳ name" placeholder in its group until
+  whoami has answered. Ctrl+`` ` `` toggles the dock when it has tabs, goes
+  to a terminal that lives elsewhere when it is empty, and spawns one only
+  when there is none anywhere. **A phone has no panel at all**: the screen
+  holds one group, so a terminal is simply a tab in it (`placePane` sends
+  the dock's kinds to the active group, and a session built on a desktop
+  has its panel tabs lifted into the workspace on arrival). The dock is in
+  the page flow, not an overlay
+  — folded (▾, Ctrl+`) it is a one-line handle at the bottom of the editor
+  area ("▴ Terminal · bash 1"), so nothing open is ever invisible; its size
+  persists. On a phone the dock is the terminal sheet and takes only
+  terminals; a document dropped there is refused with a toast. The touch
+  keybar is one fixed row under whichever group the keyboard is in, when
+  that group shows a terminal.
+- **Agent chat**: a tab of kind `chat` (top-right button, Alt+C) that drives
+  an AI coding agent — Claude Code, Codex, Gemini CLI and the rest of the ACP
+  registry — through the person's backend, which runs the agent as them in
+  the knowledgebase and keeps it alive across reloads. Streamed markdown, tool
+  calls as cards, diffs, permission prompts, plans, slash commands, modes,
+  sign-in from the picker. [agent-chat.md](agent-chat.md).
 - **Cron panel**: "Cron" in the user menu opens the user's crontab (§2 endpoints):
   list, add (with presets), pause/resume, delete.
 

@@ -226,7 +226,7 @@ ollsoft-company-os/
 ├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · unified-views (design) · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · unified-views · agent-chat · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
 ```
 
 **Created on the box by the installer** (not in this repo):

@@ -32,6 +32,12 @@ information in it may as well not exist.
 - **No filler** — no restating the heading, no "as mentioned above", no summary
   of what the reader just read.
 - **Short sections.** Past ~10 lines, split it or cut it.
+- **Never hard-wrap a sentence.** One paragraph is one line in the file,
+  however long; one bullet is one line. The app wraps text to the reader's
+  screen, so a newline you add mid-sentence becomes a break mid-sentence on
+  every phone, and a bullet split across two lines reads as two ragged
+  fragments. Start a new line only for a new paragraph, a new list item, a
+  heading or a code block — never to keep the file under 80 columns.
 
 Delete every sentence carrying no new information, then reread and cut again.
 Same goes for your replies: don't hand back a long summary of a short change.

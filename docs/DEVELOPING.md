@@ -33,6 +33,15 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
 
 ## Testing
 
+The layout model has JavaScript unit tests that need no browser and no box:
+
+```bash
+node --test tests/js/*.test.mjs      # layout.js: normalize, v1 migration, the v1 shadow, the phone plan, caps
+```
+
+CI runs them right after the installer. Everything else is Python, below.
+
+
 ```bash
 .venv/bin/python -m pytest tests/ -q          # full suite
 .venv/bin/python -m pytest tests/cli -q       # fast (httpx only)
@@ -98,6 +107,19 @@ sudo -u kbindexer psql -d kb -f your_migration.sql
   it in `indexer.py` (`stat_row`/`upsert_file` + `reconcile_perms`), and reference
   it in `kb.can_read` if it affects visibility. Migrate the running DB.
 
+### A new kind of view (a tab that shows something new)
+
+Register it once with `registerView(kind, {…})` from `frontend/src/views.js`
+— label, icon, how to `open(t, spec)` into the tab's element, what to
+`serialize` for the session record, how to `restore` a persisted spec, where
+it opens by default (`placement`: the active group, the dock, or a side
+column) and whether it is a document the header describes. The shell does
+the rest: tab strips, drag and drop, splits, the dock, persistence, keyboard
+focus, restore. `chat.js` is the worked example (a lazily loaded chunk);
+documents, artifacts, secrets and terminals are registered the same way in
+`app.js`. Commands and shortcuts a module adds go through `registerCommand`;
+buttons in the chrome go into a named slot (`slot("topbar")`).
+
 ## Gotchas that will bite you
 
 - **Install into the platform venv by interpreter.** `sudo /opt/kb-venv/bin/python
@@ -156,13 +178,6 @@ natural next steps.
   and durable `^block-id` references (the `block_ref` column exists but isn't
   auto-assigned); optionally a block-based (Notion-style) editor instead of
   CodeMirror-on-plaintext.
-- **Unified views (one layout for documents and terminals).** Today the editor
-  panes and the terminal panel are two systems; the design in
-  [unified-views.md](unified-views.md) makes a terminal a tab in a grid of
-  tab groups (columns of stacks) plus a dock that keeps the bottom-panel UX by default,
-  so a terminal can be dragged beside, under or over a document, or full
-  screen, on any screen shape. Five shippable steps, each keeping the suite
-  green; the six decisions to take first are listed at its end.
 - **S3/blob attachments.** Currently local files only (deliberate for a single
   box); an S3 path with signed URLs gated by file permissions is the scale story.
 - **Multi-machine.** Everything assumes one box (OS users, inotify, local files).

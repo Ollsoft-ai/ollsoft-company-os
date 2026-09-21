@@ -8,7 +8,7 @@ overwritten by a re-run or an upgrade.
 |---|---|---|
 | `CLAUDE.md` | `<repo>/.claude/CLAUDE.md` | Agent context: what this repo is and how to behave in it. `.claude/` is Claude Code's discovery path and holds agent context only. |
 | `egress.json` | `<repo>/.os/egress.json` | Per-artifact network allow-list. Empty (deny-all) by default; the only way an artifact reaches the network. |
-| `launchers.json` | `<repo>/.os/launchers.json` | Buttons in the UI's launcher bar. Default: one terminal button that runs `claude`. |
+| `launchers.json` | `<repo>/.os/launchers.json` | The company's pinned items, listed in every sidebar's Pinned section. Default: one terminal pin that runs `claude`. |
 
 `<repo>/.os/` is the platform's own config directory (root:kb-users, everyone
 reads, root writes): launcher buttons, the egress allow-list and settings live

@@ -1,9 +1,54 @@
 # Unified views — one layout for documents, artifacts and terminals
 
-**Status: designed, not built** (2026-09-20). Companion to ARCHITECTURE.md §8,
-which describes what exists today. This is the plan for replacing the two
-systems in the UI shell — editor panes on one side, the terminal panel on the
-other — with one, without changing what a user sees by default.
+**Status: built** (designed and shipped 2026-09-20). ARCHITECTURE.md §8
+describes the result in brief; this is the design it was built from, kept
+because it says why. What was built differs from the plan below in three
+places: the layout model and the view-kind registry live in
+`frontend/src/layout.js` and `frontend/src/views.js` (§8 step 1 called the
+registry out only as a direction); the dock's side is changed from the
+palette, not a setting (§6); the phone keeps its keybar inside the dock
+(§4.5's fixed keybar was not needed while nothing but the dock shows a
+terminal on a phone); and touch got a real drag in the first version after
+all — hold a tab a third of a second to lift it, carry it, let go on a strip,
+a group's middle, its top or bottom, or the panel (§6 had deferred it to a
+long-press menu). Sections 2 and 9 describe the code as it was *before*;
+their line numbers are historical.
+
+Hardened 2026-09-21 after a torture pass over every action in every layout at
+every size. The invariants the code now keeps, whatever the order of folds,
+maximizes, closes and drags: the workspace always shows at least one group
+(the last open one refuses to fold, an emptied group goes and the last one
+stays open, a saved layout with everything folded opens its first group);
+what you activate is what you see (a folded group opens, another group's
+maximize is undone, a document opened while a group is maximized lands in
+that group); a folded group's handle takes a dropped tab; a split handle
+never writes a negative share; the phone's sheet remembers half or full
+whichever button asked; sizes are applied as shares of the *visible* groups
+only, so nothing leaves a gap when a sibling folds, maximizes away or
+leaves (flex hands out only `sum(flex-grow)` of the space when that sum is
+below 1 — which every reloaded fraction was); a left dock's handle drags the
+right way in its `row-reverse`; the dock's drag and its record agree on
+[0.1, 0.9]; the keyboard on a folded handle acts on that group, and a
+middle-click on the handle closes the tab it names; Ctrl+` while a group is
+maximized restores the layout and goes to the terminal; under the phone
+breakpoint groups only stack, and a stack refuses a group it cannot give
+110px; a group too small for the floating formatting toolbar hides it
+(mouse screens only). A second pass verified all of that and added: the
+sheet's automatic "full" is a phone's (coarse pointer), never a narrow
+desktop window's; the dock's handle hides while a group is maximized even
+after the breakpoint is crossed; the dock's drag clamps to [0.1, 0.9] while
+dragging, not on release; the keyboard never lands on `<body>` (`refocus()`
+after close / fold / maximize); "Focus the next group" reaches folded
+handles; narrow strips yield ＋ and ▾ before a tab name; a drop on a tab's
+own group is a no-op without a hint; a drawer opened over a maximized
+group on a phone can be dismissed.
+A later pass removed what the window system did not need: the per-strip ＋
+(a terminal comes from Ctrl+`, Ctrl+Shift+`, the menu or the palette) and
+the ⤢ of a group that is the only one holding tabs — maximizing a lone
+group does nothing, so the button is not offered.
+Regression tests: `tests/e2e/test_unified_views.py`. Still open: shortcuts
+while the keyboard is inside an artifact's iframe (the sandbox keeps the
+keys; the fix is a forwarder script inside artifacts — a backend change).
 
 ## 1. Goal
 
@@ -561,3 +606,82 @@ markup, where the element moves).
 - **Touch long-press** move menu; **group-move / group-focus key chords**
   once a free set is agreed (arrows are taken).
 - **Per-group ＋** for terminals, if dragging from the dock proves tedious.
+
+## 13. The chrome to the edges (designed and built 2026-09-21)
+
+What the first day of use showed: three bars sat above a document on a phone
+(the top bar, the document bar, the tab strip) while the top bar was mostly
+empty on a desktop; and the file panel had a button on a phone (☰) but only a
+shortcut on a desktop (Alt+B). What was built, the same night, differs from
+the sketch below in one respect: the document bar (path and actions) is one
+element that lives inside the *active document's* group — under its strip on a
+desktop, at the group's bottom on a phone — rather than one bar per group;
+per-group actions remain the next step. On a desktop the brand row is the
+file panel's head (☰ · logo · chat) and the editor column starts at the top of
+the window, so the first strips are the top of the screen; the Pinned rows sit
+under the search, above the chats and the files; ☰ collapses the panel
+(remembered) and a corner control keeps ☰ and the chat reachable. A phone
+shows the same three sections in the drawer.
+
+### Desktop
+
+```
+┌ ☰  Ollsoft Company OS    company / plans / business-plan.md              ▢ 💬 ┐
+├ [ business-plan.md ×][ notes.md ×]          ⟲  KR  Rich | Source  ✎  ● ┤   ← the group's strip
+│ document                                                                     │
+```
+
+- **The tab strips move to the top of their groups' area, directly under the
+  top bar**: the document bar between them goes away. The strip is the
+  first row of every group already; this only removes the row above it.
+- **The breadcrumb moves into the top bar's empty middle**, describing the
+  active document, as Notion and Finder title their windows. It stays one
+  global line because it is the URL.
+- **The document's actions move to the right end of its own group's strip**
+  (history, presence, Rich | Source, the pencil, the access badge) — the way
+  VS Code keeps editor actions in the tab bar. Per group, so a split shows
+  each document's presence and mode, which the global bar never could.
+  Implementation: `renderPresence`, `renderSyncBadge`, `updateModeUI` and
+  `setAccessBadge` take a group and render into its `.group-actions`
+  container; the elements move, the ids stay on the focused group's copies.
+- **☰ is visible on the desktop too** and collapses the file panel to
+  nothing (today's `nav-hidden`, remembered), with the same 44px hit target
+  as on a phone; Alt+B stays. A collapsed panel leaves a slim edge to bring
+  it back, and the search stays reachable from the palette.
+
+### Phone
+
+```
+┌ ☰  Ollsoft Company OS                                          💬 ┐
+├ [ business-plan.md ×][ notes.md ×]                                ┤   ← tabs right under the top bar
+│ document                                                          │
+│                                                                   │
+├ business-plan.md         ⟲   KR   Rich | Source   ✎   ●          ┤   ← the document bar, at the thumb
+└ ─────────────────────────────────────────────────────────────── ┘
+```
+
+- **Tabs on top, the document bar at the bottom**: Safari's bottom URL bar,
+  for the same reason — the thumb lives there. The bar holds the path
+  (truncated from the left) and the same actions as the desktop strip.
+- **When the keyboard is up, the formatting row takes the bar's place**
+  (it is already fixed to the keyboard's top edge), so nothing stacks; when
+  the terminal sheet is full screen the bar hides (the sheet has its own
+  header); the chat's composer stays where it is (the bar is a document's).
+- **Group actions**: on a phone each group's strip keeps only the tabs; the
+  bottom bar describes the focused group's document, and switching groups
+  switches the bar.
+
+### Order of work
+
+1. Move the breadcrumb into the top bar and the actions into the strips
+   (desktop); hide the old document bar. One `.group-actions` per group,
+   render functions parameterised by group. The e2e tests that read
+   `#doc-title`, `#mode-switch`, the badge and the avatars keep their ids
+   (they move with the focused group).
+2. The phone's bottom bar: a fixed row under the content, hidden while the
+   keyboard row shows or the sheet is full screen; the tests in
+   `test_mobile.py` that look for the mode switch find it there.
+3. ☰ on the desktop; a remembered collapsed state; a 6px edge to reopen.
+
+Left alone: the layout model, the dock, the chat, the persistence — this is
+chrome, not structure.

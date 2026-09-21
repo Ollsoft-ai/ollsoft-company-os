@@ -292,3 +292,17 @@ Do **not** point a network at `:8300`. There is no TLS, and the login throttle i
 a backstop rather than a front door. Read [remote-access.md](remote-access.md)
 and [SECURITY.md](SECURITY.md) first, and rotate any passwords generated during
 install.
+
+## Agent chat (optional)
+
+The chat button drives AI coding agents over ACP ([agent-chat.md](agent-chat.md)).
+They are Node programs installed once per server, shared by everyone:
+
+```bash
+sudo bash scripts/install-agents.sh    # a private Node 22 + Claude, Codex, Gemini into /opt/kb-agents
+```
+
+The system's Node (Ubuntu's 18) is left alone; the agents get their own.
+An admin can also install them from the chat's picker.
+Without any of them the platform runs unchanged; the picker says what is
+missing. Each person signs in to an agent themselves, from the picker.

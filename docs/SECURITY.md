@@ -249,3 +249,29 @@ The confirmed findings are pinned by regression tests:
 `tests/cli/test_security_fixes.py`, `test_security_remediation.py`,
 `test_share_reachable.py`, and `tests/e2e/test_artifact_scope.py` /
 `test_artifact_xss.py`. Run `.venv/bin/python -m pytest tests/ -q`.
+
+## Agents in the chat
+
+The agent chat ([agent-chat.md](agent-chat.md)) spawns AI coding agents as
+subprocesses of the person's own backend — as their OS account, in the
+knowledgebase — and bridges their stdio to the browser. Consequences:
+
+- **No second permission model.** The client does not advertise ACP's
+  file-system or terminal capabilities; the agent reads, writes and runs
+  things itself, and the kernel and the ACLs police it exactly as they police
+  the person's terminal. Nothing the agent does can exceed what the person
+  can do.
+- **Credentials stay the person's.** Sign-in runs the agent's own login in a
+  terminal tab and lands in their home directory (`~/.claude`, `~/.codex`,
+  `~/.gemini`, …). A pasted API key is written to `users/<them>/.os/agent-keys.json`
+  (0600, never synced, indexed or versioned) and handed to that agent's
+  process as an environment variable. There is no company-wide key.
+- **The agent binaries are shared, root-owned code** in `/opt/kb-agents`,
+  installed by an admin (`POST /admin/agents/install` runs `npm install` as
+  root, one job at a time, audited as `agents.install`) or by hand. Installing
+  an agent is installing third-party code that every person may then run as
+  themselves — treat the catalogue as you would any package list.
+- **Process hygiene**: one process per person and agent, reaped after thirty
+  idle minutes, killed with the backend (the hub's cgroup). A permission the
+  agent asks for while nobody is attached waits at most twenty minutes and is
+  then answered "cancelled".
