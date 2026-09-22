@@ -50,6 +50,14 @@ These are normal on this box. Seeing them is not a finding:
   `caught up` is noise, full stop — a bulk sidecar resweep legitimately puts the
   indexer minutes behind and trips the heartbeat's 180s threshold. Judge the
   re-check, never the original alert's timestamp.
+- **A file kb-convert cannot read because its owner keeps it private.** A
+  document at mode 0600 in somebody's own folder is not a fault: `kbindexer`
+  is meant to be locked out, the sidecar and the index entry are meant to be
+  missing, and nobody but the owner can search it. Confirmed for
+  `users/krystof/prehled-pronajmu-usti-2kk-2plus1.xlsx` on 2026-09-22 —
+  deliberately private, do not raise it again. Report an unreadable file only
+  when the mode says it SHOULD be readable (group or world) and something
+  else — an ACL, an ancestor's mode — is what is blocking.
 - **Non-platform units that have been failed since boot** — `cloud-init`,
   `systemd-networkd-wait-online`, and similar VPS provisioning leftovers. If
   `systemctl show <unit> -p ActiveEnterTimestamp` predates the platform's
