@@ -165,6 +165,7 @@ class Embedder:
         self.last_error_at: float | None = None
         self.warnings: list[str] = []
         self.dims_ok: bool | None = None
+        self.has_table = True
         self._noembed: dict[str, tuple[float, bool]] = {}
         self.key_reloaded = False
         self.service: Service | None = None
@@ -445,27 +446,43 @@ class Embedder:
         return TICK
 
     async def dims_match(self) -> bool:
+        """Is there a vector table, and is it this model's width? Both are
+        STATES — a box on pgvector < 0.7 has no table at all (schema.sql skips
+        it) and simply stays on full-text search."""
         if self.dims_ok is None:
             conn = await self.db()
             async with conn.cursor() as cur:
-                await cur.execute("SELECT atttypmod FROM pg_attribute "
-                                  "WHERE attrelid = 'kb.embeddings'::regclass AND attname = 'embedding'")
-                row = await cur.fetchone()
+                await cur.execute("SELECT to_regclass('kb.embeddings') IS NOT NULL")
+                self.has_table = bool((await cur.fetchone())[0])
+                row = None
+                if self.has_table:
+                    await cur.execute("SELECT atttypmod FROM pg_attribute "
+                                      "WHERE attrelid = 'kb.embeddings'::regclass AND attname = 'embedding'")
+                    row = await cur.fetchone()
             width = row[0] if row else None
-            self.dims_ok = width == self.cfg.dims
-            if not self.dims_ok:
+            self.dims_ok = self.has_table and width == self.cfg.dims
+            if not self.has_table:
+                log.error("no kb.embeddings table: pgvector >= 0.7 is needed (halfvec); search stays "
+                          "full-text. Upgrade pgvector, re-run scripts/deploy.sh, restart kb-embedd.")
+            elif not self.dims_ok:
                 log.error("KB_EMBED_DIMS=%s but kb.embeddings holds %s-dimension vectors; "
                           "not embedding (docs/semantic-search.md, 'Changing the model')",
                           self.cfg.dims, width)
         if not self.dims_ok:
-            self.paused = "dims mismatch"
-            self.paused_reason = f"KB_EMBED_DIMS={self.cfg.dims} does not match the table"
+            if not self.has_table:
+                self.paused = "unsupported"
+                self.paused_reason = "pgvector 0.7 or newer is needed; search is full-text only"
+            else:
+                self.paused = "dims mismatch"
+                self.paused_reason = f"KB_EMBED_DIMS={self.cfg.dims} does not match the table"
         return bool(self.dims_ok)
 
     async def gc(self) -> None:
         """Orphaned vectors (no chunk carries their hash) get a grace period,
         then go; vectors for text now out of scope go at once; old counters
         are dropped. The ledger itself is kept for good."""
+        if not await self.dims_match() and not self.has_table:
+            return                             # no vectors on this box to collect
         conn = await self.db()
         async with conn.cursor() as cur:
             await cur.execute("UPDATE kb.embeddings e SET missing_since = now() WHERE missing_since IS NULL "
@@ -502,7 +519,8 @@ class Embedder:
             await cur.execute(
                 "SELECT c.hash, c.file_path, (e.hash IS NOT NULL), x.attempts "
                 "FROM kb.chunks c LEFT JOIN kb.embeddings e ON e.hash = c.hash "
-                "LEFT JOIN kb.embed_failures x ON x.hash = c.hash")
+                "LEFT JOIN kb.embed_failures x ON x.hash = c.hash" if self.has_table else
+                "SELECT c.hash, c.file_path, false, NULL::int FROM kb.chunks c")
             seen: dict[bytes, tuple[bool, int | None]] = {}
             excluded: set[bytes] = set()
             for h, path, done, attempts in await cur.fetchall():
@@ -753,7 +771,7 @@ class Service:
         if not e.settings.get("search.enabled", True):
             return self.refuse(503, "disabled", "semantic search is turned off in Settings")
         if e.dims_ok is False:
-            return self.refuse(503, "dims", "vector width does not match the index")
+            return self.refuse(503, e.paused or "dims", e.paused_reason or "no usable vector index")
         now = time.monotonic()
         hit = self.cache.get(text)
         if hit and now - hit[0] < Q_CACHE_SECONDS:

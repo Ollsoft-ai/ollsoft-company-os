@@ -601,3 +601,47 @@ def test_a_database_that_went_away_is_an_answer_not_a_traceback():
         raise psycopg.errors.AdminShutdown("terminating connection due to administrator command")
     r = asyncio.run(svc.guarded(boom)(None))
     assert r.status == 503 and svc.conn is None and "database" in svc.last_error
+
+
+@needs_db
+def test_without_halfvec_the_schema_installs_and_the_worker_says_unsupported(tmp_path, monkeypatch):
+    """pgvector < 0.7 (Ubuntu 24.04's own package) has no halfvec: the platform
+    must still install — full-text search included — and kb-embedd must say
+    so instead of failing or spending."""
+    db = f"kb_nohalf_{os.getpid()}_{int(time.time() * 1000) % 10**6}"
+    me = subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
+    sh = lambda *a: subprocess.run(["sudo", "-n", "-u", "postgres", *a], capture_output=True, text=True)  # noqa: E731
+    assert sh("createdb", "-O", me, db).returncode == 0
+    try:
+        sql = (ROOT / "scripts/schema.sql").read_text().replace("AUTHORIZATION kbindexer", "AUTHORIZATION CURRENT_USER")
+        sql = re.sub(r"\bTO kb_users\b", "TO PUBLIC", sql)
+        sql = sql.replace("to_regtype('halfvec')", "to_regtype('halfvec_of_a_future_pgvector')")
+        r = subprocess.run(["psql", "-d", db, "-v", "ON_ERROR_STOP=1", "-q"], input=sql, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert "semantic" in r.stdout or "halfvec" in r.stdout      # the NOTE is printed
+        assert psql(db, "SELECT to_regclass('kb.chunks') IS NOT NULL, to_regclass('kb.embeddings') IS NULL, "
+                        "to_regprocedure('kb.search_vec(halfvec,int)') IS NULL") == "t|t|t"
+        repo = tmp_path / "repo"
+        (repo / ".os").mkdir(parents=True)
+        (tmp_path / "run").mkdir()
+        monkeypatch.setattr(common, "PG_DB", db)
+        monkeypatch.setattr(common, "REPO_ROOT", repo)
+        monkeypatch.setattr(kbsettings, "company_file", lambda: repo / ".os" / "settings.json")
+        monkeypatch.setattr(embedd, "STATUS_DIR", tmp_path / "run")
+        monkeypatch.setattr(embedd, "STATUS_FILE", tmp_path / "run" / "status.json")
+        add_file(db, "company/plan.md", DOC)
+        p = Scripted()
+        w = worker(p)
+
+        async def go():
+            await w.tick()
+            await w.gc()
+            await w.write_status()
+            await w.conn.close()
+        asyncio.run(go())
+        assert p.n == 0 and w.paused == "unsupported"
+        import json
+        st = json.loads(embedd.STATUS_FILE.read_text())
+        assert st["paused"] == "unsupported" and st["chunks"] > 0 and st["embedded"] == 0
+    finally:
+        sh("dropdb", "--if-exists", "--force", db)

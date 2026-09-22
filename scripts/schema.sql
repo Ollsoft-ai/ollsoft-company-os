@@ -233,6 +233,12 @@ CREATE POLICY chunks_read ON kb.chunks FOR SELECT
     USING (file_path IN (SELECT v.path FROM kb.visible_files v WHERE v.usr = session_user));
 GRANT SELECT ON kb.chunks TO PUBLIC;
 
+-- Everything that stores or searches vectors needs pgvector >= 0.7 (halfvec).
+-- Without it the rest of the platform — full-text search included — installs
+-- and runs; kb-embedd reports "unsupported" and nothing is sent anywhere.
+-- scripts/install.sh fetches a current pgvector when the distribution's is older.
+SELECT to_regtype('halfvec') IS NOT NULL AS kb_has_halfvec \gset
+\if :kb_has_halfvec
 -- halfvec: half the memory of vector for no measurable loss at this width,
 -- and HNSW indexes `vector` only up to 2,000 dimensions anyway. The width is
 -- the installation's KB_EMBED_DIMS; kb-embedd refuses to run on a mismatch.
@@ -267,6 +273,9 @@ END $$;
 -- (VACUUM FULL kb.embeddings — seconds at this size).
 ALTER TABLE kb.embeddings ALTER COLUMN embedding SET STORAGE PLAIN;
 REVOKE ALL ON kb.embeddings FROM PUBLIC;
+\else
+\echo 'NOTE: pgvector < 0.7 (no halfvec) — the vector table and kb.search_vec are skipped; search stays full-text. docs/semantic-search.md'
+\endif
 
 -- A chunk the provider refused. Retried on a widening schedule, parked for
 -- good after `attempts` reaches the limit — it can never loop.
@@ -346,6 +355,7 @@ REVOKE ALL ON kb.spend_flags FROM PUBLIC;
 -- who can see 3% of the corpus would get a handful of hits out of 100. With
 -- relaxed_order pgvector keeps walking the graph until the LIMIT is met or
 -- max_scan_tuples says enough.
+\if :kb_has_halfvec
 -- Nearest sections the caller may read. Two steps, deliberately:
 --   1. the POOL nearest vectors from the HNSW index alone (a MATERIALIZED
 --      CTE: one table, ORDER BY distance, LIMIT — the shape the index serves);
@@ -392,3 +402,4 @@ END
 $$;
 REVOKE EXECUTE ON FUNCTION kb.search_vec(halfvec, int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION kb.search_vec(halfvec, int) TO kb_users;
+\endif

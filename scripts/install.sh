@@ -109,6 +109,21 @@ apt-get install -y -qq \
 PGMAJ="$(psql --version | grep -oE '[0-9]+' | head -1)"
 apt-get install -y -qq "postgresql-${PGMAJ}-pgvector" \
   || die "no pgvector package for PostgreSQL ${PGMAJ}. Install it manually, then re-run with --no-packages."
+# Semantic search stores halfvec vectors: pgvector >= 0.7. Some distributions
+# still ship 0.6 (Ubuntu 24.04). The PostgreSQL project's own apt repository
+# carries current builds for the SAME server version; add it only when needed,
+# with the helper postgresql-common ships for exactly this.
+pgv="$(dpkg-query -W -f='${Version}' "postgresql-${PGMAJ}-pgvector" 2>/dev/null || echo 0)"
+if dpkg --compare-versions "${pgv#*:}" lt 0.7; then
+  PGDG=/usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
+  if [ -x "$PGDG" ] && "$PGDG" -y >/dev/null 2>&1 \
+     && apt-get install -y -qq "postgresql-${PGMAJ}-pgvector"; then
+    echo "  pgvector $(dpkg-query -W -f='${Version}' "postgresql-${PGMAJ}-pgvector") from apt.postgresql.org"
+  else
+    echo "  WARNING: pgvector ${pgv} is older than 0.7 — semantic search will be unavailable" \
+         "(full-text search is unaffected). docs/semantic-search.md"
+  fi
+fi
 fi
 
 command -v psql >/dev/null || die "postgres client not found"
@@ -328,6 +343,8 @@ SQL
 runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='kb'" | grep -q 1 \
   || runuser -u postgres -- createdb -O kbindexer kb
 runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+# a newer pgvector package only takes effect in the database once updated
+runuser -u postgres -- psql -d kb -qc "ALTER EXTENSION vector UPDATE;" >/dev/null 2>&1 || true
 # Postgres ships with a 128 MB buffer cache; every search reads all of
 # kb.blocks (RLS: no index is reachable, see schema.sql) plus the vectors, and
 # on a real knowledgebase that is more than 128 MB — each search then evicts

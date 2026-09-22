@@ -92,6 +92,7 @@ fi
 echo "== database schema =="
 DB="${KB_PG_DB:-kb}"
 runuser -u postgres -- psql -d "$DB" -qc "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null
+runuser -u postgres -- psql -d "$DB" -qc "ALTER EXTENSION vector UPDATE;" >/dev/null 2>&1 || true
 applied=0
 for try in 1 2 3 4 5; do
   if PGOPTIONS="-c lock_timeout=3s" runuser -u kbindexer -- \

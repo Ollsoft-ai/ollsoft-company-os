@@ -35,7 +35,11 @@ sudo apt-get install -y \
 
 `acl` (setfacl/getfacl) and `inotify-tools` are load-bearing — sharing and the
 file daemon depend on them. The pgvector package name tracks your Postgres major
-version; the installer detects it. Confirm the cluster is up and uses peer auth:
+version; the installer detects it. Semantic search needs **pgvector ≥ 0.7**
+(`halfvec`); where the distribution ships older (Ubuntu 24.04 has 0.6), the
+installer adds the PostgreSQL project's apt repository and installs a current
+pgvector for the same server version. Without it everything else — full-text
+search included — works, and semantic search reports `unsupported`. Confirm the cluster is up and uses peer auth:
 
 ```bash
 pg_lsclusters                                        # should show <major>/main online

@@ -8,7 +8,9 @@ same search serves people (Ctrl+K) and agents (`kb-search`), and every result
 is something the asker could `cat`.
 
 It is optional. Without provider keys the platform runs exactly as before:
-full-text search, nothing sent anywhere.
+full-text search, nothing sent anywhere. It needs pgvector ≥ 0.7 (`halfvec`),
+which `install.sh` fetches when the distribution's is older; without it the
+vector table is skipped and `kb-embedd` reports `paused: unsupported`.
 
 ## How a search runs
 
