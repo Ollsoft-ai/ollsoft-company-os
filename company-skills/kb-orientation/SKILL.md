@@ -128,6 +128,30 @@ Whenever a share does not behave, verify from the other person's side rather
 than guessing — `sudo -u <them> test -r <path> && echo yes` answers it in one
 line, and `sudo -u kbindexer test -r <path>` answers the search question.
 
+# Driving the app from a shell — your own backend socket
+
+Everything the web app does for *you* is served by a process running **as
+you**, listening on `/run/kb/users/<you>/backend.sock` (mode 0600, yours).
+You do not need a browser, a password or a session to use it:
+
+```bash
+S=/run/kb/users/$(whoami)/backend.sock
+curl -s --unix-socket $S http://x/api/settings          # your settings (+ the company's)
+curl -s --unix-socket $S -X POST -H 'Content-Type: application/json' \
+     -d '{"set":{"ui.theme":"dark"}}' http://x/api/settings
+curl -s --unix-socket $S http://x/api/inbox             # your notifications
+curl -s --unix-socket $S http://x/api/fs/trash          # what you deleted, and where from
+curl -s --unix-socket $S http://x/api/launchers         # your pinned items
+```
+
+The socket is the same authority you have — the kernel already decided that
+by owning it — so there is nothing to log in to and nothing extra you can
+reach through it.
+
+What is NOT there, on purpose: anything that needs root. Company-wide
+settings, accounts and groups are `/admin/*` on the hub (an admin, in the
+app), and a public link needs bind mounts. For those, ask a human.
+
 # Sharing with someone who has NO account here — a public link
 
 Groups and ACLs only work for people the box knows. For a client, a lawyer or

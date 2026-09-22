@@ -14,7 +14,7 @@ and whatever joins it — is a setting. Nothing is a config file of its own.
 |---|---|---|
 | shipped default | `kb_platform/settings.py` in the platform repo (`REGISTRY`) | platform developers |
 | company | `/srv/kb/.os/settings.json` (root-owned, everyone reads) | an admin only — the Settings dialog's Company tab, or `POST /admin/settings`. If you run as a non-admin, ask one; do not try to write it |
-| yours | `/srv/kb/users/<you>/.os/settings.json` (0600) | you. Edit it with any tool, or `POST /api/settings` |
+| yours | `/srv/kb/users/<you>/.os/settings.json` (0600) | you. Edit it with any tool, or `POST /api/settings` — from a shell that is `curl --unix-socket /run/kb/users/<you>/backend.sock http://x/api/settings`, no session needed (see **kb-orientation**) |
 
 Both files are flat maps of `"key": value`:
 
