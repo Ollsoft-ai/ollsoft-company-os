@@ -191,7 +191,8 @@ def shared_doc():
     """A real, live public link to a markdown document — revoked afterwards."""
     a = api("alice")
     path = doc(f"pubdoc-{int(time.time() * 1000)}.md")
-    write(a, path, "# The brief\n\n- [ ] one thing\n\n| What | Who |\n| --- | --- |\n| **ship** | you |\n")
+    write(a, path, "# The brief\n\n- [ ] one thing\n\n| What | Who |\n| --- | --- |\n"
+                   "| **ship** | you |\n| line<br>break | y |\n")
     made = {}
 
     def make(mode="view"):
@@ -371,6 +372,30 @@ def test_a_link_to_one_file_cannot_reach_its_neighbours(browser, shared_doc):
         assert raw.status_code == 404 and "not for strangers" not in raw.text
     finally:
         a.post("/api/fs/delete", json={"path": neighbour, "permanent": True})
+
+
+@container
+def test_the_page_wears_the_readers_theme_and_renders_a_line_break(browser, shared_doc):
+    """Nobody out here has an account, so the theme cannot be the sharer's —
+    the reader's own device is asked instead (krystof: "why is it getting
+    shared in the blue theme?"). And `<br>`, the only line break GFM allows
+    inside a table cell, has to be a line break rather than five characters.
+    """
+    url, _ = shared_doc("view")
+    for scheme, want in (("light", "light"), ("dark", None)):
+        ctx = browser.new_context(color_scheme=scheme)
+        page = ctx.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+            page.wait_for_selector("table.cm-table", timeout=15000)
+            got = page.evaluate("() => document.documentElement.dataset.theme || null")
+            assert got == want, f"{scheme} reader got theme {got!r}"
+            # the page's own background follows, without a flash of the other one
+            light = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
+            assert (light == "rgb(255, 255, 255)") == (scheme == "light"), light
+            assert page.locator('td[data-cell] br').count() == 1, "a <br> in a cell is literal"
+        finally:
+            ctx.close()
 
 
 @container

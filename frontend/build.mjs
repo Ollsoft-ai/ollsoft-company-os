@@ -48,7 +48,7 @@ for (const f of [
 // gitignored. Keeping sources out of the output directory is what lets a fresh
 // clone build — and stops every build from dirtying the working tree with a new
 // ?v= stamp.
-for (const f of ["app.html", "login.html", "style.css",
+for (const f of ["app.html", "login.html", "style.css", "share-theme.js",
                  "favicon.svg", "logo.svg", "logo-mark.svg"]) {
   cpSync(`assets/${f}`, `static/${f}`);
 }

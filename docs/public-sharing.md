@@ -132,8 +132,16 @@ leaked token reaches an empty directory a second later — no cache, no
   nothing unsaved, it pulls `__raw` and swaps the text in. A reader sees an
   edit land within seconds; a writer with unsaved text is told rather than
   overwritten.
+- **The reader's device picks the theme.** Nobody out here has an account, so
+  there is no `ui.theme` to honour: a light screen gets the light theme, a
+  dark one keeps the deep-blue chassis. Decided in the page's head, before the
+  first paint, by `assets/share-theme.js` — a classic script, because a module
+  is deferred and would flash the wrong one.
 - **No JavaScript**: the server-rendered markdown (and, for an edit share,
-  the old textarea form) is still there, inside `<noscript>`.
+  the old textarea form) is still there, inside `<noscript>` — with GFM tables
+  turned on (CommonMark has none, so it used to print a paragraph of pipes)
+  and `<br>` allowed back through the escaping, since it is the only line
+  break a table cell can have. Raw HTML stays off otherwise.
 - **Artifacts are not run.** A shared `.html` is shown as source, not
   executed. Running someone's JavaScript on a public origin that also serves
   other people's shares is a cross-share hole waiting to happen. If a client

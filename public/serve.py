@@ -83,7 +83,12 @@ def stamp(st: os.stat_result) -> int:
 
 try:
     from markdown_it import MarkdownIt
-    _MD = MarkdownIt("commonmark", {"html": False, "linkify": True, "typographer": False})
+    # CommonMark has no tables, so this rendered `| a | b |` as a paragraph of
+    # pipes. The two GFM rules are enabled by hand rather than by taking the
+    # "gfm-like" preset, which also turns on linkify and then needs a package
+    # that is deliberately not in this image.
+    _MD = MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": False})
+    _MD.enable(["table", "strikethrough"])
 except Exception:                              # noqa: BLE001 — degrade, never fail to start
     _MD = None
 
@@ -299,6 +304,9 @@ def doc_page(conf: dict, base: str, rel: str, text: str, mtime: int, fallback: s
         "<meta name=referrer content=no-referrer>"
         f"<title>{html.escape(title)}</title>"
         f"<link rel=icon href='/assets/favicon.svg?v={v}'>"
+        # classic, not a module: it has to run before the first paint, or the
+        # page flashes the dark chassis at a reader whose screen is light
+        f"<script src='/assets/share-theme.js?v={v}'></script>"
         f"<link rel=stylesheet href='/assets/style.css?v={v}'>"
         f"<style>{DOC_CSS}</style></head>"
         "<body class='share-doc'>"
@@ -313,9 +321,15 @@ def doc_page(conf: dict, base: str, rel: str, text: str, mtime: int, fallback: s
         "</body></html>").encode()
 
 
+# Raw HTML stays off — a shared document must never be able to run anything
+# here — but a line break inside a table cell has no other spelling in GFM, so
+# that one tag is let back through after the escaping has done its work.
+_BR = re.compile(r"&lt;\s*br\s*/?\s*&gt;", re.I)
+
+
 def render_markdown(text: str) -> str:
     if _MD is not None:
-        return _MD.render(text)
+        return _BR.sub("<br>", _MD.render(text))
     return "<pre>" + html.escape(text) + "</pre>"
 
 
