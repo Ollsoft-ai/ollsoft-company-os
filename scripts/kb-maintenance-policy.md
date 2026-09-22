@@ -64,6 +64,17 @@ These are normal on this box. Seeing them is not a finding:
   current uptime and nothing about the platform is affected, it is scenery. Say
   nothing. (A *newly* failed system unit is a different matter.)
 
+- **`kb-embedd` with sections waiting** (`pending` in
+  `/run/kb/search/status.json`) during a backfill, after a model change or
+  after an indexer restart that touched many files — it works through them at
+  its call limit. Only coverage stuck below 95% for 6 hours is a finding (the
+  heartbeat reports that one itself).
+- **A handful of `parked` sections.** The provider refused those texts; they
+  are retried on a widening schedule and parked, by design, so they can never
+  loop. An admin can retry them from Settings → Company → Search & AI.
+- **`kb-embedd` `paused: brake`** for under a minute — the per-minute call
+  limit doing its job during a backfill.
+
 ## What is REAL — investigate and report
 
 - **A service that is not `active`**, or is in a restart loop
@@ -88,6 +99,14 @@ These are normal on this box. Seeing them is not a finding:
 - **Many convert failures appearing at once**, or the convert queue never
   draining — that is the service, not the documents.
 - **Certificate or tunnel failures that persist** across more than one check.
+- **`kb-embedd` paused for `breaker`, `budget`, `dims mismatch`, `error` or
+  `database`** (`/run/kb/search/status.json`). `breaker` = the provider is
+  down or the key was rejected (check `last_error`; a 401 means the key in
+  `/etc/kb/embed.key` was rotated upstream). `budget` = the day's or month's
+  cap in Settings was reached — say how much was spent and on what
+  (`SELECT kind, sum(calls), sum(usd) FROM kb.spend WHERE day = current_date
+  GROUP BY 1`), and whether that matches normal use. Spend that grows while
+  `embedded` does not is the one pattern that must never be ignored.
 
 ## Judgement, not pattern matching
 

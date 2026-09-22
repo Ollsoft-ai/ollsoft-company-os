@@ -194,3 +194,201 @@ CREATE POLICY blocks_read ON kb.blocks FOR SELECT
 GRANT USAGE ON SCHEMA kb TO PUBLIC;
 GRANT SELECT ON kb.files, kb.blocks, kb.user_groups, kb.visible_files TO PUBLIC;
 GRANT EXECUTE ON FUNCTION kb.can_read(text) TO PUBLIC;
+
+-- ===========================================================================
+-- Semantic search (docs/semantic-search.md)
+--
+-- Three tables, three owners of the truth:
+--   kb.chunks      what the documents SAY, a section at a time — rewritten by
+--                  the indexer with a file's blocks, readable under the same
+--                  RLS, so a user sees a chunk exactly when they see the file;
+--   kb.embeddings  what a chunk MEANS, keyed by the hash of its text and of the
+--                  model that read it. No grant to anyone: vectors are reached
+--                  only through kb.search_vec, which filters by visibility.
+--                  Because the key is content, not a row id, re-indexing a
+--                  file whose text did not change costs nothing — the indexer
+--                  rewrites every row on each restart, and not one cent;
+--   kb.spend       what it COST, per UTC day, in the provider's own reported
+--                  units. kb-embedd checks it before every paid call.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS kb.chunks (
+    file_path  text NOT NULL REFERENCES kb.files(path) ON DELETE CASCADE,
+    seq        int  NOT NULL,              -- order within the file
+    start_line int  NOT NULL,              -- 1-based, inclusive
+    end_line   int  NOT NULL,
+    heading    text,                       -- "Title › Section › Subsection", for display
+    text       text NOT NULL,              -- EXACTLY what is sent to the embedding model
+    hash       bytea NOT NULL,             -- sha256(model id + text): the key into kb.embeddings
+    PRIMARY KEY (file_path, seq)
+);
+-- lines[i]: the file line of text line i+1 (line 0 is the heading trail), so a
+-- search result can point at its best line without reading kb.blocks again.
+ALTER TABLE kb.chunks ADD COLUMN IF NOT EXISTS lines int[];
+CREATE INDEX IF NOT EXISTS chunks_hash_idx ON kb.chunks (hash);
+ALTER TABLE kb.chunks SET (autovacuum_vacuum_scale_factor = 0.02,
+                           autovacuum_analyze_scale_factor = 0.02);
+ALTER TABLE kb.chunks ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS chunks_read ON kb.chunks;
+CREATE POLICY chunks_read ON kb.chunks FOR SELECT
+    USING (file_path IN (SELECT v.path FROM kb.visible_files v WHERE v.usr = session_user));
+GRANT SELECT ON kb.chunks TO PUBLIC;
+
+-- halfvec: half the memory of vector for no measurable loss at this width,
+-- and HNSW indexes `vector` only up to 2,000 dimensions anyway. The width is
+-- the installation's KB_EMBED_DIMS; kb-embedd refuses to run on a mismatch.
+CREATE TABLE IF NOT EXISTS kb.embeddings (
+    hash          bytea PRIMARY KEY,
+    model         text NOT NULL,           -- provider:model:dims, for audit and GC
+    embedding     halfvec(1024) NOT NULL,
+    tokens        int NOT NULL,            -- what embedding this chunk was billed
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    missing_since timestamptz              -- set when no chunk carries this hash; GC after 7 days
+);
+-- m/ef_construction above pgvector's defaults (16/64): measured on a real
+-- corpus, the defaults found 92% of the true top ten at ef_search 200 and
+-- NONE for one question whose neighbours sat behind a cluster of near-identical
+-- spreadsheet rows; 32/256 finds 99%. scripts/search-recall.py measures it.
+CREATE INDEX IF NOT EXISTS embeddings_hnsw ON kb.embeddings
+    USING hnsw (embedding halfvec_cosine_ops) WITH (m = 32, ef_construction = 256);
+-- An index built with the old parameters is rebuilt once (seconds at this size).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'kb.embeddings_hnsw'::regclass
+             AND NOT coalesce(c.reloptions @> ARRAY['m=32'], false)) THEN
+    DROP INDEX kb.embeddings_hnsw;
+    CREATE INDEX embeddings_hnsw ON kb.embeddings
+        USING hnsw (embedding halfvec_cosine_ops) WITH (m = 32, ef_construction = 256);
+  END IF;
+END $$;
+-- Inline, not TOASTed: a halfvec(1024) is 2,052 bytes, just over the
+-- out-of-line threshold, and pgvector's default storage for it is EXTERNAL.
+-- Every distance then fetched its vector from the TOAST table (45 MB for 7k
+-- rows; ~6 buffer reads each). Existing rows move inline on the next rewrite
+-- (VACUUM FULL kb.embeddings — seconds at this size).
+ALTER TABLE kb.embeddings ALTER COLUMN embedding SET STORAGE PLAIN;
+REVOKE ALL ON kb.embeddings FROM PUBLIC;
+
+-- A chunk the provider refused. Retried on a widening schedule, parked for
+-- good after `attempts` reaches the limit — it can never loop.
+CREATE TABLE IF NOT EXISTS kb.embed_failures (
+    hash       bytea PRIMARY KEY,
+    attempts   int NOT NULL DEFAULT 0,
+    next_try   timestamptz,
+    last_error text,                       -- a short classified reason, never the upstream body
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+REVOKE ALL ON kb.embed_failures FROM PUBLIC;
+
+-- The ledger. `units` is tokens for embeddings and search units for reranks,
+-- exactly as the provider's response reports them; `usd` is units × the price
+-- in company settings. A call is RESERVED here (estimate) before it is made
+-- and reconciled after, so a crash between the two over-counts, never under.
+CREATE TABLE IF NOT EXISTS kb.spend (
+    day   date NOT NULL,                   -- UTC
+    kind  text NOT NULL,                   -- embed_index | embed_query | rerank
+    model text NOT NULL,
+    calls bigint NOT NULL DEFAULT 0,
+    units bigint NOT NULL DEFAULT 0,
+    usd   numeric(20,10) NOT NULL DEFAULT 0,   -- one embedding call is ~$0.00001: six
+                                             -- decimals would round every charge
+    PRIMARY KEY (day, kind, model)
+);
+GRANT SELECT ON kb.spend TO kb_users;
+
+-- Per-person counters for the query side (reranks and query embeddings), so
+-- one person — or their agent in a loop — cannot spend everyone's budget.
+CREATE TABLE IF NOT EXISTS kb.spend_user (
+    day   date NOT NULL,
+    usr   text NOT NULL,
+    kind  text NOT NULL,
+    calls int  NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, usr, kind)
+);
+REVOKE ALL ON kb.spend_user FROM PUBLIC;
+
+-- Chunks embedded per file per day: a file that keeps changing (an agent
+-- stamping a timestamp every minute) is capped, then parked until tomorrow.
+CREATE TABLE IF NOT EXISTS kb.embed_file_day (
+    day       date NOT NULL,
+    file_path text NOT NULL,
+    chunks    int  NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, file_path)
+);
+REVOKE ALL ON kb.embed_file_day FROM PUBLIC;
+
+-- One row per alert already raised for a period ("2026-09-22", "2026-09"),
+-- so "half the budget is gone" is said once, not every two seconds.
+CREATE TABLE IF NOT EXISTS kb.spend_flags (
+    period text NOT NULL,
+    flag   text NOT NULL,
+    at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (period, flag)
+);
+REVOKE ALL ON kb.spend_flags FROM PUBLIC;
+
+-- The only way to reach a vector. SECURITY DEFINER because kb.embeddings has
+-- no grant — and that is exactly why the visibility filter below is load-
+-- bearing: inside this function the owner's view of kb.chunks is NOT filtered
+-- by RLS, so the explicit `visible_files ... usr = session_user` join is the
+-- whole permission check (same shape as the policies; session_user is the
+-- caller even inside a definer, as kb.can_read relies on).
+--
+-- What the 2026-08-07 note above forbids — attacker-controlled predicates over
+-- hidden rows — is avoided by construction: the caller supplies a VECTOR and a
+-- COUNT, nothing that is evaluated against text; there is no LIKE, no @@, no
+-- error path that depends on another row's content. Distance is computed over
+-- rows the caller cannot see (that is what an index scan is), and only rows
+-- that pass the visibility join are returned — WITHOUT their text, which the
+-- caller then reads through kb.chunks under RLS like any other row. The one
+-- residual channel is timing, and it carries no content (docs/SECURITY.md).
+--
+-- iterative_scan: an HNSW scan stops after ef_search candidates, so a person
+-- who can see 3% of the corpus would get a handful of hits out of 100. With
+-- relaxed_order pgvector keeps walking the graph until the LIMIT is met or
+-- max_scan_tuples says enough.
+-- Nearest sections the caller may read. Two steps, deliberately:
+--   1. the POOL nearest vectors from the HNSW index alone (a MATERIALIZED
+--      CTE: one table, ORDER BY distance, LIMIT — the shape the index serves);
+--   2. only then join the sections and keep the caller's visible files.
+-- Written as one join, the planner judged the small table cheap to scan and
+-- computed every distance exactly — 100+ ms. If the caller can see too few of
+-- the pool (someone with access to a small corner), the pool widens ×5 up to
+-- max_scan_tuples, so a narrow view still gets its k nearest.
+CREATE OR REPLACE FUNCTION kb.search_vec(qvec halfvec(1024), k int DEFAULT 40)
+RETURNS TABLE (file_path text, seq int, start_line int, distance real)
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = kb, public, pg_temp
+SET hnsw.iterative_scan = 'relaxed_order'
+SET hnsw.ef_search = 400
+SET hnsw.max_scan_tuples = 20000
+AS $$
+DECLARE
+    want int := LEAST(GREATEST(k, 1), 100);
+    pool int := GREATEST(want * 8, 400);
+    paths text[]; seqs int[]; starts int[]; ds real[];
+BEGIN
+    LOOP
+        SELECT array_agg(x.file_path ORDER BY x.d), array_agg(x.seq ORDER BY x.d),
+               array_agg(x.start_line ORDER BY x.d), array_agg(x.d ORDER BY x.d)
+          INTO paths, seqs, starts, ds
+          FROM (
+            WITH near AS MATERIALIZED (
+                SELECT e.hash, (e.embedding <=> qvec)::real AS d
+                FROM kb.embeddings e
+                ORDER BY e.embedding <=> qvec
+                LIMIT pool)
+            SELECT c.file_path, c.seq, c.start_line, n.d
+            FROM near n
+            JOIN kb.chunks c ON c.hash = n.hash
+            -- the owner bypasses RLS in here: this filter is the permission check
+            WHERE c.file_path IN (SELECT v.path FROM kb.visible_files v WHERE v.usr = session_user)
+            ORDER BY n.d
+            LIMIT want) x;
+        EXIT WHEN coalesce(cardinality(paths), 0) >= want OR pool >= 20000;
+        pool := LEAST(pool * 5, 20000);
+    END LOOP;
+    RETURN QUERY SELECT * FROM unnest(paths, seqs, starts, ds);
+END
+$$;
+REVOKE EXECUTE ON FUNCTION kb.search_vec(halfvec, int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION kb.search_vec(halfvec, int) TO kb_users;

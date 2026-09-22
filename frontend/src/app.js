@@ -5494,6 +5494,68 @@ function openSettings() {
     return r;
   }
 
+  // Semantic search's state, from kb-embedd via the user's backend. Fetched
+  // once per dialog; a render before it lands shows "loading".
+  let searchSt = null;
+  const loadSearchSt = () => fetch("/api/search/status").then((r) => r.json())
+    .then((j) => { searchSt = j; render(); }).catch(() => { searchSt = { available: false, why: "unreachable" }; render(); });
+  loadSearchSt();
+
+  function searchStatusBlock() {
+    const el = document.createElement("div");
+    el.className = "search-status";
+    el.setAttribute("data-testid", "search-status");
+    const j = searchSt;
+    const usd = (v) => "$" + (v || 0).toFixed(v >= 10 ? 0 : 2);
+    const sum = (o) => Object.values(o || {}).reduce((a, x) => a + (x.usd || 0), 0);
+    const line = (label, text, cls) => {
+      const r = document.createElement("div");
+      r.className = "search-status-row" + (cls ? " " + cls : "");
+      const b = document.createElement("span"); b.className = "k"; b.textContent = label;
+      const v = document.createElement("span"); v.className = "v"; v.textContent = text;
+      r.append(b, v); el.appendChild(r);
+    };
+    if (!j) { line("State", "loading…"); return el; }
+    if (!j.available) { line("State", "not running (" + (j.why || "no answer") + ") — search is full-text only", "warn"); return el; }
+    if (!j.configured) {
+      line("State", "not set up — search is full-text only. An admin installs provider keys with "
+        + "scripts/install-search-keys.sh (docs/semantic-search.md).", "warn");
+      return el;
+    }
+    const state = j.paused ? `paused — ${j.reason || j.paused}` : (j.enabled === false ? "off" : "running");
+    line("State", state, j.paused && j.paused !== "disabled" ? "warn" : "");
+    const pct = j.chunks ? Math.floor(1000 * j.embedded / j.chunks) / 10 : 0;
+    let cov = `${j.embedded.toLocaleString()} of ${j.chunks.toLocaleString()} sections (${pct}%)`;
+    if (j.pending) cov += `, ${j.pending.toLocaleString()} waiting`;
+    if (j.parked) cov += `, ${j.parked} refused by the provider`;
+    if (j.excluded) cov += `, ${j.excluded.toLocaleString()} kept on the box`;
+    line("Indexed", cov);
+    line("Models", [j.model, j.rerank && j.rerank.model].filter(Boolean).join(" · "));
+    const names = { embed_index: "embedding", embed_query: "questions", rerank: "reranking" };
+    const kinds = (o) => Object.entries(o || {}).map(([k, v]) => `${names[k] || k} ${usd(v.usd)}`).join(", ");
+    const t = j.spend || {}, b = j.budget || {};
+    line("Today", `${usd(sum(t.today))}${t.today && Object.keys(t.today).length ? " — " + kinds(t.today) : ""}`
+      + `  (caps: embedding ${usd(b.embed_day_usd)}, reranking ${usd(b.rerank_day_usd)})`);
+    line("This month", `${usd(sum(t.month))}${t.month && Object.keys(t.month).length ? " — " + kinds(t.month) : ""}`
+      + `  (cap: embedding ${usd(b.embed_month_usd)})`);
+    for (const w of j.warnings || []) line("Warning", w, "warn");
+    if (j.last_error) line("Last error", `${j.last_error} (${(j.last_error_at || "").replace("T", " ").slice(0, 16)} UTC)`);
+    if (j.parked) {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "mini"; btn.textContent = `Retry ${j.parked} refused`;
+      btn.setAttribute("data-testid", "search-retry");
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        const r = await fetch("/admin/search/retry", { method: "POST" });
+        const k = await r.json().catch(() => ({}));
+        kbToast(r.ok ? `${k.cleared || 0} sections will be tried again` : (k.error || "retry failed"), r.ok ? "" : "err");
+        loadSearchSt();
+      });
+      el.appendChild(btn);
+    }
+    return el;
+  }
+
   function render() {
     const st = settings.state();
     card.innerHTML = `
@@ -5545,6 +5607,7 @@ function openSettings() {
         const h = document.createElement("div");
         h.className = "admin-sec-title"; h.textContent = g;
         card.appendChild(h);
+        if (g === "Search & AI" && scope === "company") card.appendChild(searchStatusBlock());
         for (const e of entries.filter((x) => x.group === g)) card.appendChild(row(e, scope));
       }
       const note = document.createElement("div");
@@ -7185,6 +7248,7 @@ let _palette = null;
 function closePalette() {
   if (!_palette) return;
   clearTimeout(_palette.timer);   // a content search in flight must not paint into dead DOM
+  clearTimeout(_palette.finalTimer);
   _palette.ov.remove();
   _palette = null;
 }
@@ -7421,14 +7485,45 @@ function openPalette(mode, seed) {
   };
 
   // contents come from the backend; they arrive after the local list is drawn
-  let contentTimer = null;
+  let contentTimer = null, finalTimer = null, rerankedSeq = -1;
+  const docItem = (q, m) => ({
+    group: "In documents", icon: I.doc, path: m.path + ":" + m.line,
+    main: { text: m.text, hits: contentHits(q, m.text) },
+    // ≈ — found by meaning: none of the words typed is on that line
+    sub: { text: (m.why === "meaning" ? "≈ " : "") + m.path + " · line " + m.line, hits: [] },
+    run: () => openAtLine(m.path, m.line),
+  });
   const searchContents = (q) => {
     clearTimeout(contentTimer);
+    clearTimeout(finalTimer);
     // bump BEFORE the early return: shrinking the query below two characters,
     // or switching to commands, must also invalidate a request already in flight
     const mine = ++seq;
     if (!q || q.startsWith(">") || q.length < 2) return;
     const self = _palette;
+    // Once typing pauses, ask again with final=1: the server reranks the best
+    // hits by meaning. That is the one step with a per-search price, so it
+    // never runs per keystroke — only here, once per pause.
+    finalTimer = _palette.finalTimer = setTimeout(async () => {
+      if (mine !== seq || _palette !== self || q.length < 3) return;
+      let j;
+      try { j = await (await fetch("/api/search?final=1&q=" + encodeURIComponent(q))).json(); }
+      catch (e) { return; }                 // the keystroke results stay; nothing to undo
+      if (mine !== seq || _palette !== self || !j.reranked) return;
+      // Keep the selection on the same result if it was a document row: the
+      // order below it changes, what Enter opens must not.
+      const cur = items[sel];
+      const keep = cur && cur.group === "In documents" ? cur.path : null;
+      rerankedSeq = mine;
+      docFull = (j.results || []).map((m) => docItem(q, m));
+      compose();
+      if (keep) {
+        const i = items.findIndex((x) => x.path === keep);
+        if (i >= 0) sel = i;
+      }
+      sel = Math.max(0, Math.min(sel, items.length - 1));
+      render();
+    }, 700);
     contentTimer = _palette.timer = setTimeout(async () => {
       let j;
       try { j = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json(); }
@@ -7440,12 +7535,8 @@ function openPalette(mode, seed) {
       // Superseded or closed: a NEWER search owns `searching` now — leave it.
       if (mine !== seq || _palette !== self) return;
       searching = false;
-      docFull = (j.results || []).map((m) => ({
-        group: "In documents", icon: I.doc, path: m.path + ":" + m.line,
-        main: { text: m.text, hits: contentHits(q, m.text) },
-        sub: { text: m.path + " · line " + m.line, hits: [] },
-        run: () => openAtLine(m.path, m.line),
-      }));
+      if (rerankedSeq === mine) { render(); return; }   // a slow answer must not undo the reranked order
+      docFull = (j.results || []).map((m) => docItem(q, m));
       // Documents append BELOW the files, so every index already on screen —
       // the selection included — keeps its meaning and there is nothing to
       // re-anchor. Enter cannot change meaning depending on whether the server

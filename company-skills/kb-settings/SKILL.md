@@ -45,6 +45,16 @@ Rules when editing a file yourself:
 | `ui.theme.custom` | an object of token → value. Colours (`#rrggbb`): `bg`, `chassis`, `panel`, `panel2`, `border`, `ink`, `muted`, `faint`, `heading`, `accent`, `accent-deep`, `ok`, `warn`, `danger`, `code-bg`, `code-ink`, `term-bg`, `term-fg`. Type and space: `sans`, `mono` (font stacks), `font-size` (`10px`–`24px`), `editor-size`, `editor-lh`, `rich-lh` (line heights, e.g. `1.8`), `content-x` (gutter on a wide pane), `content-x-narrow` (its floor on a phone or split pane), `content-y`, `content-max` (the column, e.g. `708px`), `source-x`, `row-y`, `tab-y`, `pad`, `r` (corner radius, px) | `{}` | company, user | Single tokens changed on top of the chosen theme (`{"accent": "#ff6600", "font-size": "17px", "content-max": "720px"}`). Your map replaces the company's whole; remove the key to get the theme as shipped. |
 | `ai.agent` | `claude` · `codex` · `gemini` · `copilot` · `grok` · `qwen` · `opencode` · `deepseek` | `claude` | company, user | The agent a new agent chat opens with (Alt+C). Installed agents are listed in the chat's picker regardless; each person signs in to an agent themselves (a terminal tab runs the agent's login, or they paste an API key), and that is not a setting. |
 | `ui.theme` | `deep-blue` · `dark` · `light` | `deep-blue` | company, user | The whole look: colours, fonts, sizes and spacing, editor and terminal included. Deep blue is the house look; Dark and Light are Notion's measured night and paper (system font, 16px, a 708px column, its colours per mode). |
+| `search.enabled` | `true` · `false` | `true` | company | Semantic search (vectors + reranking) on or off. Off stops every paid API call at once; full-text search keeps working. |
+| `search.rerank.enabled` | `true` · `false` | `true` | company | Rerank final searches (Enter in Ctrl+K, `kb-search --rerank`). Never per keystroke. |
+| `search.embed.scope` | `all` · `company+projects` | `all` | company | What may be sent to the embedding provider. `company+projects` keeps `users/` on the box. `_secrets/` and folders with a `.noembed` file are never sent. |
+| `search.embed.quiet_seconds` | 30–86400 | `120` | company | Seconds a document must be untouched before its changed sections are embedded. |
+| `search.budget.embed_day_usd` | 0–500 | `10` | company | USD of embedding per UTC day; at the cap embedding pauses until tomorrow. 0 stops it now. |
+| `search.budget.embed_month_usd` | 0–5000 | `100` | company | USD of embedding per calendar month. |
+| `search.budget.rerank_day_usd` | 0–500 | `20` | company | USD of reranking per UTC day; past it search is unreranked until tomorrow. |
+| `search.rerank.per_user_day` | 0–5000 | `200` | company | Reranks one person or their agents may cause per day. |
+| `search.price.embed_per_1m_usd` | a decimal, e.g. `"0.13"` | `"0.13"` | company | USD per 1M embedding tokens; converts reported tokens into ledger dollars. |
+| `search.price.rerank_per_1k_usd` | a decimal, e.g. `"2.75"` | `"2.75"` | company | USD per 1,000 rerank search units. |
 
 `GET /api/settings` (as you, with your session) returns the full picture:
 `schema` (every key, its type, options and labels), `effective` (what

@@ -21,6 +21,11 @@ SECRET = doc(f"_secrets/apikey_{TAG}.env")
 MARKER = f"verysecret_{TAG}"
 
 
+def _from_secret(results, marker):
+    """Hits that could only have come from a secret: its path, or its text."""
+    return [r for r in results if "_secrets/" in r["path"] or marker in r.get("text", "")]
+
+
 def cl(user):
     c = httpx.Client(base_url=BASE, timeout=25)
     c.post("/login", data={"username": U(user), "password": CREDS[user]})
@@ -70,7 +75,9 @@ def test_never_indexed_even_when_group_readable(secret_file):
     try:
         time.sleep(3)   # indexer watch + settle
         res = k.get("/api/search", params={"q": MARKER}).json()["results"]
-        assert res == [], f"secret content leaked into the index: {res}"
+        # Not "no results": semantic search may offer a page NEAR in meaning
+        # (one about accounts and 2FA). The property: nothing from the secret.
+        assert _from_secret(res, MARKER) == [], f"secret content leaked into the index: {res}"
     finally:
         k.post("/fs/props", json={"path": secret_file,
                                   "acl_remove": [{"type": "group", "name": "kb-users"}]})
@@ -196,7 +203,7 @@ def test_a_shared_secret_is_still_never_indexed():
         time.sleep(3)
         for who in ("alice", "bob"):
             res = cl(who).get("/api/search", params={"q": marker}).json()["results"]
-            assert res == [], f"a shared secret reached {who}'s index: {res}"
+            assert _from_secret(res, marker) == [], f"a shared secret reached {who}'s index: {res}"
         # the indexer is not quietly a member of the audience either
         g = alice.get("/fs/share", params={"path": sec}).json()["advanced"]["group"]
         assert "kbindexer" not in grp.getgrnam(g).gr_mem, f"{g} carries the indexer"

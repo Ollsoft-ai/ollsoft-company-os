@@ -27,6 +27,7 @@ How the KB platform actually works, component by component.
 | user backend | **the user**| `/run/kb/users/<u>/backend.sock` | files, terminal, search, tasks, artifact bridge — *all as the user* |
 | `kb-syncd`   | **root**    | `/run/kb/syncd.sock`| y-websocket CRDT relay + filesystem merge daemon |
 | `kb-indexer` | `kbindexer` | (no socket)         | parses markdown → Postgres; refreshes group membership + ACLs |
+| `kb-embedd`  | `kbindexer` | `/run/kb/search/api.sock` (kb-users) | semantic search: embeds changed sections, holds the provider keys and the one spend ledger, serves query embeddings and reranking under per-person caps (see [semantic-search.md](semantic-search.md)) |
 | `kb-convert` | `kbindexer` | (no socket)         | office/PDF binaries → hidden read-only `.md` sidecars; each parse in a throwaway child (see [converted-documents.md](converted-documents.md)) |
 | PostgreSQL   | `postgres`  | local unix socket   | disposable index (`kb` schema, RLS) + per-user schemas (`u_<user>`) |
 | `kb-heartbeat.timer` | **root** | (timer, 5 min) | functional health check — outcomes, not processes; logs, never pushes (see [monitoring.md](monitoring.md)) |
@@ -163,8 +164,12 @@ there is no permission code here to get wrong.
 
 - Parses every `.md` file into `kb.blocks` (one row per task/heading/line, with a
   `tsvector` for FTS) and denormalises each file's owner/group/mode into
-  `kb.files`. There is no embedding column: the 64-dim hash placeholder and its
-  indexes were dropped 2026-08-07 — see [SCALING.md](SCALING.md).
+  `kb.files`.
+- Cuts each file into **sections** for semantic search (`kb.chunks`, same
+  transaction as the blocks, inside a savepoint so a bad section never costs
+  full-text): heading trail and folder prefix, credentials redacted, blobs
+  squeezed, keyed by `sha256(model ‖ text)`. It makes no network call and holds
+  no key — `kb-embedd` turns sections into vectors ([semantic-search.md](semantic-search.md)).
 - Extracts `@assignees` and `#tags` from tasks into array columns.
 - **ACL-aware**: reads real POSIX ACLs via `getfacl`, *de-masks* the group bits
   (so a file locked to owner and shared with one user via ACL doesn't look

@@ -1335,6 +1335,13 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .acl-title, .admin-sec-title { font-family: var(--label-font); color: var(--faint); text-transform: var(--label-case);
   font-size: calc(var(--label-size) - .02rem); font-weight: var(--label-weight); letter-spacing: var(--label-tracking); margin-top: .5rem; }
 .admin-sec-title { margin: 1rem 0 .4rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+/* Settings → Company → Search & AI: what the embedding worker reports */
+.search-status { display: flex; flex-direction: column; gap: .2rem; margin: 0 0 .6rem; font-size: .82rem; }
+.search-status-row { display: flex; gap: .6rem; align-items: baseline; }
+.search-status-row .k { flex: 0 0 6.5rem; color: var(--muted); }
+.search-status-row .v { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.search-status-row.warn .v { color: var(--warn); }
+.search-status .mini { align-self: flex-start; margin-top: .3rem; }
 .acl-list { font-size: .82rem; }
 .acl-row { display: flex; align-items: center; gap: .5rem; padding: .22rem .3rem; border-bottom: 1px solid var(--border); }
 .acl-kind { color: var(--faint); font-size: .68rem; width: 2.8rem; font-family: var(--mono); }

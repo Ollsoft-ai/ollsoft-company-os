@@ -42,7 +42,10 @@ def test_acme_secret_visible_only_to_team():
     # zebrafish lives in the confidential acme plan, which IS indexed.
     assert proj("plan.md") in search_has("alice", "zebrafish", proj("plan.md"))
     assert proj("plan.md") in search_has("bob", "zebrafish", proj("plan.md"))
-    assert search("carol", "zebrafish") == set(), "carol must not see acme via search"
+    # Not "carol finds nothing": semantic search may offer her a company page
+    # near in meaning. The property is that nothing of acme's ever reaches her.
+    leaked = {p for p in search("carol", "zebrafish") if p.startswith(proj() + "/")}
+    assert leaked == set(), "carol must not see acme via search"
 
 
 def test_company_content_visible_to_all():

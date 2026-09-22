@@ -39,7 +39,7 @@ jobs:
 
       - name: Services came up
         run: |
-          for s in kb-syncd kb-hub kb-indexer kb-convert; do
+          for s in kb-syncd kb-hub kb-indexer kb-embedd kb-convert; do
             systemctl is-active --quiet "$s" || {
               echo "::error::$s is not active"; sudo journalctl -u "$s" -n 60 --no-pager; exit 1; }
           done
@@ -80,6 +80,26 @@ jobs:
         # here and skip its own lifecycle. KB_TEST_USER decides who owns the
         # 0600 credentials file — the account that will run the suite.
         run: sudo KB_TEST_USER=kbt_ci_alice bash scripts/seed-demo.sh --namespace ci
+
+      # Semantic search end to end, for free: the `fake` provider turns text
+      # into vectors from its letters (no network, no key, no bill), which is
+      # enough to prove sections, the worker, the socket, fusion and — above
+      # all — that search_vec never returns what the caller cannot read.
+      - name: Semantic search with the fake provider
+        run: |
+          sudo sed -i 's/^KB_EMBED_PROVIDER=.*/KB_EMBED_PROVIDER=fake/; s/^KB_RERANK_PROVIDER=.*/KB_RERANK_PROVIDER=fake/' /etc/kb/kb.env
+          sudo python3 - <<'EOF'
+          import json, pathlib
+          p = pathlib.Path("/srv/kb/.os/settings.json")
+          d = json.loads(p.read_text()) if p.exists() else {}
+          d["search.embed.quiet_seconds"] = 30
+          p.write_text(json.dumps(d, indent=2))
+          EOF
+          sudo systemctl restart kb-indexer kb-embedd
+          for i in $(seq 1 60); do
+            test -f /run/kb/search/status.json && break; sleep 2
+          done
+          sudo cat /run/kb/search/status.json
 
       - name: Permission model holds (carol must not reach the restricted project)
         run: |
@@ -153,7 +173,7 @@ jobs:
         if: failure()
         run: |
           echo '--- service state ---'
-          systemctl is-active kb-hub kb-syncd kb-indexer kb-convert || true
+          systemctl is-active kb-hub kb-syncd kb-indexer kb-embedd kb-convert || true
           echo '--- indexer log (its own unit only; the others flood with runuser noise) ---'
           sudo journalctl -u kb-indexer -n 80 --no-pager || true
           echo '--- seeded file ownership and modes ---'

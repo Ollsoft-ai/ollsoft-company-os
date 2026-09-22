@@ -25,6 +25,8 @@ from pathlib import Path
 import psycopg
 from watchfiles import awatch
 
+from . import embedding
+
 log = logging.getLogger("kb-indexer")
 RETRY_BACKOFF = 60.0  # seconds between retries of a path whose indexing failed
 MAX_TRACKED = 10_000  # cap on remembered failing paths, so a mass failure can't grow unbounded
@@ -172,6 +174,234 @@ def compute_visibility(files_rows, group_rows, users) -> set[tuple[str, str]]:
     return out
 
 
+# ---- chunks: the unit of semantic search -------------------------------------
+# A block is a LINE, which is right for tasks and full-text search and wrong
+# for meaning: "see above" or "Ano, schváleno." says nothing on its own. A
+# chunk is a SECTION — the text under one heading — with the headings above it
+# as a prefix, so "schváleno" arrives knowing it belongs to "Rozpočet › Q3".
+# Sections, not lines, also keep embedding cheap to maintain: a heading edit
+# changes one chunk, not every line below it.
+CHUNK_MAX = 1200          # characters per chunk (≈ 300–450 tokens)
+CHUNK_OVERLAP = 100       # carried from the end of one piece into the next
+LINE_MAX = 16000          # a single enormous line is cut here, never sent whole
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+
+
+_SHEET_RE = re.compile(r"\.(xlsx|xlsm|xls|ods|csv|tsv)\.md$", re.I)
+SHEET_PIECES = 2          # a spreadsheet sheet is embedded as its header and first rows
+
+
+def _title_of(text: str, rel: str) -> str:
+    for raw in text.splitlines():
+        m = _HEADING_RE.match(raw.strip())
+        if m and len(m.group(1)) == 1 and m.group(2):
+            return m.group(2)
+    name = rel.rsplit("/", 1)[-1]
+    name = name[:-3] if name.endswith(".md") else name
+    return name.lstrip(".")              # a converted file's sidecar: ".offer.pdf" -> "offer.pdf"
+
+
+def _breadcrumb(rel: str) -> list[str]:
+    """The folders that say what a document is ABOUT — "💱 Acme Billing",
+    "🫂 Human Resources" — so a section titled "data" or "README" still
+    arrives knowing its project. Areas (company/, projects/), a person's
+    home and machinery folders (_files, .hidden) carry no meaning and are
+    left out."""
+    parts = rel.split("/")[:-1]
+    if parts and parts[0] == "users":
+        parts = parts[2:]
+    elif parts and parts[0] in ("company", "projects"):
+        parts = parts[1:]
+    return [p for p in parts if p and not p.startswith((".", "_"))][-3:]
+
+
+# ---- what may be sent, and in what shape ------------------------------------
+# The embedding provider receives the text of a section. Two things never go
+# with it: credentials (documents are not only in _secrets/ — people paste
+# keys into READMEs), and noise that carries no meaning but costs tokens and
+# drags vectors together (base64, 300-character URLs, GUID columns, the
+# padding of a markdown table). Full-text search is untouched: it indexes the
+# file itself.
+_SECRET_BLOCK = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)", re.S)
+_SECRET_ASSIGN = re.compile(
+    r"(?i)\b([A-Z0-9_.-]*(?:secret|passw(?:or)?d|pwd|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key"
+    r"|client[_-]?secret|credential|auth)[A-Z0-9_.-]*[\"']?\s*[:=]\s*)([\"']?)([^\s\"',;\[<][^\s\"',;]{5,})")
+_SECRET_TOKEN = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{30,}"
+    r"|github_pat_[A-Za-z0-9_]{30,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}"
+    r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})")
+_GUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)[^)]*\)")
+_URL = re.compile(r"(https?://[^/\s)>\]]+)(/[^\s)>\]]*)?")
+_TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+_REPEAT = re.compile(r"(\S)\1{5,}")
+
+
+def _short_url(m: re.Match) -> str:
+    host, path = m.group(1), m.group(2) or ""
+    seg = [p[:24] for p in re.split(r"[/#?]", path) if p][:2]
+    return host + ("/" + "/".join(seg) if seg else "") + ("/…" if len(path) > 40 else "")
+
+
+def _blob(tok: str) -> bool:
+    """A long token that is data, not language: base64, a hash, a key."""
+    if len(tok) < 32 or tok.startswith(("http://", "https://")):
+        return False
+    core = tok.strip("\"'`,;()[]{}<>")
+    if len(core) < 32 or not re.fullmatch(r"[A-Za-z0-9+/=_\\.-]+", core):
+        return False
+    return bool(re.search(r"\d", core)) and bool(re.search(r"[A-Za-z]", core))
+
+
+def _clean_line(line: str) -> str:
+    t = _SECRET_ASSIGN.sub(lambda m: m.group(1) + m.group(2) + "[secret]", line)
+    t = _SECRET_TOKEN.sub("[secret]", t)
+    t = _GUID.sub("[id]", t)
+    t = _IMAGE.sub(lambda m: f"[image: {m.group(1).strip()}]" if m.group(1).strip() else "[image]", t)
+    t = _LINK.sub(lambda m: m.group(1) if m.group(1) != m.group(2) else m.group(2), t)
+    t = _URL.sub(_short_url, t)
+    t = _REPEAT.sub(lambda m: m.group(1) * 3, t)
+    if _TABLE_RULE.match(t):
+        return ""
+    squeezed: list[str] = []
+    for w in t.split():
+        w = "[…]" if _blob(w) else w
+        if not (w == "[…]" and squeezed and squeezed[-1] == "[…]"):   # one gap, not three
+            squeezed.append(w)
+    indent = t[:len(t) - len(t.lstrip())][:8]
+    return (indent + " ".join(squeezed)) if squeezed else ""
+
+
+def clean_lines(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """The lines of a section as the provider may see them, numbers kept.
+    Deterministic: the same file always yields the same text, hence the same
+    hash — cleaning never causes a re-embed by itself."""
+    joined = "\n".join(s for _, s in lines)
+    if "PRIVATE KEY-----" in joined:
+        # a key spans lines: blank every line of it, keep the line count
+        def blank(m: re.Match) -> str:
+            return "[private key]" + "\n" * m.group(0).count("\n")
+        redacted = _SECRET_BLOCK.sub(blank, joined).split("\n")
+        if len(redacted) == len(lines):
+            lines = [(n, r) for (n, _), r in zip(lines, redacted)]
+    return [(n, _clean_line(s)) for n, s in lines]
+
+
+def clean_for_embedding(text: str) -> str:
+    """clean_lines for a plain string (tests, tools)."""
+    return "\n".join(s for _, s in clean_lines(list(enumerate(text.split("\n"), 1))))
+
+
+def _meaningful(text: str) -> bool:
+    """Is there a word left once the placeholders are gone? "Úvod." is a
+    section; "[…]" or "| 12 | 7.5 |" alone is not."""
+    return bool(re.search(r"[^\W\d_]{2,}", re.sub(r"\[[^\]]*\]", " ", text)))
+
+
+def chunk_sections(text: str, rel: str, model_id: str) -> list[dict]:
+    """Split a document into section chunks: `{seq, start_line, end_line,
+    heading, text, hash}`. `text` is exactly what an embedding model receives
+    — the heading trail, then the section — and `hash` is sha256 of the model
+    id and that text, the key under which its vector is stored."""
+    import hashlib
+    title = _title_of(text, rel)
+    crumbs = _breadcrumb(rel)
+    if title.lower() in ("readme", "index") and crumbs:
+        title = crumbs.pop()             # "README" says nothing; its folder does
+    lead = " › ".join(crumbs + [title])
+    sheet = bool(_SHEET_RE.search(rel))
+    trail: list[tuple[int, str]] = []          # (level, text) of the open headings
+    sections: list[tuple[str, list[tuple[int, str]]]] = []
+    body: list[tuple[int, str]] = []
+    in_fence = False
+
+    def close():
+        if any(line.strip() for _, line in body):
+            heads = [t for _, t in trail]
+            if heads and heads[0] == title:
+                heads = heads[1:]
+            sections.append((" › ".join([lead] + heads), list(body)))
+        body.clear()
+
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.rstrip()
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        m = None if in_fence else _HEADING_RE.match(line)
+        if m and m.group(2):
+            close()
+            level = len(m.group(1))
+            trail[:] = [t for t in trail if t[0] < level] + [(level, m.group(2))]
+            continue
+        if len(line) > LINE_MAX:
+            line = line[:LINE_MAX]
+        body.append((i, line))
+    close()
+    if not sections and trail:                 # a document of headings and nothing else
+        sections.append((" › ".join([lead] + [t for _, t in trail if t != title]), [(1, "")]))
+
+    out: list[dict] = []
+    for heading, lines in sections:
+        lines = clean_lines(lines)
+        # drop leading/trailing blank lines; collapse runs of blanks to one
+        while lines and not lines[0][1].strip():
+            lines.pop(0)
+        while lines and not lines[-1][1].strip():
+            lines.pop()
+        tidy: list[tuple[int, str]] = []
+        for n, s in lines:
+            if s.strip() or (tidy and tidy[-1][1].strip()):
+                tidy.append((n, s))
+        for i, (start, end, piece, numbers) in enumerate(_pieces(tidy)):
+            if sheet and i >= SHEET_PIECES:
+                break                    # the rest of the rows: full-text search has them
+            if piece and not _meaningful(piece):
+                continue                 # a lone blob or bare numbers: nothing to mean
+            chunk = f"{heading}\n{piece}" if piece else heading
+            # lines[i] is the file line of the text's line i+1 (line 0 is the
+            # heading trail): search points a hit at its best line from this
+            # alone, without another query
+            out.append({"seq": len(out), "start_line": start, "end_line": end, "heading": heading,
+                        "text": chunk, "lines": numbers if piece else [],
+                        "hash": hashlib.sha256(f"{model_id}\n{chunk}".encode()).digest()})
+    return out
+
+
+def _pieces(lines: list[tuple[int, str]]):
+    """(start_line, end_line, text, line_numbers) pieces of at most CHUNK_MAX characters, cut
+    at line boundaries where possible and carrying CHUNK_OVERLAP characters of
+    the previous piece forward, so a sentence that straddles a cut is whole in
+    at least one of them."""
+    if not lines:
+        yield (1, 1, "", [])
+        return
+    cur: list[tuple[int, str]] = []
+    size = 0
+    for n, s in lines:
+        # a single line longer than a piece: its own run of character slices
+        while len(s) > CHUNK_MAX:
+            if cur:
+                yield (cur[0][0], cur[-1][0], "\n".join(t for _, t in cur), [m for m, _ in cur])
+                cur, size = [], 0
+            yield (n, n, s[:CHUNK_MAX], [n])
+            s = s[CHUNK_MAX - CHUNK_OVERLAP:]
+        if cur and size + len(s) + 1 > CHUNK_MAX:
+            yield (cur[0][0], cur[-1][0], "\n".join(t for _, t in cur), [m for m, _ in cur])
+            keep, kept = [], 0
+            for m, t in reversed(cur):          # the overlap: whole trailing lines
+                if kept + len(t) + 1 > CHUNK_OVERLAP:
+                    break
+                keep.insert(0, (m, t))
+                kept += len(t) + 1
+            cur, size = keep, kept
+        cur.append((n, s))
+        size += len(s) + 1
+    if cur:
+        yield (cur[0][0], cur[-1][0], "\n".join(t for _, t in cur), [m for m, _ in cur])
+
+
 def parse_blocks(text: str) -> list[dict]:
     out = []
     for i, raw in enumerate(text.splitlines(), 1):
@@ -225,6 +455,27 @@ class Indexer:
         # invisible to every user, in search and in the To-dos view, until an
         # unrelated permission change happens to force a full diff.
         self._vis_cache = None
+        # Chunks for semantic search carry the embedding model's id in their
+        # hash, so a provider change is a new hash — a deliberate re-embed,
+        # never two models' vectors mixed in one index. Only the id is read
+        # here: the indexer holds no key and makes no network call.
+        self.embed_model_id = embedding.load_config(read_keys=False).model_id
+        self._chunks_ready: bool | None = None
+        self._chunk_warned: set[str] = set()     # paths whose chunks failed (log once)
+
+    def chunks_ready(self) -> bool:
+        """Is kb.chunks there? A box upgraded by deploy.sh before its schema
+        was applied must keep indexing blocks — full-text search is the thing
+        that cannot break — and simply write no chunks until the table exists."""
+        if self._chunks_ready is None:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT to_regclass('kb.chunks') IS NOT NULL")
+                self._chunks_ready = bool(cur.fetchone()[0])
+            self.conn.commit()
+            if not self._chunks_ready:
+                log.warning("kb.chunks does not exist yet — semantic-search chunks are not being written "
+                            "(apply scripts/schema.sql)")
+        return self._chunks_ready
 
     @property
     def conn(self) -> psycopg.Connection:
@@ -249,6 +500,7 @@ class Indexer:
         if self._conn.closed:
             log.warning("postgres connection closed; reconnecting")
             self._conn = psycopg.connect(f"dbname={common.PG_DB}", autocommit=False)
+            self._chunks_ready = None
         return self._conn
 
     def _note_failure(self, rel: str, err: Exception):
@@ -380,8 +632,11 @@ class Indexer:
             # PDF sidecars are the source (38 of them from one 2026-08-20 batch).
             text = p.read_text(errors="replace").replace("\x00", "")
         except OSError:
+            chunks = self.chunks_ready()
             with self.conn.cursor() as cur:
                 cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
+                if chunks:
+                    cur.execute("DELETE FROM kb.chunks WHERE file_path=%s", (rel,))
             self.conn.commit()
             # Publish the PERMISSIONS too, right now. Losing read access is the
             # usual reason we are here (someone made the file private), and RLS
@@ -401,6 +656,7 @@ class Indexer:
             except Exception:
                 self.conn.rollback()   # sweep's seal path is the backstop
             raise
+        chunks = self.chunks_ready()
         with self.conn.cursor() as cur:
             self.upsert_file(cur, rel, p, pre)
             cur.execute("DELETE FROM kb.blocks WHERE file_path=%s", (rel,))
@@ -411,6 +667,28 @@ class Indexer:
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,to_tsvector('english',%s))",
                     (rel, b["line"], b["kind"], b["checked"], b["ref"], b["text"],
                      b["assignees"], b["tags"], b["text"]))
+            if chunks:
+                # Same transaction as the blocks: a reader never sees a file's
+                # new text in one table and its old text in the other. The
+                # rows are rewritten on every reindex — a restart rewrites all
+                # of them — and that is free: vectors hang off the HASH, which
+                # is unchanged for unchanged text.
+                #
+                # Inside a SAVEPOINT: full-text search is the thing that must
+                # not break, so a chunk that cannot be written costs this
+                # file its semantic chunks (logged once), never its blocks.
+                try:
+                    with self.conn.transaction():
+                        cur.execute("DELETE FROM kb.chunks WHERE file_path=%s", (rel,))
+                        cur.executemany(
+                            "INSERT INTO kb.chunks(file_path,seq,start_line,end_line,heading,text,hash,lines) "
+                            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                            [(rel, c["seq"], c["start_line"], c["end_line"], c["heading"], c["text"],
+                              c["hash"], c["lines"]) for c in chunk_sections(text, rel, self.embed_model_id)])
+                except (psycopg.Error, ValueError) as e:
+                    if rel not in self._chunk_warned:
+                        self._chunk_warned.add(rel)
+                        log.warning("semantic chunks for %s not written: %s", rel, type(e).__name__)
         self.conn.commit()
         self._note_success(rel)
 

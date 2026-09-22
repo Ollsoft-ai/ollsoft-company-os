@@ -35,7 +35,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import WSMsgType, web
 
-from . import common, uploads
+from . import common, hybrid, uploads
 from . import acp as kbacp
 from . import settings as kbsettings
 
@@ -91,7 +91,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 35   # /api/inbox (mentions, shares); a delete is a move into .trash/
+BACKEND_V = 36   # hybrid /api/search (vectors, final=1 reranks), /api/search/status
 
 
 def _name_key(name: str):
@@ -1629,73 +1629,14 @@ async def search(request: web.Request) -> web.Response:
         conn = await _adb()
         if conn is None:
             return web.json_response({"results": [], "files": await files_task, "db": False})
-        rows, seen, per_file = [], set(), {}
-
-        def take(r, rank):
-            """At most three lines from any one file, so a chatty document can't
-            fill the whole result list."""
-            key = (r[0], r[1])
-            if key in seen or per_file.get(r[0], 0) >= 3:
-                return
-            seen.add(key)
-            per_file[r[0]] = per_file.get(r[0], 0) + 1
-            rows.append({"path": r[0], "line": r[1], "kind": r[2], "text": r[3], "rank": rank})
-
-        # Three ways to match, ONE pass over the table. This is a SEQUENTIAL
-        # scan and cannot be anything else: `tsv @@` and ILIKE are not
-        # leakproof, so under RLS the planner may not evaluate them below the
-        # policy qual, and no index on kb.blocks is reachable. That is the
-        # security model working — a SECURITY DEFINER wrapper WOULD reach the
-        # index, and would hand every account a content oracle over the whole
-        # corpus (see the note in schema.sql). What was made fast instead is
-        # the two things that actually scale: the policy qual (a hashed subplan
-        # over kb.visible_files, replacing ~0.34 s of per-statement can_read())
-        # and the heap the scan reads (the dead embedding column is gone).
-        # Running the tiers as separate statements would only add scans.
-        #   1. websearch_to_tsquery — stemming, "quoted phrases", -exclusions.
-        #      It never raises on user input, unlike to_tsquery.
-        #   2. prefix tsquery — "onbo mee" finds "Onboarding meeting". Tokens are
-        #      stripped to [a-z0-9] runs, so nothing reaches tsquery's own
-        #      syntax (& | ! : * parentheses); the dictionary is schema-qualified
-        #      because every user owns a u_<user> schema that comes first in
-        #      their search_path.
-        #   3. ILIKE — mid-word matches, identifiers, punctuation and the
-        #      non-English text the 'english' stemmer mangles.
-        toks = [t for t in re.split(r"[^0-9A-Za-z]+", q.lower()) if len(t) >= 2][:6]
-        pq = " & ".join(t + ":*" for t in toks) if toks else None
-        like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        try:
-          async with conn.cursor() as cur:
-            await cur.execute(
-                "WITH q AS (SELECT websearch_to_tsquery('pg_catalog.english', %s) AS ws, "
-                "                  CASE WHEN %s::text IS NULL THEN NULL::tsquery "
-                "                       ELSE to_tsquery('pg_catalog.english', %s) END AS pq) "
-                "SELECT b.file_path, b.line, b.kind, b.text, "
-                "       ts_rank(b.tsv, q.ws) AS rank, "
-                "       (b.tsv @@ q.pq) AS pref "
-                "FROM kb.blocks b, q "
-                "WHERE b.tsv @@ q.ws OR b.tsv @@ q.pq OR b.text ILIKE %s "
-                # file_path/line break the remaining ties. Without them the
-                # order among equal-rank, equal-length rows is whatever the
-                # scan emitted — and now that kb.blocks is narrow enough for
-                # the planner to go PARALLEL, that varies run to run: the same
-                # query reshuffled its results between keystrokes.
-                "ORDER BY rank DESC, length(b.text), b.file_path, b.line LIMIT 90",
-                (q, pq, pq, like))
-            for r in await cur.fetchall():
-                take(r, float(r[4]) + (0.02 if r[5] else 0.0))
-        except Exception:
-            # A malformed query must never 500: the filename half already has an
-            # answer, and half a result list beats an error page. The rollback
-            # itself is guarded too — if what failed was the CONNECTION (DB
-            # restarted mid-query), rollback() re-raises and would be the 500.
-            try:
-                await conn.rollback()
-            except Exception:
-                pass
-            rows = []
-        rows.sort(key=lambda r: -r["rank"])
-        return web.json_response({"results": rows[:30], "files": await files_task, "db": True})
+        # Full-text, vectors and (when `final`) the reranker, fused — as this
+        # user, under RLS, with kb-embedd metering the paid steps. Keystrokes
+        # get full-text + vectors; `final=1` (the palette has paused) is the
+        # only request that may rerank. See kb_platform/hybrid.py.
+        final = request.query.get("final") in ("1", "true")
+        res = await hybrid.search(conn, q, final=final, connect=_adb)
+        return web.json_response({"results": res["results"], "files": await files_task, "db": True,
+                                  "semantic": res["semantic"], "reranked": res["reranked"]})
     finally:
         if conn is not None:
             await conn.close()
@@ -1703,6 +1644,18 @@ async def search(request: web.Request) -> web.Response:
         # pending task behind ("Task was destroyed but it is pending").
         if not files_task.done():
             files_task.cancel()
+
+
+async def search_status(request: web.Request) -> web.Response:
+    """Semantic search as kb-embedd reports it — coverage, state, the company's
+    spend today and this month, and this user's own reranks. The socket knows
+    who is asking from the kernel; this backend runs as the user, so it is
+    them asking. Unavailable is an answer too, not an error."""
+    st, why = await hybrid.sock_call("GET", "/status", None, 3.0)
+    if st is None:
+        return web.json_response({"available": False, "why": why})
+    st["available"] = True
+    return web.json_response(st)
 
 
 _SQL_COMMENT_RE = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
@@ -2648,6 +2601,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/tasks", tasks)
     app.router.add_post("/api/tasks/toggle", toggle_task)
     app.router.add_get("/api/search", search)
+    app.router.add_get("/api/search/status", search_status)
     app.router.add_post("/api/artifact/query", artifact_query)
     app.router.add_get("/api/artifact/raw", artifact_raw)
     app.router.add_post("/api/artifact/read", artifact_read)

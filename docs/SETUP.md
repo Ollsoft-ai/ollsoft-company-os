@@ -124,7 +124,9 @@ a list of names instead is the mistake it exists to prevent.
 Writes `/etc/kb/kb.env` (read by all units via `EnvironmentFile`), creates
 `/etc/kb/session.key` (0600, root) if absent, installs the tmpfiles config and the
 systemd units with paths rewritten for your `--prefix`, then enables and starts
-`kb-syncd`, `kb-hub`, `kb-indexer` and `kb-convert` (the last one only when its
+`kb-syncd`, `kb-hub`, `kb-indexer`, `kb-embedd` (semantic search; idle until
+provider keys are installed — [semantic-search.md](semantic-search.md)) and
+`kb-convert` (the last one only when its
 venv was provisioned from `requirements-convert.txt` — the document parsers live
 in a separate `kb-convert-venv` next to the platform venv).
 
@@ -292,6 +294,21 @@ Do **not** point a network at `:8300`. There is no TLS, and the login throttle i
 a backstop rather than a front door. Read [remote-access.md](remote-access.md)
 and [SECURITY.md](SECURITY.md) first, and rotate any passwords generated during
 install.
+
+## Semantic search (optional)
+
+Search by meaning, in any language, with your own embedding and rerank
+provider (Azure AI Foundry, Azure OpenAI, OpenAI + Cohere). Without keys,
+search is full-text and nothing is sent anywhere.
+
+```bash
+sudo bash scripts/install-search-keys.sh --from-azure <account> <resource-group>
+sudo systemctl restart kb-embedd kb-indexer
+kb-search --status
+```
+
+Costs, budgets (Settings → Company → Search & AI), what is and is not sent,
+and how to measure quality: [semantic-search.md](semantic-search.md).
 
 ## Agent chat (optional)
 

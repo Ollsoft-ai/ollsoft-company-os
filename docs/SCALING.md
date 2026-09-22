@@ -88,7 +88,12 @@ guessed; re-measure before trusting them at a different scale.
     on a 23 GB box, so raise it (needs a restart) to keep the table resident.
     **Open (bounded).**
 
-## Future: semantic search
+## Semantic search — built 2026-09-22 to this design
+
+See [semantic-search.md](semantic-search.md): sections in `kb.chunks`, vectors in
+its own `kb.embeddings` (halfvec(1024), HNSW m=32), the `kb-embedd` worker, a
+`SECURITY DEFINER` `kb.search_vec` that pre-filters by `visible_files`. The
+notes below are the reasoning it was built from.
 
 Deliberately NOT built (2026-08-07). The old `embedding` column was a 64-dim
 MD5 signed-hash placeholder — never a model, so never semantically useful, and

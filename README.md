@@ -140,7 +140,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   `/etc/kb/elevenlabs.key` (`0600 root:root`): every logged-in user may spend it
   through the hub, nobody may read it, and the caller never picks the upstream
   URL. See [docs/dictation.md](docs/dictation.md).
-- **Full-text + task search** over a Postgres index, RLS-scoped per user.
+- **Search by meaning and by words** — full-text + vectors (pgvector) fused and reranked, in any language, RLS-scoped per user; `kb-search` for agents; hard spend caps. Optional: plug in your own provider keys ([docs/semantic-search.md](docs/semantic-search.md)).
+- **Task search** over the same Postgres index.
 - **To-dos**: `- [ ] task @assignee #tag` checkboxes aggregated across everything
   you can see, filterable, with write-back to the source file.
 - **Sandboxed artifacts**: agent-written HTML dashboards that query the database
@@ -224,7 +225,7 @@ ollsoft-company-os/
 │   ├── bounce_backends.py  restart per-user backends after a deploy
 │   ├── schema.sql          Postgres schema, RLS functions, grants
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
-├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-convert units, the
+├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-embedd / kb-convert units, the
 │                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
 ├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
@@ -267,7 +268,7 @@ Everything the services need lives in `/etc/kb/kb.env`, written by the installer
 | `KB_ALERT_PUSH` | `0` | `1` pushes every alert as it happens. `0` = log only, triaged daily |
 | `KB_ALERT_DEDUP` | `21600` | Seconds an identical alert title stays muted for pushes |
 
-After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer kb-convert`.
+After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer kb-embedd kb-convert`.
 
 Things people choose — the theme, and whatever joins it — are not environment
 variables but **settings**: a company default in `/srv/kb/.os/settings.json`
@@ -280,8 +281,8 @@ the Settings dialog or by editing the file. See [docs/settings.md](docs/settings
 
 ```bash
 # status and logs
-systemctl status kb-hub kb-syncd kb-indexer kb-convert
-journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert -f
+systemctl status kb-hub kb-syncd kb-indexer kb-embedd kb-convert
+journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -f
 
 # redeploy after editing code (reads /etc/kb/kb.env for paths)
 sudo bash scripts/deploy.sh

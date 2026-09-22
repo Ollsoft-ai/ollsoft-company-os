@@ -44,6 +44,10 @@ codex   # or: claude
   work.
 - The installer never replaces an existing `AGENTS.md`; operator customization
   remains intact.
+- Both are told to search with **`kb-search "question"`** (meaning + words,
+  as the caller, `path:line` results) before reaching for `rg`; Hermes and any
+  other agent with a shell can call it the same way. `kb-search --json` is the
+  machine-readable form ([semantic-search.md](semantic-search.md)).
 
 A safe first prompt:
 

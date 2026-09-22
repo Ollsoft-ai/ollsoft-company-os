@@ -185,6 +185,32 @@ Content history is a separate mechanism: `kb-history` reads the git trail of
 what documents said and who wrote them, gated per request against the kernel so
 it can only show what the caller could already open.
 
+## Semantic search — what leaves the box
+
+Only with provider keys installed ([semantic-search.md](semantic-search.md)).
+
+- **Sent:** section text to the embedding provider; a question plus up to 40
+  candidate sections to the reranker. Never `_secrets/`, private files, hidden
+  paths, `.noembed` subtrees, or `users/` when the company scope says so.
+  Credentials pasted into ordinary documents are redacted first (private keys,
+  `secret=`/`password:` assignments, `sk-`/`ghp_`/`AKIA`/JWT shapes).
+- **Keys:** `/etc/kb/embed.key`, `/etc/kb/rerank.key`, 0640 root:kbindexer —
+  readable by the worker, by no person and no agent.
+- **The socket** `/run/kb/search/api.sock` sits in a 0750 kbindexer:kb-users
+  directory: members (and their agents) connect, `kbshare` and the share
+  container cannot. The worker checks the peer's uid (`SO_PEERCRED`) and group
+  again, and holds each person to their own caps.
+- **`kb.search_vec` is SECURITY DEFINER** because only `kbindexer` may read
+  vectors. Its owner bypasses RLS, so it filters by `kb.visible_files` for
+  `session_user` explicitly, returns paths and distances only, and never runs
+  full-text (`@@` is not leakproof). Section text is read afterwards as the
+  caller, under RLS. Accepted: `<=>` timing inside the definer is not
+  content-dependent in any way we could exploit, and no error path depends on
+  content.
+- **Spend** is bounded in the worker, not by trust in callers: reservations,
+  an in-process brake, budgets, per-person caps. A person or agent in a loop
+  hits their cap, not the company's wallet.
+
 ## Residual risks / known limitations
 
 - **Deferred from the 2026-08-24 audit**, each for a stated reason:

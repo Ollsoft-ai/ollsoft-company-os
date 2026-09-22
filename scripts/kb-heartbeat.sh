@@ -20,7 +20,7 @@ FAILS=()
 note() { FAILS+=("$1"); }
 
 # --- 1. services are active --------------------------------------------------
-for u in kb-hub kb-syncd kb-indexer postgresql; do
+for u in kb-hub kb-syncd kb-indexer postgresql; do   # kb-embedd: check 8, only where set up
   systemctl is-active --quiet "$u" || note "$u is not active"
 done
 
@@ -90,6 +90,50 @@ if [ -z "$newest_bk" ]; then
   note "no verified backups found at all"
 elif [ $(( $(date +%s) - ${newest_bk%.*} )) -gt 172800 ]; then
   note "newest backup is older than 48h"
+fi
+
+# --- 8. semantic search (kb-embedd) ------------------------------------------
+# Only where it is set up. Messages are STABLE text — no amounts, no counts —
+# because an alert fires whenever this line changes; "$4.97 of $10" would page
+# on every poll. docs/semantic-search.md, "Monitoring".
+SST=/run/kb/search/status.json
+if systemctl is-enabled --quiet kb-embedd 2>/dev/null; then
+  if ! systemctl is-active --quiet kb-embedd; then
+    note "kb-embedd is not active (search is full-text only)"
+  elif [ -f "$SST" ]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$SST") ))
+    [ "$age" -gt 180 ] && note "kb-embedd status is ${age}s old — the worker is stuck"
+    while IFS= read -r msg; do [ -n "$msg" ] && note "$msg"; done < <(python3 - "$SST" "$STATE_DIR/search-behind-since" <<'PY_EOF'
+import json, sys, time, os
+st = json.load(open(sys.argv[1]))
+since_file = sys.argv[2]
+if st.get("configured"):
+    p = st.get("paused")
+    if p in ("breaker", "dims mismatch", "error", "database"):
+        print(f"semantic search paused: {p}")
+    elif p == "budget":
+        print("semantic search paused: embedding budget reached")
+    for w in st.get("warnings") or []:
+        if w.startswith("embedding spend today"): print("semantic search: over half of today's embedding budget used")
+        elif w.startswith("embedding spend this month"): print("semantic search: over half of this month's embedding budget used")
+        elif w.startswith("rerank spend"): print("semantic search: over half of today's rerank budget used")
+    q = st.get("query") or {}
+    if q.get("rerank_breaker"):
+        print("semantic search: reranking provider failing")
+    chunks, done = st.get("chunks") or 0, st.get("embedded") or 0
+    behind = chunks and done / chunks < 0.95 and p != "disabled"
+    if behind:
+        if not os.path.exists(since_file):
+            open(since_file, "w").write(str(int(time.time())))
+        elif time.time() - int(open(since_file).read() or 0) > 6 * 3600:
+            print("semantic search: under 95% of sections embedded for 6h")
+    elif os.path.exists(since_file):
+        os.unlink(since_file)
+PY_EOF
+)
+  else
+    note "kb-embedd has written no status file"
+  fi
 fi
 
 # --- state transition + alerting ----------------------------------------------

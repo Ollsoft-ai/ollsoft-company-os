@@ -9,8 +9,8 @@ prefix recorded in `/etc/kb/kb.env` (default `/opt/kb-platform`). To ship a
 change:
 
 ```bash
-# backend change: rsync to /opt (keeps the venvs), then restart kb-syncd, kb-hub
-# and kb-indexer — plus kb-convert where its venv exists.
+# backend change: rsync to /opt (keeps the venvs), then restart kb-syncd, kb-hub,
+# kb-indexer and kb-embedd — plus kb-convert where its venv exists.
 sudo bash scripts/deploy.sh
 
 # ...or, if anyone is mid-session: the hub's cgroup holds every web terminal, and
@@ -113,8 +113,16 @@ CI runs them right after the installer. Everything else is Python, below.
   `--md-*` tokens and the terminal reads `--term-*` when it opens or the theme
   changes. The same test refuses a new `#hex` or `rgba()` outside the token blocks.
 - **A company skill**: add a folder under `company-skills/<name>/SKILL.md` (YAML
-  frontmatter `name` + `description`, then markdown), then deploy it to
-  `/srv/kb/.claude/skills/` (root-owned, 644). Agents discover it automatically.
+  frontmatter `name` + `description`, then markdown); `deploy.sh` installs it
+  into `/srv/kb/.claude/skills/` (root-owned, 644). Agents discover it automatically.
+- **A semantic-search provider**: a class in `kb_platform/embedding.py` with
+  `async embed(session, texts) -> EmbedResult(vectors, tokens)` (or `rerank(...)
+  -> RerankResult(scores, units)`) that raises `ProviderError` with a `kind`,
+  never the upstream body; add it to `make_embedder`/`make_reranker` and to
+  `scripts/install-search-keys.sh`. Report the provider's own usage — the ledger
+  never trusts an estimate. `KB_EMBED_PROVIDER=fake` (free, deterministic) is
+  what CI and the invariant tests run; measure a real one with
+  `scripts/search-eval.py` ([semantic-search.md](semantic-search.md)).
 - **An RLS-visible index field**: add a column in `scripts/schema.sql`, populate
   it in `indexer.py` (`stat_row`/`upsert_file` + `reconcile_perms`), and reference
   it in `kb.can_read` if it affects visibility. Migrate the running DB.

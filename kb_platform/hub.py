@@ -1456,6 +1456,20 @@ class Hub:
 
     LOGO_MAX = 512 * 1024
 
+    async def admin_search_retry(self, request: web.Request) -> web.Response:
+        """Give sections the embedding provider refused another chance (the
+        Settings → Company → Search & AI button). kb-embedd does it; the hub,
+        as root, is an admin to its socket."""
+        admin = self._require_admin(request)
+        if not admin:
+            return web.json_response({"error": "admin only"}, status=403)
+        from . import hybrid
+        res, why = await hybrid.sock_call("POST", "/retry-parked", {}, 10.0)
+        if res is None:
+            return web.json_response({"error": f"semantic search is not running ({why})"}, status=503)
+        log.info("search: %s cleared %s refused sections for retry", admin, res.get("cleared"))
+        return web.json_response(res)
+
     async def admin_brand_logo(self, request: web.Request) -> web.Response:
         """Upload the company logo (multipart `file`, SVG or PNG, <= 512 KB) or
         remove it (JSON {"reset": true}). Admin only; the file lands in .os/ and
@@ -3226,6 +3240,7 @@ def make_app() -> web.Application:
     app.router.add_get("/admin/agents", hub.admin_agents)
     app.router.add_post("/admin/agents/install", hub.admin_agents_install)
     app.router.add_post("/admin/brand/logo", hub.admin_brand_logo)
+    app.router.add_post("/admin/search/retry", hub.admin_search_retry)
     app.router.add_get("/brand/logo", hub.brand_logo)
     app.router.add_get("/admin/egress", hub.admin_egress_get)
     app.router.add_post("/admin/egress", hub.admin_egress_set)

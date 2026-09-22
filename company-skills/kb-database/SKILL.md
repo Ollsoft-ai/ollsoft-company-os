@@ -61,6 +61,21 @@ Create any tables you like here. This is where an agent stores structured state 
 
 Isolation is the default; sharing is one explicit grant. Only you can grant on your own tables.
 
+## Searching the knowledgebase from SQL
+
+Prefer `kb-search` (it does everything below and reranks). What the database holds:
+
+| Object | What | Who can read |
+|---|---|---|
+| `kb.blocks` | one row per line: `file_path, line, kind, text, tsv` (full-text) | you, under RLS |
+| `kb.chunks` | one row per section: `file_path, seq, start_line, end_line, heading, text` — the text as embedded (credentials redacted) | you, under RLS |
+| `kb.search_vec(vec halfvec(1024), k)` | nearest sections you may read: `file_path, seq, start_line, distance` (no text) | members of `kb_users` |
+| `kb.embeddings` | the vectors themselves | nobody but `kbindexer` |
+| `kb.spend` | the AI bill per day, kind (`embed_index`, `embed_query`, `rerank`) and model | members of `kb_users` |
+
+A query vector comes from kb-embedd's socket (metered, capped per person):
+`curl -s --unix-socket /run/kb/search/api.sock -H 'content-type: application/json' -d '{"text":"…"}' http://x/embed`.
+
 ## ALWAYS ASK WHO BEFORE YOU CREATE A SHARED TABLE
 
 **If you are about to store data that anyone other than you will read — an app, a game, a dashboard, a tracker, a vote, a leaderboard — stop and ask the human who should have access, and whether they should be able to write as well as read.** Do not guess, and do not silently pick "just me" or "everybody". Ask before creating the table, so the grant lands with it. Something like:

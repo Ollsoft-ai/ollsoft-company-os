@@ -47,7 +47,11 @@ if [ -f /etc/kb/kb.env ]; then
   # turns alerting off in the least visible way possible.
   PRIOR_NTFY_TOPIC="${KB_NTFY_TOPIC:-}"
   PRIOR_ALERT_PUSH="${KB_ALERT_PUSH:-}"
+  PRIOR_EMBED_PROVIDER="${KB_EMBED_PROVIDER:-}"
+  PRIOR_RERANK_PROVIDER="${KB_RERANK_PROVIDER:-}"
+  PRIOR_ENV="$(cat /etc/kb/kb.env)"
 fi
+PRIOR_ENV="${PRIOR_ENV:-}"
 PRIOR_PROTECTED="${PRIOR_PROTECTED:-}"
 PRIOR_NTFY_TOPIC="${PRIOR_NTFY_TOPIC:-}"
 PRIOR_ALERT_PUSH="${PRIOR_ALERT_PUSH:-0}"
@@ -324,6 +328,22 @@ SQL
 runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='kb'" | grep -q 1 \
   || runuser -u postgres -- createdb -O kbindexer kb
 runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+# Postgres ships with a 128 MB buffer cache; every search reads all of
+# kb.blocks (RLS: no index is reachable, see schema.sql) plus the vectors, and
+# on a real knowledgebase that is more than 128 MB — each search then evicts
+# the last one's pages. A quarter of RAM, at most 2 GB, keeps it resident.
+PGCONF_DIR="$(dirname "$(runuser -u postgres -- psql -tAc 'SHOW config_file')")/conf.d"
+if [ -d "$PGCONF_DIR" ]; then
+  mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  sb_mb=$(( mem_mb / 4 )); [ "$sb_mb" -gt 2048 ] && sb_mb=2048; [ "$sb_mb" -lt 128 ] && sb_mb=128
+  want="# Written by Ollsoft Company OS scripts/install.sh
+shared_buffers = ${sb_mb}MB"
+  if [ "$(cat "$PGCONF_DIR/kb.conf" 2>/dev/null)" != "$want" ]; then
+    printf '%s\n' "$want" > "$PGCONF_DIR/kb.conf"
+    chmod 644 "$PGCONF_DIR/kb.conf"
+    systemctl restart postgresql     # shared_buffers only changes on a restart
+  fi
+fi
 runuser -u kbindexer -- psql -d kb -v ON_ERROR_STOP=1 < "$SRC/scripts/schema.sql"
 # Personal schema + search_path for the admin (the hub does this for later users).
 runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 <<SQL
@@ -332,7 +352,7 @@ ALTER ROLE "$ADMIN_USER" SET search_path = "u_$ADMIN_USER", kb, public;
 SQL
 
 # ---------------------------------------------------------------------------
-say "kb-history CLI"
+say "kb-history and kb-search CLIs"
 # ---------------------------------------------------------------------------
 # The documented way for a user to read version history: the socket checks the
 # caller's identity via SO_PEERCRED, so this needs no privileges of its own.
@@ -342,6 +362,13 @@ cat > /usr/local/bin/kb-history <<WRAP
 PYTHONPATH="$PREFIX" exec "$VENV/bin/python" -m kb_platform.vc_cli "\$@"
 WRAP
 chmod 0755 /usr/local/bin/kb-history
+# kb-search: hybrid search as the caller (docs/semantic-search.md).
+cat > /usr/local/bin/kb-search <<WRAP
+#!/bin/sh
+# Ollsoft Company OS search CLI. Installed by scripts/install.sh.
+PYTHONPATH="$PREFIX" exec "$VENV/bin/python" -m kb_platform.search_cli "\$@"
+WRAP
+chmod 0755 /usr/local/bin/kb-search
 
 # ---------------------------------------------------------------------------
 say "runtime config and directories"
@@ -359,7 +386,7 @@ done
 
 cat > /etc/kb/kb.env <<ENV
 # Ollsoft Company OS runtime configuration. Read by the systemd units.
-# Changing anything here requires: systemctl restart kb-hub kb-syncd kb-indexer kb-convert
+# Changing anything here requires: systemctl restart kb-hub kb-syncd kb-indexer kb-embedd kb-convert
 KB_REPO=$REPO
 KB_RUN=/run/kb
 KB_ETC=/etc/kb
@@ -388,7 +415,27 @@ KB_NTFY_TOPIC=$PRIOR_NTFY_TOPIC
 KB_ALERT_PUSH=$PRIOR_ALERT_PUSH
 # Seconds an identical alert title stays muted for pushes (log is unaffected).
 KB_ALERT_DEDUP=21600
+# --- semantic search (docs/semantic-search.md) --------------------------------
+# Provider wiring; the keys are separate files, /etc/kb/embed.key and
+# /etc/kb/rerank.key, written by scripts/install-search-keys.sh. none = full-text
+# search only, nothing is ever sent anywhere.
+KB_EMBED_PROVIDER=${PRIOR_EMBED_PROVIDER:-none}
+KB_RERANK_PROVIDER=${PRIOR_RERANK_PROVIDER:-none}
 ENV
+# Everything else an operator (or a setup script) added to the previous kb.env
+# — KB_SHARE_BASE, KB_EMBED_URL, KB_STT_MODEL, ... — is carried over verbatim.
+# Regenerating this file used to drop such lines without a word.
+if [ -n "$PRIOR_ENV" ]; then
+  carried=""
+  while IFS= read -r line; do
+    key="${line%%=*}"
+    grep -q "^$key=" /etc/kb/kb.env || carried="$carried$line"$'\n'
+  done < <(printf '%s\n' "$PRIOR_ENV" | grep -E '^KB_[A-Z0-9_]+=' || true)
+  if [ -n "$carried" ]; then
+    printf '# --- carried over from the previous kb.env -------------------------------\n%s' \
+      "$carried" >> /etc/kb/kb.env
+  fi
+fi
 chmod 644 /etc/kb/kb.env
 
 # ---------------------------------------------------------------------------
@@ -416,7 +463,8 @@ systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
 systemctl daemon-reload
 
 FAILED=0
-UNITS="kb-syncd kb-hub kb-indexer"
+# kb-embedd always runs: without keys it only reports `unconfigured` and sends nothing.
+UNITS="kb-syncd kb-hub kb-indexer kb-embedd"
 [ -x "$CVENV/bin/python" ] && UNITS="$UNITS kb-convert"
 if [ "$DO_START" -eq 1 ]; then
   # shellcheck disable=SC2086  # UNITS is a deliberate word list
@@ -435,7 +483,7 @@ if [ "$DO_START" -eq 1 ]; then
   if [ "$FAILED" -ne 0 ]; then
     echo
     echo "ERROR: a service failed to start. Diagnose with:" >&2
-    echo "  journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert -n 50 --no-pager" >&2
+    echo "  journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -n 50 --no-pager" >&2
     exit 1
   fi
 else
@@ -454,8 +502,10 @@ Ollsoft Company OS is installed.
 $( [ -f "$CREDS" ] && echo "  Password    in $CREDS (delete it once you've logged in)" )
   Repo        $REPO
   Config      /etc/kb/kb.env
-  Logs        journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert -f
+  Logs        journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -f
 
 Optional: populate a sample company to explore the permission model —
   sudo bash scripts/seed-demo.sh
+Optional: semantic search (vectors + reranking, your own provider keys) —
+  sudo bash scripts/install-search-keys.sh --help      (docs/semantic-search.md)
 DONE

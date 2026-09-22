@@ -7,6 +7,11 @@ This repo is the company brain. Markdown files are the source of truth.
 - Your private scratch is `users/<you>/`.
 - Never write outside paths your OS user can access — the kernel enforces this
   anyway, but failing cleanly beats failing confusingly.
+- **To find something, start with `kb-search "your question"`** — any
+  language, by meaning and by words, only what you may read, printed as
+  `path:line`; then open the file. `--under company` narrows it, `--json` is
+  for scripts, `--status` shows the index. Use `rg` for exact strings and
+  regexes. (If semantic search is not set up it says so and does full-text.)
 - To aggregate tasks, read checkboxes (`- [ ]` / `- [x]`) across the files you
   can see, or query `kb.blocks` in Postgres.
 - Office files and PDFs (docx/pptx/xlsx/pdf) each have a hidden, read-only

@@ -51,6 +51,12 @@ One `document.open` per accepted session, not per keystroke — but a reconnect
 (dropped wifi, reopened tab, a lineage refresh) is a new join and a new line, so
 count *people and documents*, never lines.
 
+## What the AI costs (semantic search)
+
+- `kb-search --status` — state, coverage, today's and this month's spend, the caps.
+- `SELECT day, kind, calls, units, usd FROM kb.spend ORDER BY day DESC, kind;` — the ledger. `units` are the provider's own counts (tokens, rerank search units); `usd` is units × the price in Settings.
+- Spend growing while `embedded` does not is the one pattern to escalate. Caps and alerts: docs/semantic-search.md.
+
 ## Who can read this
 
 Only root and members of `sudo`, `adm` or `systemd-journal` — on this box, that

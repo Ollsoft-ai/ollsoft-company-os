@@ -1,0 +1,34 @@
+[Unit]
+Description=KB embedding worker (semantic search: vectors, spend ledger, budgets)
+Documentation=file:///opt/kb-platform/docs/semantic-search.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+OnFailure=kb-alert@%n.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# kbindexer owns kb.embeddings and is the only account that can read
+# /etc/kb/embed.key and /etc/kb/rerank.key (0640 root:kbindexer).
+User=kbindexer
+EnvironmentFile=-/etc/kb/kb.env
+Environment=PYTHONPATH=/opt/kb-platform
+Environment=KB_REPO=/srv/kb
+Environment=KB_RUN=/run/kb
+Environment=KB_ETC=/etc/kb
+ExecStart=/opt/kb-venv/bin/python -m kb_platform.embedd
+# A restart costs nothing: vectors are keyed by content hash and the ledger is
+# in Postgres. Every failure mode that could spend (bad key, poison chunk,
+# provider outage, budget) is handled inside, never by crash-looping.
+Restart=on-failure
+RestartSec=10
+MemoryHigh=512M
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

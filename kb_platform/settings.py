@@ -77,6 +77,47 @@ REGISTRY: list[dict] = [
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
      "help": "Colours for the whole app, editor and terminal included. Deep blue is the house look; "
              "Dark and Light follow Notion's greys and paper."},
+    # ---- semantic search (docs/semantic-search.md). Read by kb-embedd every
+    # minute; every limit here is enforced BEFORE a paid call is made.
+    {"key": "search.enabled", "type": "bool", "default": True,
+     "scopes": ("company",), "group": "Search & AI", "label": "Semantic search",
+     "help": "Embed documents and use meaning, not just words, in search. Off stops every paid "
+             "call at once; full-text search keeps working."},
+    {"key": "search.rerank.enabled", "type": "bool", "default": True,
+     "scopes": ("company",), "group": "Search & AI", "label": "Rerank results",
+     "help": "Reorder the best hits with the reranking model — only when you press Enter or stop "
+             "typing, never per keystroke."},
+    {"key": "search.embed.scope", "type": "enum", "options": ["all", "company+projects"],
+     "default": "all", "labels": {"all": "Everything readable", "company+projects": "company/ and projects/ only"},
+     "scopes": ("company",), "group": "Search & AI", "label": "What is embedded",
+     "help": "Text sent to the embedding provider. Secrets are never sent. Narrowing this also "
+             "removes vectors already made for what falls outside."},
+    {"key": "search.embed.quiet_seconds", "type": "int", "min": 30, "max": 86400, "default": 120,
+     "scopes": ("company",), "group": "Search & AI", "label": "Embed after (seconds of quiet)",
+     "help": "A document is embedded only once nobody has changed it for this long — while you type "
+             "nothing is sent. Only the sections whose text changed are re-embedded."},
+    {"key": "search.budget.embed_day_usd", "type": "int", "min": 0, "max": 500, "default": 10,
+     "scopes": ("company",), "group": "Search & AI", "label": "Embedding budget per day (USD)",
+     "help": "Embedding stops for the rest of the UTC day when this is spent. 0 stops it now."},
+    {"key": "search.budget.embed_month_usd", "type": "int", "min": 0, "max": 5000, "default": 100,
+     "scopes": ("company",), "group": "Search & AI", "label": "Embedding budget per month (USD)",
+     "help": "Embedding stops for the rest of the calendar month when this is spent."},
+    {"key": "search.budget.rerank_day_usd", "type": "int", "min": 0, "max": 500, "default": 20,
+     "scopes": ("company",), "group": "Search & AI", "label": "Rerank budget per day (USD)",
+     "help": "Past it, search keeps working without the reranking step until the UTC day rolls."},
+    {"key": "search.rerank.per_user_day", "type": "int", "min": 0, "max": 5000, "default": 200,
+     "scopes": ("company",), "group": "Search & AI", "label": "Reranks per person per day",
+     "help": "One person (or their agent in a loop) cannot spend the company's rerank budget alone."},
+    {"key": "search.price.embed_per_1m_usd", "type": "string", "pattern": r"\d{1,4}(\.\d{1,6})?",
+     "maxlen": 12, "default": "0.13",
+     "scopes": ("company",), "group": "Search & AI", "label": "Embedding price (USD per 1M tokens)",
+     "help": "Turns the tokens the provider reports into dollars for the ledger and the budgets. "
+             "Set it to your contract price."},
+    {"key": "search.price.rerank_per_1k_usd", "type": "string", "pattern": r"\d{1,4}(\.\d{1,6})?",
+     "maxlen": 12, "default": "2.75",
+     "scopes": ("company",), "group": "Search & AI", "label": "Rerank price (USD per 1,000 searches)",
+     "help": "Turns the search units the provider reports into dollars for the ledger and the "
+             "budgets. Set it to your contract price."},
 ]
 BY_KEY = {e["key"]: e for e in REGISTRY}
 

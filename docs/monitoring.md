@@ -17,7 +17,7 @@ repeating interruption.
 |---|---|---|---|
 | `uptime.yml` (GitHub Actions, 5-min cron) | box/tunnel/edge dead | GitHub — survives the VM | **Yes** — once per outage, once on recovery |
 | `OnFailure=kb-alert@%n` on every service | a service crashed or crash-looped past its start limit | systemd | No — logs only |
-| `kb-heartbeat.timer` (5 min) | **running-but-wrong**: stale search index, syncd not committing, hub not answering, postgres down, disk ≥85%, backups older than 48h | on the box | No — logs only |
+| `kb-heartbeat.timer` (5 min) | **running-but-wrong**: stale search index, syncd not committing, hub not answering, postgres down, disk ≥85%, backups older than 48h; semantic search paused (breaker, budget, dims, error), a budget half used, coverage stuck under 95% — check 8, [semantic-search.md](semantic-search.md) | on the box | No — logs only |
 | `kb-maintenance.timer` (daily 07:30) | triages everything above; distinguishes noise from real problems | on the box | **Yes** — only when a real problem is found |
 
 The heartbeat checks outcomes, not processes — it exists because a service can

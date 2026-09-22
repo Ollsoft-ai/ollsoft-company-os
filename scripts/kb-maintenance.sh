@@ -59,7 +59,7 @@ MODEL=$(cfg KB_MAINT_MODEL sonnet)
 BUDGET=$(cfg KB_MAINT_TIMEOUT 900)             # seconds; a triage that hangs is a no-op
 
 mkdir -p "$LOG_DIR" "$STATE_DIR" 2>/dev/null || true
-UNITS="kb-hub kb-syncd kb-indexer kb-convert postgresql cloudflared"
+UNITS="kb-hub kb-syncd kb-indexer kb-embedd kb-convert postgresql cloudflared"
 
 # Everything since the previous run — bounded, so one loud day cannot blow up
 # the context window (or the bill).
@@ -184,7 +184,7 @@ PY
   echo
   echo "## Platform tracebacks since last run (any is a bug, even if survived)"
   echo '```'
-  journalctl --since "$SINCE_ISO" -u kb-hub -u kb-syncd -u kb-indexer -u kb-convert \
+  journalctl --since "$SINCE_ISO" -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert \
       --no-pager -o cat 2>/dev/null | grep -E "Traceback|^[A-Za-z_.]+Error|Exception" \
     | sort | uniq -c | sort -rn | head -25 || echo "(none)"
   echo '```'

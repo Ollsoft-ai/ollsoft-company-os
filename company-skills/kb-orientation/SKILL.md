@@ -33,6 +33,23 @@ Don't run `git` here; it will just fail. Ask history questions with the
 
 Use ordinary tools — `ls`, `cat`, `grep`, `find`. **You will only ever see what you are allowed to see**; restricted folders simply won't list for you. Don't interpret a "permission denied" as something to bypass.
 
+# Finding things
+
+**`kb-search "question"` first**, then read what it points at:
+
+```bash
+kb-search "jak funguje sdílení projektu"          # any language — finds English pages too
+kb-search "who approves travel" --under company --k 5
+kb-search "invoice 2026-0412" --json              # {results: [{path, line, text, why, rank}], ...}
+kb-search --status                                # coverage, state, today's spend
+```
+
+- It searches by **meaning** (vectors) and by **words** (full-text), fuses them and reranks the best 40. `why` says which matched: `meaning`, `text` or `both`.
+- It runs **as you**: every hit is a file you could `cat`. Hidden sidecars of Office/PDF files are included.
+- `rg` is still the tool for exact strings, regexes and code (`--hidden` to include sidecars).
+- Each reranked search costs the company ~$0.003 and counts against your daily cap (200). In a loop or a script, pass `--no-rerank`.
+- Never embedded, so never found by meaning: `_secrets/`, private (0600) files, folders holding a `.noembed` file, and — if an admin chose it — `users/`. Credentials inside documents are redacted before anything is sent. docs/semantic-search.md has the whole design.
+
 # Editing documents
 
 Just edit the `.md` files with your normal file tools. You don't need any special API. When you save:
