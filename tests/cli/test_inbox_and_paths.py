@@ -1,5 +1,11 @@
-"""The inbox: one append-only file per person, written by whoever saw the
-event. Pure unit tests — a temporary repo, no server, no root."""
+"""Two things root does on other people's behalf, and the traps in both.
+
+The inbox: one append-only file per person, written by whichever root
+process saw the event — so every step is O_NOFOLLOW, because a home belongs
+to the person living in it. And the indexer's "is it still there?" check,
+which must answer rather than raise when the answer is "you may not look".
+
+Pure unit tests: a temporary repo, no server, no root."""
 import getpass
 import json
 import os
@@ -149,3 +155,25 @@ def test_a_symlinked_home_cannot_either(repo):
     os.symlink(victim, home)
     assert common.add_inbox_event(me, {"kind": "mention", "path": "company/x.md"}) is False
     assert list(victim.iterdir()) == []
+
+
+def test_unreachable_reads_as_gone_for_the_indexer(tmp_path, monkeypatch):
+    """Python 3.12's `Path.exists()` raises PermissionError instead of
+    swallowing it, so revoking access to a shared folder threw an unhandled
+    traceback out of the indexer's reconcile loop."""
+    from kb_platform import indexer
+
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    inside = blocked / "doc.md"
+    inside.write_text("# hi\n")
+    os.chmod(blocked, 0o000)
+    try:
+        if os.geteuid() == 0:
+            pytest.skip("root walks through any mode")
+        with pytest.raises(PermissionError):
+            inside.exists()                       # the crash this replaces
+        assert indexer.Indexer._reachable(inside) is False
+        assert indexer.Indexer._reachable(tmp_path) is True
+    finally:
+        os.chmod(blocked, 0o700)

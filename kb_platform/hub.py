@@ -968,7 +968,15 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
     owner = _owner_name(p) or ""
 
     roles: dict[str, str] = {}
-    for row in data.get("people") or []:
+    people = data.get("people")
+    if people is not None and not isinstance(people, list):
+        raise ValueError("people must be a list of {user, role}")
+    for row in people or []:
+        # A caller that sends ["bob"] instead of [{"user": "bob", …}] used to
+        # get a 500 and a traceback in the journal; the shape is part of the
+        # request, so it is a 400 like every other bad field.
+        if not isinstance(row, dict):
+            raise ValueError("each person is {\"user\": …, \"role\": …}")
         u, role = str(row.get("user", "")), row.get("role")
         if not _NAME_RE.match(u) or role not in _ROLES:
             raise ValueError("bad person entry")

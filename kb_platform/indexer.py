@@ -747,12 +747,26 @@ class Indexer:
         for path in [k for k in list(self._failed_at) if k not in rowpaths]:
             p = self.root / path
             cur_sig = self._sig_of(p)
-            if cur_sig is None and not p.exists():
+            if cur_sig is None and not self._reachable(p):
                 self._forget(path)
                 continue
             if self._skip(path, cur_sig, now):
                 continue
             self._index_one(p, path, cur_sig)
+
+    @staticmethod
+    def _reachable(p: Path) -> bool:
+        """`Path.exists()`, but a folder whose permissions were taken away is
+        an answer, not a crash. Python 3.12 stopped swallowing PermissionError
+        in `exists()`, so revoking access to a shared folder threw an
+        unhandled traceback out of the reconcile loop (caught by the
+        maintenance report, 2026-09-22). Unreachable reads as gone, which is
+        what the index should do with it anyway: what kbindexer cannot read,
+        nobody can search."""
+        try:
+            return p.exists()
+        except (PermissionError, OSError):
+            return False
 
     def _index_one(self, p: Path, rel: str, sig: tuple | None):
         """(Re)index one path, recording success or scheduling a retry. A
@@ -817,7 +831,7 @@ class Indexer:
             if common.is_secret_path(rel):           # secrets stay out entirely
                 continue
             try:
-                if p.exists():
+                if self._reachable(p):
                     if p.suffix == ".md":
                         self.reindex_file(p)
                     elif p.is_dir():

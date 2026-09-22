@@ -14,6 +14,7 @@ PORT="${KB_SHARE_PORT:-8402}"
 KB_SHARE_BRAND_DEFAULT="${KB_SHARE_BRAND:-Company OS}"
 IMAGE="kb-share:1"
 PUBROOT="${KB_PUBLIC_ROOT:-/srv/kb-public}"
+REPO="${KB_REPO:-/srv/kb}"
 STORE_DIR="/var/lib/kb-shares"
 USER_NAME="kbshare"
 NETWORK="kb-share-net"
@@ -136,6 +137,14 @@ Description=Take down expired public links, put back the ones a reboot dropped
 
 [Service]
 Type=oneshot
+# The same environment every other kb unit carries. Without PYTHONPATH this
+# is a ModuleNotFoundError every fifteen minutes, which is exactly how it
+# shipped (caught by the maintenance report the next morning, 2026-09-22).
+EnvironmentFile=-/etc/kb/kb.env
+Environment=PYTHONPATH=/opt/kb-platform
+Environment=KB_REPO=${REPO:-/srv/kb}
+Environment=KB_RUN=/run/kb
+Environment=KB_ETC=/etc/kb
 ExecStart=/opt/kb-venv/bin/python -m kb_platform.publicshare
 UNIT
 

@@ -155,6 +155,18 @@ buttons in the chrome go into a named slot (`slot("topbar")`).
 These were designed during the build (some deliberately deferred) and are the
 natural next steps.
 
+- **A named indexer grant on a FOLDER stops its sidecars.** POSIX ACL
+  evaluation stops at the first matching named user entry, so a folder
+  carrying `user:kbindexer:r-x` no longer lets `kb-convert` (which runs as
+  `kbindexer`) create the `.name.docx.md` beside a document — the account's
+  project-group write is never consulted. Found on 2026-09-22: three
+  documents in one project had been unconvertible for weeks, and the folder
+  looked perfectly group-writable. The fix applied there was
+  `setfacl -m u:kbindexer:rwx` on the directories; the general fix is for the
+  audience machinery to grant the indexer `rwx` on directories (it already
+  grants `rx`) or for convert to write sidecars somewhere it always may.
+  Until one of those lands, the symptom is "the sidecar never appears and the
+  journal says Permission denied on a `.kbtmp`".
 - **More kinds of notification.** The inbox is built (mentions and shares —
   see [ARCHITECTURE.md](ARCHITECTURE.md)); what is not written yet is a cron
   job that failed, an agent that finished while you were away, and a public
