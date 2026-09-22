@@ -847,28 +847,42 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
    the wrong checkbox (2026-09-22). Horizontal margin is safe: it changes no
    height. Same rule for the image widget below. */
 .cm-table-wrap { margin: 0 var(--gutter); padding: .5rem 0; position: relative; overflow-x: auto; }
-.cm-table { border-collapse: collapse; font-size: .88rem; min-width: min(100%, 20rem);
-  border-radius: var(--r); overflow: hidden; }
+/* As wide as its content needs and no wider, capped at the page: a two-column
+   table stays small, a heavy one uses the whole width, and neither is ever a
+   thing you scroll sideways to read — the cells wrap instead. */
+.cm-table { border-collapse: collapse; font-size: .88rem; table-layout: auto;
+  max-width: 100%; min-width: min(100%, 16rem); border-radius: var(--r); overflow: hidden; }
+/* `width: auto` is deliberate and load-bearing. A table's own layout already
+   means "as wide as the content wants, up to what is available", which is
+   exactly the rule we want — while `width: max-content` pins the editor's
+   content box to the widest cell's unwrapped line (CodeMirror's content is a
+   flex item that only shrinks to its min-content size), and the whole
+   document then scrolls sideways under a long sentence. */
 .cm-table th, .cm-table td { border: 1px solid var(--border); padding: var(--cell-pad);
-  vertical-align: middle; }
+  vertical-align: top; text-align: left; }
 .cm-table th { background: var(--panel2); }
-.cm-table th input, .cm-table th { font-weight: 600; color: var(--ink); }
-/* A cell shows its markdown RENDERED; the raw text comes back — as an input,
-   which is then the cell's whole box — only while you are editing it. */
+.cm-table th textarea, .cm-table th { font-weight: 600; color: var(--ink); }
+/* A cell shows its markdown RENDERED and gives back the raw text — in a
+   textarea sitting in the same box, with the same type and padding, so
+   opening a cell moves nothing on the page. Both of them WRAP: a long value
+   makes its cell taller, never a thing you scroll inside. */
 .cm-td { cursor: text; }
-.cm-td.editing { padding: 0; }
+.cm-td.editing { background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: inset 0 0 0 2px var(--accent); }
 .cm-td.editing .cm-cell-md { display: none; }
-.cm-cell-md { display: block; min-width: 3.5rem; }
+.cm-cell-md, .cm-cell-edit { display: block; min-width: 3rem; white-space: pre-wrap;
+  overflow-wrap: anywhere; }
 .cm-cell-md:empty::after { content: "\00a0"; }     /* an empty cell keeps its height */
+.cm-cell-edit { width: 100%; box-sizing: border-box; background: transparent; border: 0;
+  padding: 0; margin: 0; color: inherit; font: inherit; line-height: inherit;
+  resize: none; overflow: hidden; }
+.cm-cell-edit:focus { outline: none; }
 .cm-cell-md code { font-family: var(--mono); font-size: .92em; color: var(--md-code);
   background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 .25em; }
 .cm-cell-md s { color: var(--muted); }
 .cm-md-dead { color: var(--muted); text-decoration-style: dotted; cursor: default; }
 .cm-cell-img { max-height: 3.4rem; max-width: 12rem; vertical-align: middle; border-radius: 4px; }
-.cm-table input { width: 100%; min-width: 4rem; box-sizing: border-box; background: transparent;
-  border: 0; color: inherit; font: inherit; padding: var(--cell-pad); border-radius: 0; }
-.cm-table input:focus { outline: 2px solid var(--accent); outline-offset: -2px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
 .cm-tbl-bar { display: flex; gap: .25rem; margin-top: .3rem; opacity: 0; transition: opacity .12s ease; }
 .cm-table-wrap:hover .cm-tbl-bar, .cm-table-wrap:focus-within .cm-tbl-bar { opacity: 1; }
 .cm-tbl-bar button { font: 500 .72rem/1 var(--sans); color: var(--muted); cursor: pointer;

@@ -404,9 +404,23 @@ about the app — see §8.1):
   href) and hands back the raw text as an `<input>` while the cursor is in it.
   Keys typed in a cell belong to the table, except Ctrl+Z/Ctrl+Shift+Z, which
   are the document's: they flush the pending cell write and run the editor's
-  own undo. The bar under the grid works on the END of the table (add/remove
-  the last row or column); anywhere in the middle is a right-click on the cell
-  you mean, which also deletes that row or column.
+  own undo. Shift+Enter writes `<br>`, the one line break GFM allows inside a
+  cell. The bar under the grid works on the END of the table (add/remove the
+  last row or column); anywhere in the middle is a right-click on the cell you
+  mean, which also deletes that row or column.
+- **A table sizes itself to its content and never scrolls inside a cell.** The
+  cell is a `<textarea>` in the same box as the rendered text — same type,
+  same padding — that grows DOWNWARD as you type, and both states wrap. The
+  table keeps `width: auto`, which is the rule already wanted ("as wide as the
+  content needs, up to what is available"): a two-column table stays narrow, a
+  heavy one fills the page, eight columns wrap rather than scroll. `width:
+  max-content` looks equivalent and is not — CodeMirror's content element is a
+  flex item that shrinks only to its min-content size, so a pinned max-content
+  table drags the whole document sideways under one long sentence. While a
+  cell is open the columns are frozen **as proportions** (the raw `**ship**`
+  is wider than the `ship` it renders as, and a column that widens under the
+  pointer is the jump krystof kept hitting), and every size change calls
+  `view.requestMeasure()` so the editor's height map keeps up with the box.
 - **The writing surface is a module of its own** (`richview.js`): widgets,
   live-preview decorations, tables, list metrics, @mentions, the markdown
   highlight style. It imports nothing from `app.js` — how to toast, ask, draw

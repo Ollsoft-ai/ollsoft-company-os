@@ -583,6 +583,37 @@ class TableWidget extends WidgetType {
       return items;
     };
 
+    // The grid is frozen while a cell is open. The raw markdown of a cell is
+    // longer than what it renders as ("**ship**" vs "ship"), so opening one
+    // used to widen its column and shove the whole table sideways under the
+    // pointer. Measured once, put back when the last cell closes.
+    const freeze = () => {
+      const head = table.rows[0];
+      if (!head || table.style.tableLayout === "fixed") return;
+      const widths = [...head.cells].map((c) => c.getBoundingClientRect().width);
+      const total = table.getBoundingClientRect().width;
+      if (!total) return;
+      // Proportions, not pixels: the column keeps its share of the table even
+      // if the page narrows while a cell is open (a scrollbar appearing is
+      // enough), where frozen pixels would push the table off the side and
+      // drag the whole editor sideways with it.
+      table.style.width = Math.round(total) + "px";
+      [...head.cells].forEach((c, i) => {
+        c.style.width = ((widths[i] / total) * 100).toFixed(3) + "%";
+      });
+      table.style.tableLayout = "fixed";
+    };
+    const thaw = () => {
+      if (dom.querySelector(".cm-td.editing")) return;
+      table.style.tableLayout = "";
+      table.style.width = "";
+      for (const c of (table.rows[0] || { cells: [] }).cells) c.style.width = "";
+    };
+    // CodeMirror measures this widget's box to know where every line below it
+    // paints. A cell that grew and a height map that did not is how a click
+    // lands on the wrong line, so every size change says so.
+    const measured = () => { try { view.requestMeasure(); } catch (e) { /* torn down */ } };
+
     rows.forEach((row, r) => {
       const tr = document.createElement("tr");
       row.forEach((cell, c) => {
@@ -593,82 +624,121 @@ class TableWidget extends WidgetType {
         let raw = cell.text.replace(/\\\|/g, "|");
         const shown = document.createElement("span");
         shown.className = "cm-cell-md";
-        const paint = () => shown.replaceChildren(renderInlineMd(raw, dir));
+        const paint = () => { shown.replaceChildren(renderInlineMd(raw, dir)); measured(); };
         paint();
         td.appendChild(shown);
         tr.appendChild(td);
         if (ro) return;
 
-        let inp = null;
+        let box = null;                     // the <textarea> while this cell is open
+        const grow = () => {
+          if (!box) return;
+          box.style.height = "auto";
+          box.style.height = box.scrollHeight + "px";
+          measured();
+        };
         const close = () => {
-          if (!inp) return;
-          const el = inp;
-          inp = null;                       // before blur/remove re-enters here
+          if (!box) return;
+          const el = box;
+          box = null;                       // before blur/remove re-enters here
           clearTimeout(el._t);
           if (!dom.__busy) { raw = el.value; writeCell(r, c, el.value); }
           el.remove();
           td.classList.remove("editing");
           paint();
+          thaw();
         };
-        const edit = () => {
+        // Where a click means, in the RAW text. When the cell is plain the two
+        // agree character for character, so the caret lands under the finger;
+        // when it carries markup they do not, and the end of the text is the
+        // honest answer.
+        const caretFromClick = (e) => {
+          const plain = shown.textContent;
+          if (plain !== raw) return raw.length;
+          let pos = null;
+          if (document.caretPositionFromPoint) {
+            const cp = document.caretPositionFromPoint(e.clientX, e.clientY);
+            if (cp && shown.contains(cp.offsetNode)) pos = cp.offset;
+          } else if (document.caretRangeFromPoint) {
+            const rg = document.caretRangeFromPoint(e.clientX, e.clientY);
+            if (rg && shown.contains(rg.startContainer)) pos = rg.startOffset;
+          }
+          return pos == null ? raw.length : Math.min(pos, raw.length);
+        };
+        const edit = (caret) => {
           focus = { r, c };
-          if (inp) { inp.focus(); inp.select(); return; }
-          // hold the column at the width it is rendering at, so entering a
-          // cell does not make the table jump sideways under the pointer
-          const w = td.getBoundingClientRect().width;
-          inp = document.createElement("input");
-          inp.type = "text";
-          inp.value = raw;
-          inp.size = Math.max(6, Math.min(40, raw.length + 1));
-          inp.style.minWidth = Math.max(40, Math.round(w) - 14) + "px";
-          inp.setAttribute("data-cell", r + "," + c);
-          inp.addEventListener("input", () => {
-            inp.size = Math.max(6, Math.min(40, inp.value.length + 1));
-            clearTimeout(inp._t);
-            inp._t = setTimeout(() => writeCell(r, c, inp.value), 400);
+          if (box) { box.focus(); return; }
+          freeze();
+          box = document.createElement("textarea");
+          box.className = "cm-cell-edit";
+          box.rows = 1;
+          box.spellcheck = false;
+          box.value = raw;
+          box.setAttribute("data-cell", r + "," + c);
+          box.addEventListener("input", () => {
+            grow();
+            clearTimeout(box._t);
+            box._t = setTimeout(() => writeCell(r, c, box.value), 400);
           });
-          inp.addEventListener("blur", close);
+          box.addEventListener("blur", close);
           // keys typed in a cell are the table's business, not the editor's —
           // except the ones that are about the DOCUMENT, which are forwarded
-          inp.addEventListener("keydown", (e) => {
+          box.addEventListener("keydown", (e) => {
             e.stopPropagation();
             const mod = e.metaKey || e.ctrlKey;
             if (mod && (e.key === "z" || e.key === "Z" || e.key === "y")) {
               e.preventDefault();
-              undoFromCell(r, c, inp, e.key === "y" || e.shiftKey);
+              undoFromCell(r, c, box, e.key === "y" || e.shiftKey);
               return;
             }
             const go = (dr, dc) => {
               const next = dom.querySelector(`[data-cell="${r + dr},${c + dc}"]`);
               if (next && next.__edit) {
-                e.preventDefault(); clearTimeout(inp._t);
-                writeCell(r, c, inp.value);
+                e.preventDefault(); clearTimeout(box._t);
+                writeCell(r, c, box.value);
                 next.__edit();
               }
               return !!(next && next.__edit);
             };
+            const atStart = box.selectionStart === 0 && box.selectionEnd === 0;
+            const atEnd = box.selectionStart === box.value.length &&
+                          box.selectionEnd === box.value.length;
             if (e.key === "Tab") { if (!go(0, e.shiftKey ? -1 : 1)) go(e.shiftKey ? -1 : 1, 0); }
-            else if (e.key === "ArrowDown") go(1, 0);
-            else if (e.key === "ArrowUp") go(-1, 0);
-            else if (e.key === "Enter") {
+            // a wrapped cell has lines of its own: leave it only from its edge
+            else if (e.key === "ArrowDown" && atEnd) go(1, 0);
+            else if (e.key === "ArrowUp" && atStart) go(-1, 0);
+            else if (e.key === "Enter" && e.shiftKey) {
+              // the only line break GFM allows inside a cell
               e.preventDefault();
-              clearTimeout(inp._t); writeCell(r, c, inp.value);
+              const at = box.selectionStart;
+              box.value = box.value.slice(0, at) + "<br>" + box.value.slice(box.selectionEnd);
+              box.selectionStart = box.selectionEnd = at + 4;
+              grow();
+              clearTimeout(box._t);
+              box._t = setTimeout(() => writeCell(r, c, box.value), 400);
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              clearTimeout(box._t); writeCell(r, c, box.value);
               if (!go(1, 0)) addRow(rowCount());
-            } else if (e.key === "Escape") { inp.blur(); view.focus(); }
+            } else if (e.key === "Escape") { box.blur(); view.focus(); }
           });
           td.classList.add("editing");
-          td.appendChild(inp);
-          inp.focus(); inp.select();
+          td.appendChild(box);
+          grow();
+          box.focus();
+          if (caret == null) box.select();
+          else box.setSelectionRange(caret, caret);
         };
         td.__edit = edit;
 
         td.addEventListener("mousedown", (e) => {
-          if (e.button !== 0 || inp) return;
+          if (e.button !== 0 || box) return;
           const a = e.target.closest("a");
           if (a) { e.preventDefault(); openCellLink(a); return; }
           if (e.target.tagName === "IMG") return;   // let a picture be a picture
+          const caret = caretFromClick(e);
           e.preventDefault();                       // no text selection, no caret move
-          edit();
+          edit(caret);
         });
         td.addEventListener("contextmenu", (e) => {
           e.preventDefault(); e.stopPropagation();

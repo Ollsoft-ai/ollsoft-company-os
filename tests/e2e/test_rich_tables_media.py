@@ -106,7 +106,7 @@ def cell(page, r, c):
     """A cell renders its markdown until you put the cursor in it, so clicking
     the cell is what produces the <input> these tests type into."""
     page.locator(f'table.cm-table [data-cell="{r},{c}"]').click()
-    inp = page.locator(f'table.cm-table input[data-cell="{r},{c}"]')
+    inp = page.locator(f'table.cm-table textarea[data-cell="{r},{c}"]')
     inp.wait_for(state="visible", timeout=4000)
     return inp
 
@@ -373,3 +373,115 @@ def test_right_click_deletes_the_row_you_point_at(browser, fresh):
     assert page.locator('[data-testid="ctx-menu"] button:has-text("Delete this row")').count() == 0
     assert page.locator('[data-testid="ctx-menu"] button:has-text("Insert row above")').count() == 0
     page.keyboard.press("Escape")
+
+
+# ---- sizing: show the content, use the page, move nothing ------------------
+# "when I click inside a table it weirdly jumps, it weirdly resizes… I have to
+#  scroll inside that cell instead of it being stretched wide or high… they
+#  must always be automatically resized to basically show all the content"
+#  — krystof, 2026-09-22
+
+LONG_CELL = ("A sentence far too long to sit on one line in a narrow cell, "
+             "which is exactly the case that used to make you scroll sideways "
+             "inside the cell instead of the cell simply getting taller.")
+
+
+def _geom(page):
+    return page.evaluate("""() => {
+      const sc = document.querySelector('.cm-scroller');
+      const wrap = document.querySelector('.cm-table-wrap');
+      const t = wrap.querySelector('table');
+      return {
+        docScrollsSideways: sc.scrollWidth > sc.clientWidth + 1,
+        wrap: wrap.clientWidth, table: Math.round(t.getBoundingClientRect().width),
+        cells: [...t.querySelectorAll('td[data-cell], th[data-cell]')].map(td => ({
+          k: td.dataset.cell, w: Math.round(td.getBoundingClientRect().width),
+          h: Math.round(td.getBoundingClientRect().height),
+          scrolls: td.scrollWidth > td.clientWidth + 1,
+        })),
+      };
+    }""")
+
+
+@pytest.fixture
+def sized(browser):
+    """A wide table and a small one in a document of this test's own."""
+    c = api()
+    rel = kbdoc(f"tblsize_{int(time.time() * 1000)}.md")
+    wide = ("| " + " | ".join(f"Column {i}" for i in range(8)) + " |\n"
+            "| " + " | ".join("---" for _ in range(8)) + " |\n"
+            "| " + " | ".join(f"value {i} that is fairly long" for i in range(8)) + " |\n")
+    body = (f"# Sizing\n\n| Task | Notes | Who |\n| --- | --- | --- |\n"
+            f"| Short | {LONG_CELL} | alice |\n| Ship | fine | bob |\n\n"
+            f"| A | B |\n| --- | --- |\n| x | y |\n\n{wide}\nafter\n")
+    assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)
+    assert c.post("/api/artifact/write",
+                  json={"path": rel, "content": body}).status_code == 200
+    ctx, page = open_doc(browser, rel)
+    page.wait_for_selector("table.cm-table", timeout=10000)
+    page.wait_for_timeout(500)
+    yield page
+    ctx.close()
+    c.post("/api/fs/delete", json={"path": rel, "permanent": True})
+
+
+def test_a_long_cell_gets_taller_instead_of_scrolling(sized):
+    page = sized
+    g = _geom(page)
+    assert not g["docScrollsSideways"], "the document scrolls sideways because of a table"
+    assert g["table"] <= g["wrap"] + 1, g          # the table fits the page
+    long_cell = next(c for c in g["cells"] if c["k"] == "1,1")
+    assert not long_cell["scrolls"], "the cell scrolls instead of wrapping"
+    assert long_cell["h"] > 40, f"the long cell did not get taller: {long_cell}"
+
+
+def test_a_small_table_stays_small_and_a_wide_one_uses_the_page(sized):
+    page = sized
+    sizes = page.evaluate("""() => [...document.querySelectorAll('.cm-table-wrap')].map(w => ({
+      table: Math.round(w.querySelector('table').getBoundingClientRect().width),
+      wrap: w.clientWidth,
+      scrolls: w.scrollWidth > w.clientWidth + 1,
+    }))""")
+    wide, small, eight = sizes[0], sizes[1], sizes[2]
+    assert small["table"] < small["wrap"] * 0.6, f"a two-cell table was stretched: {small}"
+    assert wide["table"] > wide["wrap"] * 0.9, f"a table with a long cell stayed narrow: {wide}"
+    assert eight["table"] <= eight["wrap"] + 1 and not eight["scrolls"], \
+        f"eight columns did not fit by wrapping: {eight}"
+
+
+def test_opening_a_cell_moves_nothing(sized):
+    page = sized
+    before = _geom(page)
+    page.locator("table.cm-table").first.locator('[data-cell="1,1"]').click()
+    page.locator('table.cm-table textarea[data-cell="1,1"]').wait_for(state="visible")
+    page.wait_for_timeout(300)
+    after = _geom(page)
+    assert before["table"] == after["table"], (before["table"], after["table"])
+    for b, a in zip(before["cells"], after["cells"]):
+        if b["k"] == a["k"]:
+            assert abs(b["w"] - a["w"]) <= 1, f"column {b['k']} moved: {b} -> {a}"
+    assert not after["docScrollsSideways"], "opening a cell pushed the page sideways"
+
+
+def test_a_cell_grows_as_you_type_and_shift_enter_breaks_the_line(sized):
+    page = sized
+    first = page.locator("table.cm-table").first
+    first.locator('[data-cell="1,0"]').click()
+    box = page.locator('table.cm-table textarea[data-cell="1,0"]')
+    box.wait_for(state="visible")
+    before = first.locator('td[data-cell="1,0"]').bounding_box()
+    page.keyboard.type(" and quite a lot more text than this column is wide")
+    page.wait_for_timeout(300)
+    after = first.locator('td[data-cell="1,0"]').bounding_box()
+    assert abs(after["width"] - before["width"]) <= 1, "the column widened under the pointer"
+    assert after["height"] > before["height"] + 10, "the cell did not grow downwards"
+    assert not page.evaluate("""() => {const t = document.querySelector('.cm-cell-edit');
+        return t.scrollHeight > t.clientHeight + 1;}"""), "the textarea scrolls"
+
+    page.keyboard.press("Shift+Enter")
+    page.keyboard.type("second line")
+    page.wait_for_timeout(800)
+    assert "<br>second line" in doc_text(page)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    assert page.locator('table.cm-table td[data-cell="1,0"] br').count() == 1

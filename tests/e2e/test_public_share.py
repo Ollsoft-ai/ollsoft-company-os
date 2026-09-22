@@ -226,7 +226,7 @@ def test_a_shared_document_opens_in_the_real_editor(browser, shared_doc):
         # …and read-only means read-only: no cell inputs, no save
         page.locator('table.cm-table [data-cell="1,0"]').click()
         page.wait_for_timeout(300)
-        assert page.locator("table.cm-table input").count() == 0
+        assert page.locator("table.cm-table textarea").count() == 0
         assert page.locator(".cm-task input[type=checkbox]").first.is_disabled()
         assert not errors, errors
     finally:
@@ -253,7 +253,7 @@ def test_an_edit_link_saves_through_the_container(browser, shared_doc):
         wait_for_body(a, path, "from the outside")
         # a cell in the table is editable through the link too
         page.locator('table.cm-table [data-cell="1,1"]').click()
-        inp = page.locator('table.cm-table input[data-cell="1,1"]')
+        inp = page.locator('table.cm-table textarea[data-cell="1,1"]')
         inp.wait_for(state="visible", timeout=4000)
         inp.fill("them")
         page.keyboard.press("Escape")

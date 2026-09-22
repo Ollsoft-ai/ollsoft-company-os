@@ -20,11 +20,20 @@ def __getattr__(name):
 
 
 @pytest.fixture(scope="session")
-def browser():
+def pw():
+    """The one Playwright instance for the whole run. A second
+    `sync_playwright()` in the same thread throws ("it looks like you are
+    using Playwright Sync API inside the asyncio loop"), so a test that wants
+    Firefox or WebKit borrows this rather than opening its own."""
     with sync_playwright() as p:
-        b = p.chromium.launch(headless=True, args=["--no-sandbox"])
-        yield b
-        b.close()
+        yield p
+
+
+@pytest.fixture(scope="session")
+def browser(pw):
+    b = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+    yield b
+    b.close()
 
 
 def login(context, user):
