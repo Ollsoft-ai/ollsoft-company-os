@@ -33,7 +33,7 @@ hub AUDIT file.download actor=bob result=ok path='company/HR/salaries.xlsx' byte
 ```
 
 Mutation events: `login`, `share.set`, `props.set`, `group.member`,
-`user.create` — and no others. `result=DENIED` is the interesting half — that is
+`user.create`, `public.create`, `public.revoke` — and no others. `result=DENIED` is the interesting half — that is
 someone being refused.
 
 Access events: `document.open`, `file.preview`, `file.download`. These are
@@ -77,6 +77,17 @@ journalctl -u kb-hub -g AUDIT --since '7 days ago' | grep -E 'share.set|props.se
 ```
 Look for a person widening a folder they do not work in, or setting
 `scope='everyone'` on anything under `projects/` or `company/🫂 Human Resources`.
+
+A **public link** is the widest any of it goes — no account needed at all:
+```
+journalctl -u kb-hub -g 'AUDIT public.' --since '30 days ago'
+```
+`public.create` names the actor, the path, view-or-edit, whether a password
+was set and when it expires. What is live right now is `sudo ls
+/srv/kb-public/data` (one directory per link) and the mount table. The link
+itself is not in the log — the token is only ever stored as a hash — so the
+question the trail answers is *what was published, by whom, for how long*,
+never *who opened it*.
 Cross-check: did the same actor then read it? Since 2026-08-29 there is a real
 answer — `journalctl -u kb-hub -g AUDIT | grep "path='<path>'"` shows the opens
 and downloads alongside the sharing change.

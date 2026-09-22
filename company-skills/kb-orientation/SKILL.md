@@ -128,6 +128,44 @@ Whenever a share does not behave, verify from the other person's side rather
 than guessing — `sudo -u <them> test -r <path> && echo yes` answers it in one
 line, and `sudo -u kbindexer test -r <path>` answers the search question.
 
+# Sharing with someone who has NO account here — a public link
+
+Groups and ACLs only work for people the box knows. For a client, a lawyer or
+a candidate there is a **public link**: one file or one folder, served by a
+separate container that can see nothing else on the machine.
+
+In the app: right-click the file or folder → **Share publicly…** → who (anyone
+with the link, or with a password), what (view, or view and edit), how long
+(14 days by default, 90 max). The URL is shown **once** — the token is stored
+only as a hash, so copy it then. The same thing over the API, as its owner:
+
+```bash
+curl -s -X POST localhost:8300/fs/public -H 'Content-Type: application/json' \
+     -d '{"path":"company/plans/brief.md","mode":"edit","days":7}'   # -> {"share":{"url":…}}
+curl -s localhost:8300/fs/public                                      # your live links
+curl -s -X POST localhost:8300/fs/public/revoke -d '{"id":"<id>"}'    # off, immediately
+```
+
+What matters when you use it:
+
+- **Only the owner of the path may publish it, and only they may revoke it.**
+  Revoking unmounts it, so a leaked link dies within a second.
+- **A `_secrets/` path can never be published**, and a shared `.html`
+  artifact is served as source, never run.
+- **The reader gets the real editor** — rendered markdown, tables,
+  checkboxes — in their own device's light or dark theme. An edit link saves
+  back into the real file about a second after they stop typing, and the app
+  picks that up the way it picks up any outside edit.
+- **It is not multiplayer.** No CRDT reaches the container; the page polls
+  the file every few seconds. Two people editing the same document at once
+  see each other within seconds rather than keystroke by keystroke.
+- Every publish and revoke is in the audit trail (`public.create`,
+  `public.revoke` — see **kb-audit**), and `sudo ls /srv/kb-public/data`
+  shows what is mounted right now.
+
+The design, the threat model and the Cloudflare side are in the platform repo
+at `docs/public-sharing.md`.
+
 # What else you can do (see the other skills)
 
 - **`kb-database`** — query the shared index (respects permissions automatically) and create your own private tables.
