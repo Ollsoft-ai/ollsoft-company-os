@@ -375,24 +375,26 @@ def test_a_link_to_one_file_cannot_reach_its_neighbours(browser, shared_doc):
 
 
 @container
-def test_the_page_wears_the_readers_theme_and_renders_a_line_break(browser, shared_doc):
-    """Nobody out here has an account, so the theme cannot be the sharer's —
-    the reader's own device is asked instead (krystof: "why is it getting
-    shared in the blue theme?"). And `<br>`, the only line break GFM allows
-    inside a table cell, has to be a line break rather than five characters.
+def test_the_page_wears_the_companys_theme_and_renders_a_line_break(browser, shared_doc):
+    """A public page has no account behind it, so there is no personal
+    `ui.theme` to honour — it wears the COMPANY's, whatever an admin set
+    (krystof: "just send the one company wide is set"). The reader's own
+    light/dark preference is deliberately not consulted: a link is the
+    company's document, arriving looking like the company's document.
+
+    And `<br>`, the only line break GFM allows inside a table cell, has to be
+    a line break rather than five characters.
     """
     url, _ = shared_doc("view")
-    for scheme, want in (("light", "light"), ("dark", None)):
+    company = api("alice").get("/api/settings").json()["company"]["values"].get("ui.theme")
+    for scheme in ("light", "dark"):               # the reader's device must not matter
         ctx = browser.new_context(color_scheme=scheme)
         page = ctx.new_page()
         try:
             page.goto(url, wait_until="domcontentloaded")
             page.wait_for_selector("table.cm-table", timeout=15000)
             got = page.evaluate("() => document.documentElement.dataset.theme || null")
-            assert got == want, f"{scheme} reader got theme {got!r}"
-            # the page's own background follows, without a flash of the other one
-            light = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
-            assert (light == "rgb(255, 255, 255)") == (scheme == "light"), light
+            assert got == company, f"{scheme} reader got {got!r}, company is {company!r}"
             assert page.locator('td[data-cell] br').count() == 1, "a <br> in a cell is literal"
         finally:
             ctx.close()

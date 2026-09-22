@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 from . import common
+from . import settings as kbsettings
 
 SHARE_USER = "kbshare"                 # the account the container runs as
 ROOT = Path(os.environ.get("KB_PUBLIC_ROOT", "/srv/kb-public"))
@@ -72,6 +73,30 @@ def _pub(row: dict) -> dict:
 def public_url(sid: str, token: str | None) -> str:
     base = os.environ.get("KB_SHARE_BASE", "").rstrip("/")
     return f"{base}/s/{sid}/{token}" if token else f"{base}/s/{sid}/…"
+
+
+def company_look() -> dict:
+    """The company's own theme, to travel with the link.
+
+    A public page has no account behind it, so there is no personal `ui.theme`
+    to honour — and asking the reader's device was the wrong answer (krystof,
+    2026-09-22: the company-wide setting is the one to send). An admin who
+    picks Light, or tints the accent, changes what every client sees next time
+    they open a link."""
+    try:
+        layer = kbsettings.load_layer(kbsettings.company_file(), "company")["values"]
+    except Exception:                          # noqa: BLE001 — a look is never worth a 500
+        return {}
+    look = {}
+    theme = layer.get("ui.theme")
+    if isinstance(theme, str) and theme:
+        look["theme"] = theme
+    custom = layer.get("ui.theme.custom")
+    if isinstance(custom, dict) and custom:
+        # already validated against THEME_TOKENS by load_layer; the container
+        # writes them as CSS variables and validates again before it does
+        look["tokens"] = {str(k): str(v) for k, v in list(custom.items())[:40]}
+    return look
 
 
 def hash_password(pw: str) -> dict:
@@ -187,6 +212,7 @@ def write_conf(row: dict, token_hash: str) -> None:
         "name": os.path.basename(row["path"]),
         "token_hash": token_hash,
         "pw": row.get("pw"),
+        **company_look(),            # theme (+ token overrides), refreshed by the sweep
     }))
     os.chmod(p, 0o640)
     try:
@@ -358,6 +384,22 @@ def regrant(row: dict) -> bool:
     return True
 
 
+def refresh_look(row: dict) -> bool:
+    """Put the company's current theme into a live link's conf. Cheap enough
+    to do on every pass, and the only way a theme change reaches the links
+    that already exist."""
+    p = CONF / (row["id"] + ".json")
+    try:
+        conf = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return False
+    look = company_look()
+    if conf.get("theme") == look.get("theme") and conf.get("tokens") == look.get("tokens"):
+        return False
+    write_conf(row, conf.get("token_hash", ""))
+    return True
+
+
 def sweep() -> list[str]:
     """Take down what has expired, put back what a reboot dropped, and
     re-state the ACL every live share depends on. Human-readable lines for
@@ -398,6 +440,8 @@ def sweep() -> list[str]:
                 out.append(f"re-granted {row['id']} ({row['path']}) — its ACL had been rewritten")
         except (OSError, subprocess.SubprocessError) as e:
             out.append(f"could not re-grant {row['id']}: {e}")
+        if refresh_look(row):
+            out.append(f"restyled {row['id']} ({row['path']}) — the company theme changed")
         keep.append(row)
     if len(keep) != len(_read()):
         _write(keep)

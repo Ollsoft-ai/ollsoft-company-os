@@ -132,11 +132,16 @@ leaked token reaches an empty directory a second later — no cache, no
   nothing unsaved, it pulls `__raw` and swaps the text in. A reader sees an
   edit land within seconds; a writer with unsaved text is told rather than
   overwritten.
-- **The reader's device picks the theme.** Nobody out here has an account, so
-  there is no `ui.theme` to honour: a light screen gets the light theme, a
-  dark one keeps the deep-blue chassis. Decided in the page's head, before the
-  first paint, by `assets/share-theme.js` — a classic script, because a module
-  is deferred and would flash the wrong one.
+- **The page wears the COMPANY's theme.** Nobody out here has an account, so
+  there is no personal `ui.theme` to honour — and the reader's own light/dark
+  preference is deliberately not consulted either: a link is the company's
+  document and should arrive looking like it. The hub copies `ui.theme` and
+  any `ui.theme.custom` overrides into the conf when the link is made, and the
+  sweep refreshes them, so an admin who switches the company to Light or tints
+  the accent changes what every client sees. The container writes them as
+  `data-theme` and a `:root{}` block in the page's head — no flash, no script —
+  re-validating every token it was handed, because everything that comes out
+  of a file gets re-validated here.
 - **No JavaScript**: the server-rendered markdown (and, for an edit share,
   the old textarea form) is still there, inside `<noscript>` — with GFM tables
   turned on (CommonMark has none, so it used to print a paragraph of pipes)

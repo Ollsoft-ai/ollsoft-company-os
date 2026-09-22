@@ -13,6 +13,7 @@ it. Both are put there by the platform, as root, outside this process.
                         again). Bind-mounted ro, or rw when the link edits.
     /conf/<id>.json     {"mode": "view"|"edit", "expires": <unix>,
                          "title": str, "name": str, "only": str | null,
+                         "theme": str | null, "tokens": {css-var: value},
                          "pw": {"salt": hex, "hash": hex} | null,
                          "token_hash": hex}
     /assets/…           the platform's own frontend bundle, read-only: a
@@ -67,6 +68,31 @@ def asset_stamp() -> int:
 
 def editor_available() -> bool:
     return (ASSETS / "publicdoc.js").is_file() and (ASSETS / "style.css").is_file()
+
+
+# The company's look, as the platform recorded it in the conf. A shared page
+# wears the theme the company set — not this container's idea of one, and not
+# the reader's device: an admin who picks Light, or tints the accent, decides
+# what a client sees. Values are re-checked here because everything from a
+# file gets re-checked here.
+_TOKEN = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+_VALUE = re.compile(r"^[#A-Za-z0-9 ,.'\"_()%-]{1,120}$")
+_THEMES = {"deep-blue", "dark", "light"}
+
+
+def look_of(conf: dict) -> tuple[str, str]:
+    """(html attribute, inline <style>) for this share's theme."""
+    theme = conf.get("theme")
+    attr = f" data-theme='{html.escape(theme)}'" if theme in _THEMES else ""
+    tokens = conf.get("tokens")
+    css = ""
+    if isinstance(tokens, dict):
+        rules = [f"--{k}:{v}" for k, v in list(tokens.items())[:40]
+                 if isinstance(k, str) and isinstance(v, str)
+                 and _TOKEN.match(k) and _VALUE.match(v)]
+        if rules:
+            css = ":root{" + ";".join(rules) + "}"
+    return attr, css
 
 
 def stamp(st: os.stat_result) -> int:
@@ -227,12 +253,14 @@ blockquote { margin: 0; padding: .2rem 1rem; border-left: 3px solid var(--border
 """
 
 
-def page(title: str, body: str, sub: str = "") -> bytes:
+def page(title: str, body: str, sub: str = "", conf: dict | None = None) -> bytes:
     v = asset_stamp()
+    theme_attr, theme_css = look_of(conf or {})
     head = (f"<link rel=icon href='/assets/favicon.svg?v={v}'>"
-            f"<link rel=stylesheet href='/assets/style.css?v={v}'><style>{SHELL_CSS}</style>"
+            f"<link rel=stylesheet href='/assets/style.css?v={v}'>"
+            f"<style>{SHELL_CSS}{theme_css}</style>"
             if editor_available() else f"<style>{CSS}</style>")
-    return (f"<!doctype html><html lang=en><head><meta charset=utf-8>"
+    return (f"<!doctype html><html lang=en{theme_attr}><head><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
             f"<meta name=referrer content=no-referrer>"
             f"<title>{html.escape(title)}</title>{head}</head><body>"
@@ -292,23 +320,21 @@ def doc_page(conf: dict, base: str, rel: str, text: str, mtime: int, fallback: s
         "rich": rel.lower().endswith(".md"),
     }).replace("<", "\\u003c")
     editable = conf.get("mode") == "edit"
+    theme_attr, theme_css = look_of(conf)
     # A document reached THROUGH a folder share needs a way back to the list;
     # a single-file share has nowhere to go.
     parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
     back = ("" if conf.get("kind") == "file" else
             f"<a class=back href='{base}/{urllib.parse.quote(parent)}'>← all files</a>")
     return (
-        "<!doctype html><html lang=en><head><meta charset=utf-8>"
+        f"<!doctype html><html lang=en{theme_attr}><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1,"
         "viewport-fit=cover,interactive-widget=resizes-content'>"
         "<meta name=referrer content=no-referrer>"
         f"<title>{html.escape(title)}</title>"
         f"<link rel=icon href='/assets/favicon.svg?v={v}'>"
-        # classic, not a module: it has to run before the first paint, or the
-        # page flashes the dark chassis at a reader whose screen is light
-        f"<script src='/assets/share-theme.js?v={v}'></script>"
         f"<link rel=stylesheet href='/assets/style.css?v={v}'>"
-        f"<style>{DOC_CSS}</style></head>"
+        f"<style>{DOC_CSS}{theme_css}</style></head>"
         "<body class='share-doc'>"
         f"<header class=share-top>{back}<b>{html.escape(title)}</b>"
         f"<span class=where>{html.escape(rel)}</span>"
@@ -393,13 +419,13 @@ class Handler(BaseHTTPRequestHandler):
     def unlocked(self, sid: str, conf: dict) -> bool:
         return not conf.get("pw") or self.cookies().get("kbs_" + sid) == cookie_for(sid)
 
-    def ask_password(self, sid, token, bad=False):
+    def ask_password(self, sid, token, bad=False, conf=None):
         body = (f"<form class=pw method=post action='/s/{html.escape(sid)}/{html.escape(token)}/__unlock'>"
                 f"<p class=muted>This link is protected by a password.</p>"
                 f"<input type=password name=pw autofocus autocomplete='current-password'>"
                 f"{'<p class=err>Not that one.</p>' if bad else ''}"
                 f"<button>Open</button></form>")
-        self.send(200, page(BRAND, body))
+        self.send(200, page(BRAND, body, "", conf))
 
     def do_HEAD(self):
         self.do_GET()
@@ -417,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail()
         sid, token, rest, conf, q = r
         if not self.unlocked(sid, conf):
-            return self.ask_password(sid, token)
+            return self.ask_password(sid, token, conf=conf)
         if rest in ("__raw", "__stat"):
             return self.file_api(rest, sid, q, conf)
         root = DATA / sid
@@ -441,7 +467,7 @@ class Handler(BaseHTTPRequestHandler):
         if target.is_dir():
             if conf.get("only"):            # cannot happen through routing; refuse anyway
                 return self.fail()
-            return self.listing(sid, token, root, target, title)
+            return self.listing(sid, token, root, target, title, conf)
         return self.one_file(sid, token, root, target, conf, title)
 
     def asset(self, rel: str):
@@ -486,7 +512,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, text.encode(), "text/plain; charset=utf-8",
                   extra=[("Cache-Control", "no-store"), ("X-KB-Mtime", str(stamp(st)))])
 
-    def listing(self, sid, token, root, target, title):
+    def listing(self, sid, token, root, target, title, conf=None):
         rows = []
         base = f"/s/{urllib.parse.quote(sid)}/{urllib.parse.quote(token)}"
         rel = target.relative_to(root)
@@ -501,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
             rows.append(f"<li><a href='{html.escape(href)}'>{'📁 ' if p.is_dir() else ''}"
                         f"{html.escape(p.name)}<span>{size}</span></a></li>")
         body = f"<ul class=files>{''.join(rows) or '<li class=muted>Empty</li>'}</ul>"
-        self.send(200, page(title, body, str(rel) if str(rel) != "." else ""))
+        self.send(200, page(title, body, str(rel) if str(rel) != "." else "", conf))
 
     def one_file(self, sid, token, root, target, conf, title):
         name = target.name
@@ -534,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
             if name.lower().endswith(EDITABLE_EXT) and editor_available():
                 return self.send(200, doc_page(conf, base, rel, text,
                                                stamp(target.stat()), body))
-            return self.send(200, page(title, body, name))
+            return self.send(200, page(title, body, name, conf))
         try:
             data = target.read_bytes()
         except OSError:
@@ -568,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(429, "Too many attempts. Try again in a minute.")
             note_attempt(key)
             if not password_ok(conf, (form.get("pw") or [""])[0]):
-                return self.ask_password(sid, token, bad=True)
+                return self.ask_password(sid, token, bad=True, conf=conf)
             self.send(303, b"", extra=[("Location", f"/s/{sid}/{token}/"),
                                        ("Set-Cookie", f"kbs_{sid}={cookie_for(sid)}; Path=/s/{sid}/; "
                                                       "HttpOnly; SameSite=Lax; Secure; Max-Age=86400")])
