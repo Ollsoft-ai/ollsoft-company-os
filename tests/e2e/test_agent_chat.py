@@ -507,3 +507,82 @@ def test_a_filesystem_path_in_an_answer_is_a_link_into_the_app(browser):
     link.click()
     wait_path(page, doc("overview.md"), timeout=10000)
     ctx.close()
+
+
+DROP_JS = """([path]) => {
+  const row = document.querySelector('.tree-item[data-path="' + path + '"]');
+  const chat = document.querySelector('.chat-view');
+  if (!row || !chat) return {err: 'no row or no chat'};
+  const dt = new DataTransfer();
+  const ds = new DragEvent('dragstart', {bubbles: true, cancelable: true});
+  Object.defineProperty(ds, 'dataTransfer', {value: dt});
+  row.dispatchEvent(ds);                      // the tree fills the payload itself
+  const r = chat.getBoundingClientRect();
+  const at = {clientX: r.left + r.width / 2, clientY: r.top + r.height / 2};
+  for (const type of ['dragenter', 'dragover']) {
+    const ev = new DragEvent(type, {bubbles: true, cancelable: true, ...at});
+    Object.defineProperty(ev, 'dataTransfer', {value: dt});
+    chat.dispatchEvent(ev);
+  }
+  const lit = chat.classList.contains('dropping');
+  const drop = new DragEvent('drop', {bubbles: true, cancelable: true, ...at});
+  Object.defineProperty(drop, 'dataTransfer', {value: dt});
+  chat.dispatchEvent(drop);
+  return {lit, litAfter: chat.classList.contains('dropping'), payload: dt.getData('application/x-kb-path')};
+}"""
+
+
+def test_a_tree_row_dropped_on_the_chat_becomes_context(browser):
+    """krystof: "drag n drop file into chat and it will reference it like open
+    tabs". The tree row carries its path; the chat takes it as a context chip
+    — the same one the picker makes, with the same refusals (a folder, a
+    secret) and the same cap."""
+    target = doc("dropped-ctx.md")
+    secret = doc("_secrets/dropped-secret.md")
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    for p, body in ((target, "dropped in\n"), (secret, "token = hunter2\n")):
+        r = page.request.post(BASE + "/api/artifact/write",
+                              data=json.dumps({"path": p, "content": body}),
+                              headers={"content-type": "application/json"})
+        assert r.ok, r.text()
+    try:
+        page.reload()
+        page.wait_for_selector(f'.tree-item[data-path="{target}"]', timeout=15000)
+        open_echo_chat(page)
+        page.wait_for_timeout(400)
+        before = page.locator(".chat-ctx .chat-ctx-chip").count()
+
+        r = page.evaluate(DROP_JS, [target])
+        assert not r.get("err"), r
+        assert r["payload"] == target, "the tree row did not carry its path"
+        assert r["lit"] and not r["litAfter"], f"drop highlight wrong: {r}"
+        page.wait_for_function(
+            f"() => [...document.querySelectorAll('.chat-ctx .chat-ctx-chip')]"
+            f".some(c => c.title === {target!r})", timeout=5000)
+        assert page.locator(".chat-ctx .chat-ctx-chip").count() == before + 1
+        # a chip you added by hand is solid, an open tab's is dashed
+        chip = page.locator(f'.chat-ctx .chat-ctx-chip[title="{target}"]')
+        assert "auto" not in (chip.get_attribute("class") or "")
+        # dropping it again changes nothing
+        page.evaluate(DROP_JS, [target])
+        page.wait_for_timeout(300)
+        assert page.locator(".chat-ctx .chat-ctx-chip").count() == before + 1
+
+        # a folder is refused (a folder is the session's cwd, not a file)
+        r = page.evaluate(DROP_JS, [AREA])
+        page.wait_for_timeout(300)
+        assert page.locator(".chat-ctx .chat-ctx-chip").count() == before + 1, "a folder became a chip"
+
+        # …and a secret is refused, however it arrives
+        expand_folder(page, doc("_secrets"))
+        page.wait_for_selector(f'.tree-item[data-path="{secret}"]', timeout=10000)
+        page.evaluate(DROP_JS, [secret])
+        page.wait_for_timeout(300)
+        assert page.locator(f'.chat-ctx .chat-ctx-chip[title="{secret}"]').count() == 0, \
+            "a secret became context by drag and drop"
+    finally:
+        for p in (target, secret):
+            page.request.post(BASE + "/api/fs/delete", data=json.dumps({"path": p}),
+                              headers={"content-type": "application/json"})
+        ctx.close()

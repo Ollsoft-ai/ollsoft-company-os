@@ -299,3 +299,13 @@ code now keeps, with the reasons.
 - Not done: a raw-markdown user bubble is by design (Claude Code shows the
   prompt as typed); a Back button in a brand-new tab's picker (the tab's ×
   is the way out).
+
+## Dropping a file on the chat
+
+Drag a row out of the file tree and let go anywhere on the chat: the file
+becomes a context chip, exactly as if you had picked it with ＋ → *Add a
+file…* — solid, not dashed, so it stays until you × it. The chat takes only the
+tree's own payload (`application/x-kb-path`); a picture dropped from the
+desktop still attaches as an image. A folder is refused with a hint (a folder
+is the session's working directory, set with ＋ → *Work in a folder…*), and a
+`_secrets/` path is refused however it arrives.

@@ -4035,6 +4035,9 @@ const chatShell = {
   pickPath: (o) => pickPath(o),
   knowsTree: () => !!(_lastTreePaths && _lastTreePaths.size),
   hasPath: (rel) => !!(_lastTreePaths && _lastTreePaths.has(rel)),
+  // a tree row dropped on the chat carries only its path: the chat asks
+  isDir: (rel) => { const n = findTreeNode(_lastTreeData, rel); return !!(n && n.dir); },
+  isSecret: (rel) => isSecretPath(rel),
   abs: (rel) => (rel ? (_repoRoot ? _repoRoot + "/" + rel : rel) : _repoRoot),
   baseName,
   openPath: (rel) => openDeepLink(rel),

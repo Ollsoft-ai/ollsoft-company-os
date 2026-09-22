@@ -337,6 +337,7 @@ class ChatView {
     const root = this.t.el;
     root.classList.add("chat-view");
     root.innerHTML = "";
+    this.wireDrop(root);
     this.body = el("div", "chat-body");
     this.log = el("div", "chat-log");
     this.log.setAttribute("data-testid", "chat-log");
@@ -1490,15 +1491,61 @@ class ChatView {
   }
   async addCtxFile() {
     const path = await shell.pickPath({ kind: "file", placeholder: "Filter files…" });
-    if (!path) return;
-    if (this.ctx.files.length >= MAX_CTX_FILES) {
+    if (path) this.addCtxPath(path);
+  }
+  // One file joins the context — from the picker, or dropped straight out of
+  // the tree (a row dragged onto the chat carries its path). The same checks
+  // the picker applies, because a drop skips the picker: no secrets, a file
+  // and not a folder, and the cap.
+  addCtxPath(path) {
+    if (!path) return false;
+    if (shell.isSecret && shell.isSecret(path)) {
+      shell.toast("A secret never goes to an agent as context", "err");
+      return false;
+    }
+    if (shell.isDir && shell.isDir(path)) {
+      shell.toast("Drop a file — a folder is set with ＋ → Work in a folder…", "err");
+      return false;
+    }
+    if (!this.ctx.files.includes(path) && this.ctx.files.length >= MAX_CTX_FILES) {
       shell.toast("That is enough context for one chat (" + MAX_CTX_FILES + " files)", "err");
-      return;
+      return false;
     }
     this.ctx.mute = this.ctx.mute.filter((p) => p !== path);
     if (!this.ctx.files.includes(path)) this.ctx.files.push(path);
     this.saveCtx();
     this.composer.focus();
+    return true;
+  }
+  // Dragging a row out of the tree and onto the chat = "look at this too".
+  // Only the tree's own payload is taken: an OS file dropped here is a
+  // picture for the composer (attachFile), and text is text.
+  wireDrop(root) {
+    const carries = (e) => !!(e.dataTransfer && [...e.dataTransfer.types].includes("application/x-kb-path"));
+    let depth = 0;
+    root.addEventListener("dragenter", (e) => {
+      if (!carries(e)) return;
+      e.preventDefault();
+      depth++;
+      root.classList.add("dropping");
+    });
+    root.addEventListener("dragover", (e) => {
+      if (!carries(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "link";
+    });
+    root.addEventListener("dragleave", (e) => {
+      if (!carries(e)) return;
+      if (--depth <= 0) { depth = 0; root.classList.remove("dropping"); }
+    });
+    root.addEventListener("drop", (e) => {
+      if (!carries(e)) return;
+      e.preventDefault();
+      depth = 0;
+      root.classList.remove("dropping");
+      const path = e.dataTransfer.getData("application/x-kb-path");
+      if (this.addCtxPath(path)) shell.toast(shell.baseName(path) + " added to the context", "ok");
+    });
   }
   // The folder a session runs in is fixed when the session starts (ACP takes
   // it in session/new), so changing it on a chat that has already spoken

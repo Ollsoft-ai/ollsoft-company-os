@@ -2236,6 +2236,10 @@ button.chat-tool-sum:hover { color: var(--ink); }
   border: 1px solid var(--border); border-radius: 999px; background: var(--panel2); }
 .chat-ctx-chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .chat-ctx-chip.auto { border-style: dashed; }
+/* a tree row held over the chat: the box lights up the way a drop target should */
+.chat-view.dropping .chat-box { border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.chat-view.dropping { background: color-mix(in srgb, var(--accent) 4%, transparent); }
 .chat-ctx-chip.cwd .icon { color: var(--accent); }
 .chat-ctx-open { display: inline-flex; align-items: center; gap: .3rem; min-width: 0; cursor: pointer;
   border: 0; background: transparent; color: var(--muted); font: 500 .74rem/1.3 var(--sans);

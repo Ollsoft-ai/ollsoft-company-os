@@ -478,7 +478,11 @@ about the app — see §8.1):
   added by hand, and the folder the session stands in; every prompt carries
   them as ACP `resource_link` blocks and the folder goes in `session/new`.
   The picker behind ＋ is `pickPath()` in `app.js` — the palette's shape, but
-  it returns a path. See [agent-chat.md](agent-chat.md).
+  it returns a path. A row **dragged out of the tree and dropped on the chat**
+  makes the same chip (`wireDrop` in `chat.js`, taking only the tree's own
+  `application/x-kb-path` payload — an OS file dropped there is a picture for
+  the composer), with the same refusals: a folder, a `_secrets/` path, the
+  cap. See [agent-chat.md](agent-chat.md).
 - **A link for someone with no account.** The share panel's last section
   makes one: read or edit, an optional password, a deadline (14 days by
   default, 90 at most). The platform grants `kbshare` an ACL on that subtree,
