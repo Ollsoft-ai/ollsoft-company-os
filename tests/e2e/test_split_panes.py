@@ -256,3 +256,43 @@ def test_split_layout_and_pane_widths_survive_a_reload(browser, docs):
         assert abs(after["panes"][0]["width"] - before["panes"][0]["width"]) < 12, (before, after)
     finally:
         ctx.close()
+
+
+def test_a_touchscreen_laptop_can_still_drag_tabs_with_its_mouse(browser, docs):
+    """krystof, 2026-09-22: "i cant drag and drop tabs?"
+
+    A machine with a touchscreen reports `(pointer: coarse)` as its PRIMARY
+    pointer even when a mouse is plugged in. Tabs were made `draggable` only
+    when that was false, and the hold-drag that replaces it listens for
+    `pointerType: "touch"` — so on such a laptop neither hand could move a
+    tab. The last pointer to press now decides.
+    """
+    ctx = browser.new_context(viewport={"width": 1500, "height": 900},
+                              has_touch=True)      # …a touchscreen laptop
+    page = login(ctx, "alice")
+    try:
+        page.evaluate("() => localStorage.removeItem('kbOpen')")
+        page.reload()
+        page.wait_for_selector('[data-testid="tree"] .tree-item')
+        assert page.evaluate("() => matchMedia('(pointer: coarse)').matches"), \
+            "this context is supposed to look like a touch device"
+        one, two, _ = docs
+        for p in (one, two):
+            open_tab(page, p)
+
+        # a mouse press is enough to hand dragging back to HTML5
+        box = page.locator(f'#panes .tab[data-path="{two}"]').bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.up()
+        assert page.evaluate(
+            f"""() => document.querySelector('#panes .tab[data-path="{two}"]').draggable"""), \
+            "a mouse press did not make the tab draggable"
+
+        # …and the drag then does what it does everywhere else
+        r = page.evaluate(DRAG_JS, [two, "#panes > .col > .pane .pane-drop", 0.9])
+        assert r.get("ok"), r
+        st = layout(page)
+        assert len(st["panes"]) == 2 and st["panes"][1]["tabs"] == [two], st
+    finally:
+        ctx.close()

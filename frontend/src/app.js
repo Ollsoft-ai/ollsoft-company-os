@@ -794,6 +794,20 @@ const COARSE_PRIMARY = window.matchMedia("(pointer: coarse)").matches;
 // remembered mode are a phone's, and would leak into the widened window.
 const isPhone = () => isMobile() && COARSE_PRIMARY;
 
+// Tab dragging follows the GESTURE, not the device. A touchscreen laptop
+// reports a coarse PRIMARY pointer, which used to switch HTML5 dragging off
+// for its mouse as well — and the hold-drag only listens to `pointerType:
+// "touch"`, so on such a machine tabs could not be dragged at all, by either
+// hand. The last pointer to press decides: a mouse or a pen makes tabs
+// draggable, a finger hands them to wireTouchTabDrag's 320 ms hold.
+let _mouseTabDrag = !COARSE_PRIMARY;
+const mouseTabDrag = () => _mouseTabDrag;
+function setTabDragMode(fine) {
+  if (_mouseTabDrag === fine) return;
+  _mouseTabDrag = fine;
+  document.querySelectorAll("#panes .tab").forEach((el) => { el.draggable = fine; });
+}
+
 // ═══ Icons ══════════════════════════════════════════════════════════════════
 // One consistent stroke family (outline, 24-grid) instead of the mixed
 // glyph/emoji set — same visual weight everywhere, color only where it carries
@@ -3164,6 +3178,8 @@ function wireTouchTabDrag() {
     else if (hit.p.el.hidden) hit.p.handleEl.classList.add("drop-over");   // a folded group: its handle lights up
     else if (!((hit.side === "in" || isDock(hit.p)) && paneOf(drag.t) === hit.p)) paintPaneHint(hit.p, hit.side);
   };
+  // whoever pressed last owns the gesture (see setTabDragMode)
+  document.addEventListener("pointerdown", (e) => setTabDragMode(e.pointerType !== "touch"), true);
   document.addEventListener("pointerdown", (e) => {
     if (e.pointerType !== "touch" || drag || !e.isPrimary) return;
     const el = e.target && e.target.closest ? e.target.closest(".tab") : null;
@@ -3587,7 +3603,7 @@ function tabEl(t, dup) {
   // Drag to reorder, to move into another pane, or onto a pane's edge to split.
   // Deliberately NO text/plain payload: the tree's folder rows and the editor
   // both accept dropped text, and a tab is not a path being pasted somewhere.
-  el.draggable = !COARSE_PRIMARY;
+  el.draggable = mouseTabDrag();
   el.addEventListener("dragstart", (e) => {
     _dragTab = t;
     document.body.classList.add("dragging-tab");
