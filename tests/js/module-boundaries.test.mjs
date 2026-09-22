@@ -11,10 +11,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const FILES = ["app.js", "richview.js", "publicdoc.js", "chat.js", "layout.js",
-               "views.js", "settings.js", "events.js", "dictation.js"]
-  .map((f) => "frontend/src/" + f);
+// resolved against THIS file, so the test does not care where it is run from
+const SRC = fileURLToPath(new URL("../../frontend/src/", import.meta.url));
+const NAMES = ["app.js", "richview.js", "publicdoc.js", "chat.js", "layout.js",
+               "views.js", "settings.js", "events.js", "dictation.js"];
+const FILES = NAMES.map((f) => SRC + f);
 
 // What a file OWNS at its top level: the names another file could be
 // borrowing without saying so.
@@ -125,7 +128,7 @@ test("no module uses a name another module owns", () => {
       if (have.has(n)) continue;
       // a use, not a property access and not a key in an object literal
       if (new RegExp(`(^|[^\\w$.])${n}\\s*[({[.,;)=<>!+*/&|?\\]}\\s-]`, "m").test(code)) {
-        problems.push(`${f}: uses "${n}", which it neither declares nor imports`);
+        problems.push(`${f.slice(SRC.length)}: uses "${n}", which it neither declares nor imports`);
       }
     }
   }

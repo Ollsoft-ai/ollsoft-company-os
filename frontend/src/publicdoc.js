@@ -50,7 +50,11 @@ initRichView({
 const editable = conf.mode === "edit";
 let known = conf.mtime;                    // the mtime our text came from
 let dirty = false, saving = false, conflicted = false;
-let saveTimer = 0, pollTimer = 0;
+// Our own swap-in of somebody else's text is a doc change like any other, and
+// without this flag it marks the page dirty — which on a read-only share
+// produced "somebody else is editing this too" for a visitor who cannot type.
+let applying = false;
+let saveTimer = 0;
 
 const view = new EditorView({
   parent: document.getElementById("doc"),
@@ -76,7 +80,7 @@ const view = new EditorView({
            EditorView.editorAttributes.of({ class: "cm-rich" })]
         : [lineNumbers(), highlightActiveLine()]),
       EditorView.updateListener.of((u) => {
-        if (!u.docChanged) return;
+        if (!u.docChanged || applying) return;
         dirty = true;
         if (editable) { clearTimeout(saveTimer); saveTimer = setTimeout(save, 1200); }
       }),
@@ -142,14 +146,17 @@ async function poll() {
     known = Number(raw.headers.get("X-Kb-Mtime")) || j.mtime;
     if (text === view.state.doc.toString()) return;
     const sel = view.state.selection.main.head;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: text },
-      selection: { anchor: Math.min(sel, text.length) },
-    });
+    applying = true;
+    try {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: { anchor: Math.min(sel, text.length) },
+      });
+    } finally { applying = false; }
     status("Updated — somebody else edited this", "ok");
   } catch (e) { /* offline; try again on the next tick */ }
 }
-pollTimer = setInterval(poll, 5000);
+setInterval(poll, 5000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 
 // Leaving with something unsaved in the box is the one loss this page can

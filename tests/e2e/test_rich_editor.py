@@ -727,3 +727,59 @@ def test_a_click_lands_on_the_line_you_clicked_even_below_a_table(browser):
     finally:
         c.post("/api/fs/delete", json={"path": kbdoc(name), "permanent": True})
         ctx.close()
+
+
+def test_ctrl_click_and_middle_click_open_a_linked_document(browser):
+    """krystof, 2026-09-22: "why does middle mouse click or ctrl plus click on
+    link like a mrkdown file linked in the editor not open it? only double
+    click opens it?"
+
+    Because both were handled on `click`, and the mousedown before it moves the
+    selection into the link — which reveals `[label](url)` and re-flows the
+    line, so the click's coordinates resolved somewhere else entirely. The
+    second click of a double-click worked because by then the syntax was
+    already showing.
+    """
+    c = api("alice")
+    folder = kbdoc(f"linkopen_{int(time.time())}")
+    assert c.post("/api/fs/mkdir", json={"path": folder}).status_code == 200
+    target, home = f"{folder}/target.md", f"{folder}/home.md"
+    for p, body in ((target, "# Target\n\nyou arrived\n"),
+                    (home, "# Home\n\nsee [the target](target.md) for more.\n")):
+        assert c.post("/api/file", json={"path": p}).status_code in (200, 409)
+        assert c.post("/api/artifact/write",
+                      json={"path": p, "content": body}).status_code == 200
+
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+
+    def open_home():
+        page.goto(f"{BASE}/{home}")
+        page.wait_for_function(f"() => window.__kbpath === {home!r}", timeout=15000)
+        page.wait_for_selector(".cm-md-link", timeout=10000)
+
+    def link_point():
+        # the middle of the rendered label, in page coordinates
+        box = page.locator(".cm-md-link").first.bounding_box()
+        return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    try:
+        open_home()
+        x, y = link_point()
+        page.keyboard.down("Control")
+        page.mouse.click(x, y)
+        page.keyboard.up("Control")
+        page.wait_for_function(f"() => window.__kbpath === {target!r}", timeout=8000)
+
+        open_home()
+        x, y = link_point()
+        page.mouse.click(x, y, button="middle")
+        page.wait_for_function(f"() => window.__kbpath === {target!r}", timeout=8000)
+
+        # …and the middle button pasted nothing into the document it left
+        # (on Linux it pastes the X selection into an editable area)
+        body = c.get("/api/file", params={"path": home}).text
+        assert body.count("see [the target](target.md) for more.") == 1, body
+    finally:
+        ctx.close()
+        c.post("/api/fs/delete", json={"path": folder, "permanent": True})

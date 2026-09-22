@@ -921,7 +921,8 @@ function livePreview(dir) {
                 url.split("/").includes("_secrets");
               decos.push(Decoration.mark({
                 class: "cm-md-link" + (secretLink ? " cm-md-secret" : ""),
-                attributes: { "data-url": url, title: url + "  ·  Ctrl+click or double-click opens" },
+                attributes: { "data-url": url,
+                              title: url + "  ·  Ctrl+click, middle click or double-click opens" },
               }).range(marks[0].to, marks[1].from));
             }
           } else if (name === "Image") {
@@ -1053,14 +1054,33 @@ function livePreview(dir) {
     }
     return false;
   };
-  // Desktop: Ctrl/Cmd+click or double-click opens (plain click places the
-  // cursor). Touch (hover:none): a plain tap opens — the Obsidian-mobile model;
-  // to edit a link's text, tap beside it and arrow in.
+  // Desktop: Ctrl/Cmd+click, middle click or double-click opens (a plain click
+  // places the cursor). Touch (hover:none): a plain tap opens — the
+  // Obsidian-mobile model; to edit a link's text, tap beside it and arrow in.
+  //
+  // Both modifier gestures are taken on MOUSEDOWN, not on click. The mousedown
+  // moves the selection into the link, which reveals its raw `[label](url)` —
+  // the line re-flows under the pointer, and the coordinates the click then
+  // carries resolve to a different place (often past the end of the link), so
+  // the open silently did nothing and only the second click of a double-click
+  // ever worked. Middle click has a default worth stopping too: on Linux it
+  // pastes the X selection into the document.
+  const MAC = /Mac|iP(hone|ad|od)/.test(navigator.platform || "");
+  const opensLink = (e) =>
+    e.button === 1 || (e.button === 0 && (MAC ? e.metaKey : e.ctrlKey || e.metaKey));
   const linkClicks = EditorView.domEventHandlers({
+    mousedown(e, view) {
+      if (!opensLink(e) || !openLinkAt(view, e)) return false;
+      e.preventDefault();          // no caret move, no X-selection paste
+      return true;
+    },
+    auxclick(e) {                  // the middle button's own event, if it lands
+      if (e.button !== 1) return false;
+      e.preventDefault();
+      return true;
+    },
     click(e, view) {
-      if (e.ctrlKey || e.metaKey || window.matchMedia("(hover: none)").matches) {
-        return openLinkAt(view, e);
-      }
+      if (window.matchMedia("(hover: none)").matches) return openLinkAt(view, e);
       return false;
     },
     dblclick(e, view) { return openLinkAt(view, e); },
