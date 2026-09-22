@@ -499,11 +499,16 @@ class TableWidget extends WidgetType {
       return { ...parseTable(md, r.from), from: r.from, to: r.to, md };
     };
 
+    // In the box a line break is a line break; in the file it is `<br>`, the
+    // only one GFM allows inside a cell. Translated at the edge, both ways,
+    // so nobody editing a cell ever sees or types the tag.
+    const toEdit = (md) => md.replace(/<br\s*\/?>/gi, "\n");
+    const toMd = (text) => text.replace(/\r?\n/g, "<br>");
     const writeCell = (r, c, text) => {
       const m = model();
       if (!m || !m.rows[r] || !m.rows[r][c]) return;
       const cell = m.rows[r][c];
-      const insert = " " + text.trim().replace(/\|/g, "\\|") + " ";
+      const insert = " " + toMd(text).trim().replace(/\|/g, "\\|") + " ";
       if (view.state.sliceDoc(cell.from, cell.to) === insert) return;
       // mark the DOM as already reflecting the result, so the re-render this
       // dispatch triggers keeps the live input (and the caret in it)
@@ -642,7 +647,7 @@ class TableWidget extends WidgetType {
           const el = box;
           box = null;                       // before blur/remove re-enters here
           clearTimeout(el._t);
-          if (!dom.__busy) { raw = el.value; writeCell(r, c, el.value); }
+          if (!dom.__busy) { raw = toMd(el.value); writeCell(r, c, el.value); }
           el.remove();
           td.classList.remove("editing");
           paint();
@@ -654,7 +659,9 @@ class TableWidget extends WidgetType {
         // honest answer.
         const caretFromClick = (e) => {
           const plain = shown.textContent;
-          if (plain !== raw) return raw.length;
+          // one text node and no marks: the offset under the finger is the
+          // offset in the box. Anything richer (bold, a break) lands at the end.
+          if (shown.childNodes.length !== 1 || plain !== raw) return toEdit(raw).length;
           let pos = null;
           if (document.caretPositionFromPoint) {
             const cp = document.caretPositionFromPoint(e.clientX, e.clientY);
@@ -673,7 +680,7 @@ class TableWidget extends WidgetType {
           box.className = "cm-cell-edit";
           box.rows = 1;
           box.spellcheck = false;
-          box.value = raw;
+          box.value = toEdit(raw);
           box.setAttribute("data-cell", r + "," + c);
           box.addEventListener("input", () => {
             grow();
@@ -707,12 +714,13 @@ class TableWidget extends WidgetType {
             // a wrapped cell has lines of its own: leave it only from its edge
             else if (e.key === "ArrowDown" && atEnd) go(1, 0);
             else if (e.key === "ArrowUp" && atStart) go(-1, 0);
-            else if (e.key === "Enter" && e.shiftKey) {
-              // the only line break GFM allows inside a cell
+            else if (e.key === "Enter" && (e.shiftKey || mod)) {
+              // a new line INSIDE the cell — Shift+Enter or Ctrl+Enter, the
+              // two spellings people reach for. Stored as <br>, see toMd.
               e.preventDefault();
               const at = box.selectionStart;
-              box.value = box.value.slice(0, at) + "<br>" + box.value.slice(box.selectionEnd);
-              box.selectionStart = box.selectionEnd = at + 4;
+              box.value = box.value.slice(0, at) + "\n" + box.value.slice(box.selectionEnd);
+              box.selectionStart = box.selectionEnd = at + 1;
               grow();
               clearTimeout(box._t);
               box._t = setTimeout(() => writeCell(r, c, box.value), 400);

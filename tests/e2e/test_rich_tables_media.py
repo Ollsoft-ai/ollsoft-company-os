@@ -478,10 +478,22 @@ def test_a_cell_grows_as_you_type_and_shift_enter_breaks_the_line(sized):
     assert not page.evaluate("""() => {const t = document.querySelector('.cm-cell-edit');
         return t.scrollHeight > t.clientHeight + 1;}"""), "the textarea scrolls"
 
+    # a break INSIDE the cell: Shift+Enter or Ctrl+Enter. In the box it is a
+    # real new line — never the tag (krystof saw "dd<br><br>sds" and rightly
+    # asked why); in the file it is <br>, the only break GFM allows there
     page.keyboard.press("Shift+Enter")
     page.keyboard.type("second line")
+    page.keyboard.press("Control+Enter")
+    page.keyboard.type("third line")
     page.wait_for_timeout(800)
-    assert "<br>second line" in doc_text(page)
+    assert "<br>" not in box.input_value(), box.input_value()
+    assert box.input_value().count("\n") == 2, box.input_value()
+    assert "<br>second line<br>third line" in doc_text(page)
     page.keyboard.press("Escape")
     page.wait_for_timeout(400)
-    assert page.locator('table.cm-table td[data-cell="1,0"] br').count() == 1
+    assert page.locator('table.cm-table td[data-cell="1,0"] br').count() == 2
+    # …and opening it again shows the lines, not the tags
+    first.locator('[data-cell="1,0"]').click()
+    box = page.locator('table.cm-table textarea[data-cell="1,0"]')
+    box.wait_for(state="visible")
+    assert "<br>" not in box.input_value() and box.input_value().count("\n") == 2
