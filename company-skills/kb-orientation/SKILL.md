@@ -41,6 +41,33 @@ Just edit the `.md` files with your normal file tools. You don't need any specia
 
 Write markdown normally. Tasks are `- [ ] todo` / `- [x] done`. Headings with `#`. Keep files human-readable.
 
+Two things the app renders that plain markdown does not make obvious:
+
+- **A table cell cannot contain a newline.** GFM's only line break inside a
+  cell is `<br>`, and the editor renders it as one. `| step one<br>step two |`
+  is right; a cell with real newlines breaks the table.
+- **`@name` is a notification, not decoration.** When a document you wrote an
+  `@name` into is committed, that person gets it in their inbox — so name
+  someone when you mean them and not as an example. A task line's `@name` is
+  also its assignee (see **kb-todos**).
+
+# Your notifications
+
+`/srv/kb/users/<you>/.os/inbox.jsonl` — one JSON object per line, yours alone
+(0600). Two things land there: someone `@named` you in a document, and someone
+shared a path with you by name. Both are checked against what you may actually
+read first, and `_secrets/` never notifies.
+
+```bash
+S=/run/kb/users/$(whoami)/backend.sock
+curl -s --unix-socket $S http://x/api/inbox                       # newest first
+curl -s --unix-socket $S -X POST -H 'Content-Type: application/json' \
+     -d '{"read": true}' http://x/api/inbox/read                  # mark all read
+```
+
+Reading the file directly is fine too — it is yours. The app shows the same
+thing as a dot on your avatar and an Inbox view.
+
 ## House style: short, dense, scannable
 
 **We write docs to organize ourselves, not to drown in text.** Length is a cost,
