@@ -803,7 +803,22 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 .cm-rich .cm-listline .cm-mention { text-indent: 0; }
 .cm-hr-line { display: inline-block; width: 100%; border-top: 1px solid var(--border); vertical-align: middle; }
 .cm-task { display: inline-flex; align-items: center; margin-right: .35rem; }
-.cm-task-toggle { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; vertical-align: -2px; }
+/* Drawn by us, not by the engine: `accent-color` only tints the CHECKED box,
+   and an unchecked one is whatever the browser thinks a checkbox looks like —
+   a bright white square against this chassis in WebKit, which is what every
+   iPhone renders. A task checkbox is the most-looked-at control in the
+   product; it should look the same everywhere. */
+.cm-task-toggle { appearance: none; -webkit-appearance: none; width: 15px; height: 15px;
+  margin: 0; padding: 0; position: relative; cursor: pointer; vertical-align: -2px;
+  border: 1.5px solid var(--border-hover); border-radius: 4px; background: var(--panel);
+  transition: background .12s ease, border-color .12s ease; }
+.cm-task-toggle:hover:not(:disabled) { border-color: var(--accent); }
+.cm-task-toggle:checked { background: var(--accent); border-color: var(--accent); }
+.cm-task-toggle:checked::after { content: ""; position: absolute; left: 3.5px; top: .5px;
+  width: 4px; height: 8px; border: solid var(--on-accent); border-width: 0 2px 2px 0;
+  transform: rotate(45deg); }
+.cm-task-toggle:disabled { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .cm-task-toggle { transition: none; } }
 .cm-img-embed { display: block; padding: .4rem 0; position: relative; width: fit-content;
   max-width: 100%; }
 .cm-img-embed img, .cm-img-embed video { max-width: 100%; max-height: 60vh; border-radius: var(--r);
@@ -1637,6 +1652,7 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   body.mdbar-on .cm-scroller { padding-bottom: 3rem; }
   .modeswitch button { padding: .35rem .7rem; }
   .cm-task-toggle { width: 18px; height: 18px; }
+  .cm-task-toggle:checked::after { left: 4.5px; top: 1px; width: 5px; height: 9px; }
   .modal-x { font-size: 1.5rem; padding: .1rem .45rem; }
   .chip-preset { padding: .3rem .7rem; font-size: .74rem; }
   .sr-item { padding: .55rem .6rem; }

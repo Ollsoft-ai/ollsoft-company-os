@@ -31,6 +31,7 @@ let statusTimer = 0;
 function status(text, kind) {
   if (!statusEl) return;
   statusEl.textContent = text;
+  statusEl.title = text;                   // the phone header truncates it
   statusEl.className = "status" + (kind ? " " + kind : "");
   clearTimeout(statusTimer);
   if (kind === "ok") statusTimer = setTimeout(() => { statusEl.textContent = ""; }, 2500);
@@ -48,7 +49,8 @@ initRichView({
 
 // ---- the document -----------------------------------------------------------
 const editable = conf.mode === "edit";
-let known = conf.mtime;                    // the mtime our text came from
+let known = conf.mtime;                    // the mtime (ns) our text came from
+let knownSize = null;                      // …and its size, for the same reason
 let dirty = false, saving = false, conflicted = false;
 // Our own swap-in of somebody else's text is a doc change like any other, and
 // without this flag it marks the page dirty — which on a read-only share
@@ -110,6 +112,7 @@ async function save() {
     if (!r.ok) { status("Could not save (" + r.status + ")", "err"); return; }
     const j = await r.json();
     known = j.mtime || known;
+    if (j.size != null) knownSize = j.size;
     dirty = false;
     status("Saved", "ok");
   } catch (e) {
@@ -131,7 +134,7 @@ async function poll() {
                           { cache: "no-store" });
     if (!r.ok) return;
     const j = await r.json();
-    if (!j.mtime || j.mtime === known) return;
+    if (!j.mtime || (j.mtime === known && (knownSize == null || j.size === knownSize))) return;
     if (dirty || saving) {                 // theirs and ours both exist: say so
       if (!conflicted) {
         conflicted = true;
@@ -144,6 +147,7 @@ async function poll() {
     if (!raw.ok) return;
     const text = await raw.text();
     known = Number(raw.headers.get("X-Kb-Mtime")) || j.mtime;
+    knownSize = j.size;
     if (text === view.state.doc.toString()) return;
     const sel = view.state.selection.main.head;
     applying = true;

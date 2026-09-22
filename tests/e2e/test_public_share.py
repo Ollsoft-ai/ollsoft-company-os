@@ -263,6 +263,117 @@ def test_an_edit_link_saves_through_the_container(browser, shared_doc):
 
 
 @container
+def test_a_phone_can_read_and_edit_through_a_link(browser, shared_doc):
+    """krystof asked "how to edit on phone?" of the old page. The header has
+    to survive 390px (it used to wrap the badge into a blob), the document
+    has to fit without sideways scrolling, and a tap-and-type has to save."""
+    url, path = shared_doc("edit")
+    a = api("alice")
+    ctx = browser.new_context(viewport={"width": 390, "height": 844},
+                              is_mobile=True, has_touch=True, device_scale_factor=3)
+    page = ctx.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector(".cm-content", timeout=15000)
+        page.wait_for_selector("table.cm-table", timeout=10000)
+        assert not page.evaluate(
+            "() => document.documentElement.scrollWidth > window.innerWidth"), \
+            "the page scrolls sideways on a phone"
+        head = page.locator(".share-top").bounding_box()
+        assert head["height"] < 60, f"the header wrapped: {head}"
+        # tap the first line, not the middle of the surface: the middle is
+        # the table, and a tap there opens a CELL
+        page.locator(".cm-line").first.tap()
+        page.keyboard.press("End")
+        page.keyboard.type(" from a phone")
+        wait_for_body(a, path, "from a phone")
+    finally:
+        ctx.close()
+
+
+@container
+def test_a_link_and_the_app_keep_the_same_document(browser, shared_doc):
+    """The one that got away on 2026-09-22.
+
+    krystof edited through a link, saw nothing change, and the edits were
+    gone. A share bind-mounted the FILE, and a bind mount pins an inode —
+    syncd flushes a document by writing a `.kbtmp` and renaming it into
+    place, so the first flush left the share holding an orphan: reads
+    returned the old text, writes went into a file with no name, and both
+    sides reported success. Shares mount the FOLDER now.
+
+    So this drives what he did: the document open in the app (a live CRDT
+    session, flushing atomically) and a stranger on the link at the same
+    time, each having to see the other.
+    """
+    url, path = shared_doc("edit")
+    a = api("alice")
+
+    app_ctx = browser.new_context()
+    app = login(app_ctx, "alice")
+    link_ctx = browser.new_context()
+    link = link_ctx.new_page()
+    try:
+        app.goto(f"{BASE}/{path}")
+        app.wait_for_function(f"() => window.__kbpath === {path!r}", timeout=15000)
+        app.wait_for_selector(".cm-content", timeout=10000)
+
+        link.goto(url, wait_until="domcontentloaded")
+        link.wait_for_selector(".cm-content", timeout=15000)
+
+        # 1. the app types -> syncd flushes by RENAME -> the link must follow
+        app.locator(".cm-line").first.click()
+        app.keyboard.press("End")
+        app.keyboard.type(" from the app")
+        wait_for_body(a, path, "from the app")
+        link.wait_for_function(
+            "() => window.__kbview ? false : document.querySelector('.cm-content')"
+            ".textContent.includes('from the app')", timeout=25000)
+
+        # 2. the stranger types -> the live document in the app must follow,
+        #    and the file must keep it
+        link.locator(".cm-line").first.click()
+        link.keyboard.press("End")
+        link.keyboard.type(" and from the link")
+        app.wait_for_function(
+            "() => window.__kbview.state.doc.toString().includes('and from the link')",
+            timeout=25000)
+        wait_for_body(a, path, "and from the link")
+        # …both edits, not one of them
+        body = a.get("/api/file", params={"path": path}).text
+        assert "from the app" in body and "and from the link" in body, body[:400]
+    finally:
+        link_ctx.close()
+        app_ctx.close()
+
+
+@container
+def test_a_link_to_one_file_cannot_reach_its_neighbours(browser, shared_doc):
+    """A single-file share is mounted BY ITS FOLDER now, so "the container
+    only sees what was mounted" is no longer the whole story. Two locks
+    replace it: the folder's ACL gives the container search and no read, and
+    the conf names the one file it may serve."""
+    url, path = shared_doc("view")
+    a = api("alice")
+    neighbour = path.rsplit("/", 1)[0] + "/neighbour-secret.md"
+    assert a.post("/api/file", json={"path": neighbour}).status_code in (200, 409)
+    assert a.post("/api/artifact/write",
+                  json={"path": neighbour, "content": "not for strangers\n"}).status_code == 200
+    try:
+        for rel in ("neighbour-secret.md", "./neighbour-secret.md",
+                    "%2eneighbour-secret.md", "../derantwortpartner",
+                    ".trash", ""):
+            r = httpx.get(f"{url}/{rel}" if rel else url, timeout=10, follow_redirects=True)
+            assert "not for strangers" not in r.text, f"{rel!r} leaked the neighbour"
+        # the file itself still works, and so does its raw endpoint
+        assert "The brief" in httpx.get(url, timeout=10).text
+        raw = httpx.get(f"{url}/__raw", params={"path": "neighbour-secret.md"}, timeout=10)
+        assert raw.status_code == 404 and "not for strangers" not in raw.text
+    finally:
+        a.post("/api/fs/delete", json={"path": neighbour, "permanent": True})
+
+
+@container
 def test_the_page_picks_up_an_edit_made_in_the_app(browser, shared_doc):
     """No CRDT out here — the page asks the container for the file's timestamp
     every few seconds, which is enough to see a colleague's edit land."""

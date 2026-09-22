@@ -273,3 +273,64 @@ def test_plain_external_rewrite_still_syncs(browser, doc):
     finally:
         ck.close()
         cj.close()
+
+
+# ---- the audience has to survive a flush ------------------------------------
+def _facl(path) -> str:
+    import subprocess
+    return subprocess.run(["sudo", "getfacl", "-p", "-c", str(path)],
+                          capture_output=True, text=True).stdout
+
+
+def test_a_flush_keeps_the_files_audience(browser):
+    """A document's audience IS its ACL, and the daemon replaces the file on
+    every save. Restoring only owner/group/mode — which is what it did until
+    2026-09-22 — erased the named people and the indexer on the first
+    keystroke after a share, and, because the stored mode is `0660` against a
+    group of `kb-users`, handed the whole company read and write instead.
+
+    Found while chasing why a public link could not save: the container's
+    entry was being wiped the same way, by the same line.
+    """
+    import subprocess
+    from kbenv import full
+
+    a = api("alice")
+    b = httpx.Client(base_url=BASE, timeout=25)
+    b.post("/login", data={"username": U("bob"), "password": CREDS["bob"]})
+    rel = kbdoc(f"aclflush_{int(time.time())}.md")
+    assert a.post("/api/file", json={"path": rel}).status_code in (200, 409)
+    assert a.post("/api/artifact/write",
+                  json={"path": rel, "content": "# Audience\n\nbody\n"}).status_code == 200
+    assert a.post("/fs/share", json={"path": rel, "scope": "people",
+                                     "people": [{"user": U("bob"), "role": "edit"}]
+                                     }).status_code == 200
+    p = full(rel)
+    before = _facl(p)
+    assert f"user:{U('bob')}:rw" in before, before
+    assert "user:kbindexer:r" in before, before
+    assert "group::---" in before, before
+
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        page.goto(f"{BASE}/{rel}")
+        page.wait_for_function(f"() => window.__kbpath === {rel!r}", timeout=15000)
+        page.wait_for_selector(".cm-content", timeout=10000)
+        page.locator(".cm-line").first.click()
+        page.keyboard.press("End")
+        page.keyboard.type(" typed in the app")
+        # wait for the flush to land on disk
+        for _ in range(30):
+            if "typed in the app" in a.get("/api/file", params={"path": rel}).text:
+                break
+            time.sleep(0.4)
+        else:
+            raise AssertionError("the edit never reached disk")
+        after = _facl(p)
+        assert f"user:{U('bob')}:rw" in after, f"bob's access was erased by a save:\n{after}"
+        assert "user:kbindexer:r" in after, f"the document fell out of search:\n{after}"
+        assert "group::---" in after, f"the whole group was let in:\n{after}"
+    finally:
+        ctx.close()
+        a.post("/api/fs/delete", json={"path": rel, "permanent": True})

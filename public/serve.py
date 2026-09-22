@@ -7,9 +7,12 @@ and no way to create or widen a share. A share is a directory under /data
 named by its id, and a JSON file under /conf that says what may be done with
 it. Both are put there by the platform, as root, outside this process.
 
-    /data/<id>/…        the shared file or folder (bind-mounted ro, or rw)
+    /data/<id>/…        the shared folder — or, for a single-file share, the
+                        folder it lives in, where only that one name can be
+                        opened at all (the kernel says so; `only` says it
+                        again). Bind-mounted ro, or rw when the link edits.
     /conf/<id>.json     {"mode": "view"|"edit", "expires": <unix>,
-                         "title": str, "name": str,
+                         "title": str, "name": str, "only": str | null,
                          "pw": {"salt": hex, "hash": hex} | null,
                          "token_hash": hex}
     /assets/…           the platform's own frontend bundle, read-only: a
@@ -64,6 +67,19 @@ def asset_stamp() -> int:
 
 def editor_available() -> bool:
     return (ASSETS / "publicdoc.js").is_file() and (ASSETS / "style.css").is_file()
+
+
+def stamp(st: os.stat_result) -> int:
+    """A file's version, in MICROSECONDS.
+
+    Not seconds: a whole-second stamp cannot tell "I saved that" from
+    "somebody else saved in the same second", which cost the page both of its
+    jobs — it missed a change made within a second of loading, and its
+    conflict check would have waved one writer's text over another's. Not
+    nanoseconds either: 1.79e18 does not survive JSON in a browser
+    (`Number.MAX_SAFE_INTEGER` is 9.0e15), so the page handed back a rounded
+    number and every save came back 409."""
+    return st.st_mtime_ns // 1000
 
 try:
     from markdown_it import MarkdownIt
@@ -224,18 +240,31 @@ def page(title: str, body: str, sub: str = "") -> bytes:
 DOC_CSS = """
 body.share-doc { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .share-top { display: flex; align-items: center; gap: .6rem; padding: .55rem .9rem;
-  border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto; }
-.share-top b { font-weight: 600; font-size: .92rem; }
+  border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto;
+  flex-wrap: nowrap; }
+.share-top > * { flex: 0 0 auto; }
+.share-top b { font-weight: 600; font-size: .92rem; flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-top .back { color: var(--muted); text-decoration: none; font-size: .82rem;
   border: 1px solid var(--border); border-radius: 999px; padding: .12rem .55rem; }
 .share-top .back:hover { color: var(--ink); border-color: var(--accent); }
 .share-top .where { color: var(--muted); font-size: .8rem; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-.share-top .status { margin-left: auto; font-size: .78rem; color: var(--muted); }
+  text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+.share-top .status { margin-left: auto; font-size: .78rem; color: var(--muted);
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .share-top .status.ok { color: var(--ok, var(--accent)); }
 .share-top .status.err { color: var(--danger); }
 .share-top .badge { font-size: .7rem; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: .1rem .45rem; }
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px;
+  padding: .1rem .45rem; white-space: nowrap; }
+/* a phone has room for the name, the state and nothing else */
+@media (max-width: 560px) {
+  .share-top { gap: .45rem; padding: .45rem .6rem; }
+  .share-top .where { display: none; }
+  .share-top .badge { font-size: .6rem; padding: .1rem .35rem; }
+  .share-top .back { padding: .12rem .45rem; }
+}
 #doc { flex: 1 1 auto; min-height: 0; }
 #doc .cm-editor { height: 100%; }
 body.share-doc noscript { display: block; padding: 1.5rem; }
@@ -376,22 +405,28 @@ class Handler(BaseHTTPRequestHandler):
         if not self.unlocked(sid, conf):
             return self.ask_password(sid, token)
         if rest in ("__raw", "__stat"):
-            return self.file_api(rest, sid, q)
+            return self.file_api(rest, sid, q, conf)
         root = DATA / sid
-        # A single-file share is mounted as one file inside the share's
-        # directory, so its bare link would show a list of exactly one thing.
-        # Open the file instead — that is what was shared. `kind` is recent;
-        # a conf written before it exists says nothing, so fall back to "the
-        # share's own name is a file in here", which is true of exactly the
-        # single-file case.
-        if not rest and conf.get("name") and conf.get("kind") in (None, "file") \
+        # A single-file share serves ONE name. What is mounted is the folder
+        # the file lives in (a file mount dies the moment anything replaces
+        # the file), so this is the routing half of the lock — the other half
+        # is the folder's ACL, which lets this account search but not read.
+        only = conf.get("only")
+        if only is None and conf.get("kind") in (None, "file") and conf.get("name") \
                 and (DATA / sid / conf["name"]).is_file():
-            rest = conf["name"]
+            only = conf["name"]             # a conf written before `only` existed
+        if only:
+            if not rest:
+                rest = only
+            elif rest != only:
+                return self.fail()
         target = safe_join(root, rest)
         if target is None or not os.path.lexists(target):
             return self.fail()
         title = conf.get("title") or conf.get("name") or BRAND
         if target.is_dir():
+            if conf.get("only"):            # cannot happen through routing; refuse anyway
+                return self.fail()
             return self.listing(sid, token, root, target, title)
         return self.one_file(sid, token, root, target, conf, title)
 
@@ -411,24 +446,31 @@ class Handler(BaseHTTPRequestHandler):
         # every URL carries ?v=<stamp>, so a year is honest
         self.send(200, data, ctype, extra=[("Cache-Control", "public, max-age=31536000, immutable")])
 
-    def file_api(self, what: str, sid: str, q: dict):
+    def file_api(self, what: str, sid: str, q: dict, conf: dict):
         """`__raw` is the document's text, `__stat` is just its timestamp —
         the two halves of noticing that somebody else has been typing."""
         rel = (q.get("path") or [""])[0]
+        if conf.get("only") and rel != conf["only"]:
+            return self.fail()
         target = safe_join(DATA / sid, rel)
         if target is None or not target.is_file() or not rel.lower().endswith(EDITABLE_EXT):
             return self.fail()
         try:
             st = target.stat()
             if what == "__stat":
-                body = json.dumps({"mtime": int(st.st_mtime), "size": st.st_size}).encode()
+                # NANOSECONDS. A whole-second stamp cannot tell "saved" from
+                # "somebody else saved in the same second", which silently
+                # cost the page both of its jobs: it never noticed a change
+                # made within a second of loading, and its conflict check
+                # would have let one writer overwrite the other.
+                body = json.dumps({"mtime": stamp(st), "size": st.st_size}).encode()
                 return self.send(200, body, "application/json",
                                  extra=[("Cache-Control", "no-store")])
             text = target.read_text(errors="replace")[:2_000_000]
         except OSError:
             return self.fail(403, "Cannot read that")
         self.send(200, text.encode(), "text/plain; charset=utf-8",
-                  extra=[("Cache-Control", "no-store"), ("X-KB-Mtime", str(int(st.st_mtime)))])
+                  extra=[("Cache-Control", "no-store"), ("X-KB-Mtime", str(stamp(st)))])
 
     def listing(self, sid, token, root, target, title):
         rows = []
@@ -467,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
             if editable:
                 body += (f"<form method=post action='{base}/__save'>"
                          f"<input type=hidden name=path value='{html.escape(rel)}'>"
-                         f"<input type=hidden name=mtime value='{int(target.stat().st_mtime)}'>"
+                         f"<input type=hidden name=mtime value='{stamp(target.stat())}'>"
                          f"<div class=bar><span class=muted>You can edit this.</span></div>"
                          f"<textarea name=text>{html.escape(text)}</textarea>"
                          f"<button>Save</button></form>")
@@ -477,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
             # (an older install), that fallback IS the page.
             if name.lower().endswith(EDITABLE_EXT) and editor_available():
                 return self.send(200, doc_page(conf, base, rel, text,
-                                               int(target.stat().st_mtime), body))
+                                               stamp(target.stat()), body))
             return self.send(200, page(title, body, name))
         try:
             data = target.read_bytes()
@@ -521,6 +563,8 @@ class Handler(BaseHTTPRequestHandler):
             if conf.get("mode") != "edit" or not self.unlocked(sid, conf):
                 return self.fail(403, "This link is read-only")
             rel = (form.get("path") or [""])[0]
+            if conf.get("only") and rel != conf["only"]:
+                return self.fail(403, "This link is one file")
             target = safe_join(DATA / sid, rel)
             if target is None or not target.is_file() or not rel.lower().endswith(EDITABLE_EXT):
                 return self.fail(400, "Cannot write that")
@@ -528,7 +572,7 @@ class Handler(BaseHTTPRequestHandler):
                 was = int((form.get("mtime") or ["0"])[0])
             except ValueError:
                 was = 0
-            if was and int(target.stat().st_mtime) != was:
+            if was and stamp(target.stat()) != was:
                 if as_json:
                     return self.send(409, json.dumps({"error": "changed"}).encode(),
                                      "application/json")
@@ -541,8 +585,9 @@ class Handler(BaseHTTPRequestHandler):
                                      "application/json")
                 return self.fail(403, f"Could not save: {e}")
             if as_json:
+                st = target.stat()
                 return self.send(200, json.dumps(
-                    {"ok": True, "mtime": int(target.stat().st_mtime)}).encode(),
+                    {"ok": True, "mtime": stamp(st), "size": st.st_size}).encode(),
                     "application/json", extra=[("Cache-Control", "no-store")])
             self.send(303, b"", extra=[("Location", f"/s/{sid}/{token}/{urllib.parse.quote(rel)}")])
             return

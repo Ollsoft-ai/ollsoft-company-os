@@ -43,6 +43,7 @@ from watchfiles import awatch
 from . import common
 
 FLUSH_DEBOUNCE = 0.25   # seconds of quiet before writing a doc to disk
+_ACL_ACCESS = "system.posix_acl_access"   # a file's audience, in one xattr
 # Persisted Y.Doc states (one binary update per room). WHY THIS EXISTS: if the
 # daemon restarts while browsers hold a doc open, a fresh empty room would be
 # re-seeded from disk with NEW operation ids; the reconnecting clients then
@@ -636,7 +637,20 @@ class SyncDaemon:
         self._save_doc_state(name, room.ydoc)
 
     def _atomic_write(self, name: str, content: str) -> bool:
-        """Write content to the doc's file, preserving its current owner/group/mode.
+        """Write content to the doc's file, preserving its owner, group, mode
+        AND its ACL.
+
+        The ACL is not decoration: on this platform it IS the audience. A file
+        shared with two colleagues carries `user:alice:rw`, `user:bob:rw` and
+        `user:kbindexer:r`, with `group::---` and a mask; the mode bits alone
+        say `0660`, which means something completely different without the
+        ACL — the file's whole group, which for a shared file is `kb-users`,
+        i.e. the company. Replacing the file and restoring only the mode
+        therefore did two bad things at once on the FIRST keystroke after a
+        share: it dropped the named people (and the indexer, so the document
+        fell out of search), and it widened the file to everyone in the group.
+        Found on 2026-09-22 while chasing why a public link could not save —
+        the link's ACL entry was being erased the same way.
 
         Runs as root, so it must not be redirectable by a user-planted symlink:
         the parent dir is reached via openat/O_NOFOLLOW, the temp file has an
@@ -674,12 +688,18 @@ class SyncDaemon:
                         return False
             except OSError:
                 uid, gid, mode = self.meta.get(name, (0, 0, 0o644))
+            acl = self._acl_of(fname, pfd)
             tmpname = f".{fname}.{os.urandom(6).hex()}.kbtmp"
             fd = os.open(tmpname, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=pfd)
             try:
                 os.write(fd, data)
                 os.fchown(fd, uid, gid)
-                os.fchmod(fd, mode)
+                os.fchmod(fd, mode)          # chmod rewrites the mask, so the
+                if acl is not None:          # ACL goes on AFTER it
+                    try:
+                        os.setxattr(fd, _ACL_ACCESS, acl)
+                    except OSError as e:
+                        log.warning("could not carry the ACL of %s across a flush: %s", name, e)
                 os.fsync(fd)
             finally:
                 os.close(fd)
@@ -688,6 +708,21 @@ class SyncDaemon:
             os.close(pfd)
         self.last_written[name] = data
         return True
+
+    @staticmethod
+    def _acl_of(fname: str, pfd: int) -> bytes | None:
+        """The file's ACL as the raw xattr, read through an fd (this is root
+        in somebody's own directory: never by path, never following a link)."""
+        try:
+            fd = os.open(fname, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
+        except OSError:
+            return None
+        try:
+            return os.getxattr(fd, _ACL_ACCESS)
+        except OSError:
+            return None                      # no extended ACL, or no xattr support
+        finally:
+            os.close(fd)
 
     async def flush_loop(self) -> None:
         # Poll every active room and persist any whose CRDT text has diverged from

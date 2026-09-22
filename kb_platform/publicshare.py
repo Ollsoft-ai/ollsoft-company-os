@@ -5,8 +5,9 @@ them visible to the container that serves them:
 
   1. a row in `/var/lib/kb-shares/shares.json` (root 0600) — the real path,
      who made it, when it dies, the hashed token and password;
-  2. a directory `/srv/kb-public/data/<id>` which is a BIND MOUNT of the
-     shared file or folder, mounted read-only unless the share may be edited;
+  2. a directory `/srv/kb-public/data/<id>` which is a BIND MOUNT — of the
+     folder for a folder share, and of the file's FOLDER for a single-file
+     share, mounted read-only unless the share may be edited;
   3. a file `/srv/kb-public/conf/<id>.json` (root:kbshare 0640) telling the
      container what may be done — and never where the thing really lives.
 
@@ -91,18 +92,32 @@ def is_mounted(target: Path) -> bool:
 def mount_share(sid: str, src: Path, kind: str, mode: str) -> None:
     """Put exactly this file or folder in front of the container.
 
-    A folder is bound onto `data/<id>`; a FILE is bound onto
-    `data/<id>/<name>` so the siblings it lives with are never exposed.
+    A folder is bound onto `data/<id>`. A single FILE is bound **by its
+    folder**, and the container is allowed at one name inside it.
+
+    Binding the file itself was the obvious thing and it is wrong: a bind
+    mount pins an INODE, and every careful writer on this box replaces a file
+    rather than rewriting it — syncd flushes a document to a `.kbtmp` and
+    renames it into place, and so do git, vim and half the tools an agent
+    runs. The moment that happens the share is looking at an orphaned inode:
+    reads return the old text, writes go into a file with no name, and both
+    sides think they are fine. It cost krystof a set of edits on 2026-09-22
+    before the mount table admitted it (`findmnt` printed the source with
+    "//deleted" on the end).
+
+    A directory inode is not replaced, so the mount survives. The siblings
+    stay hidden by the kernel rather than by the mount: the container's
+    account gets SEARCH (`--x`) on the folder and read/write on the one file,
+    so it can open that name and cannot list the folder or open anything
+    else — see grant().
     """
     target = DATA / sid
     target.mkdir(parents=True, exist_ok=True)
     os.chmod(target, 0o755)
-    if kind == "file":
-        target = target / src.name
-        target.touch(exist_ok=True)
+    source = src if kind == "folder" else src.parent
     if is_mounted(target):
         return
-    r = _run("/usr/bin/mount", "--bind", str(src), str(target))
+    r = _run("/usr/bin/mount", "--bind", str(source), str(target))
     if r.returncode != 0:
         raise OSError(f"mount failed: {r.stderr.strip()}")
     if mode != "edit":                      # a view share is read-only in the kernel
@@ -110,6 +125,32 @@ def mount_share(sid: str, src: Path, kind: str, mode: str) -> None:
         if r.returncode != 0:
             _run("/usr/bin/umount", "-l", str(target))
             raise OSError(f"read-only remount failed: {r.stderr.strip()}")
+
+
+def _inode(p: Path) -> int | None:
+    try:
+        return p.stat().st_ino
+    except OSError:
+        return None
+
+
+def mount_healthy(row: dict) -> bool:
+    """Is the container looking at the REAL thing right now?
+
+    Not "is something mounted": the file the share serves has to be the same
+    inode as the file in the knowledgebase. An atomic replace leaves the old
+    mount in place and perfectly mounted, pointing at nothing anyone else can
+    see."""
+    base = DATA / row["id"]
+    if not is_mounted(base) and not any(
+            is_mounted(p) for p in (base.iterdir() if base.is_dir() else [])):
+        return False
+    live = common.REPO_ROOT / row["path"]
+    if row.get("kind") == "folder":
+        return _inode(base) == _inode(live)
+    served = base / os.path.basename(row["path"])
+    served_ino, live_ino = _inode(served), _inode(live)
+    return served_ino is not None and served_ino == live_ino
 
 
 def unmount_share(sid: str) -> None:
@@ -137,6 +178,10 @@ def write_conf(row: dict, token_hash: str) -> None:
     p.write_text(json.dumps({
         "mode": row.get("mode", "view"),
         "kind": row.get("kind", "file"),     # a file share opens the file, not a list of one
+        # a single-file share is mounted BY ITS FOLDER, so the container is
+        # told the one name it may serve out of it (the kernel says the same
+        # thing with the folder's ACL; this is the second lock)
+        "only": None if row.get("kind") == "folder" else os.path.basename(row["path"]),
         "expires": int(row.get("expires") or 0),
         "title": row.get("title", ""),
         "name": os.path.basename(row["path"]),
@@ -148,6 +193,17 @@ def write_conf(row: dict, token_hash: str) -> None:
         os.chown(p, 0, pwd.getpwnam(SHARE_USER).pw_gid)
     except (KeyError, OSError):
         pass
+
+
+def write_conf_again(row: dict) -> None:
+    """Rewrite a conf keeping the token hash that is already in it — a remount
+    must not invalidate the link somebody is holding."""
+    p = CONF / (row["id"] + ".json")
+    try:
+        token_hash = json.loads(p.read_text()).get("token_hash", "")
+    except (OSError, ValueError):
+        return                              # no conf to keep: leave it alone
+    write_conf(row, token_hash)
 
 
 def remove_conf(sid: str) -> None:
@@ -169,17 +225,36 @@ def _acl(target: Path, kind: str, spec: list[str]) -> None:
 def grant(target: Path, kind: str, mode: str) -> None:
     """Let the container's account in — and only onto this subtree. Mode bits
     alone would not do: a 0640 document is unreadable to it, and a public
-    share must not depend on a file happening to be world-readable."""
+    share must not depend on a file happening to be world-readable.
+
+    A single-file share also needs to REACH its file, because what is mounted
+    is the folder (see mount_share). It gets `--x` there: search, never read.
+    With that, `open("<folder>/<name>")` works and `ls <folder>` does not, so
+    a sibling is protected by the kernel and not merely by our routing."""
     rights = "rwX" if mode == "edit" else "rX"
     _acl(target, kind, ["-m", f"u:{SHARE_USER}:{rights}"])
     if kind == "folder":                    # …and for whatever is written later
         _acl(target, kind, ["-d", "-m", f"u:{SHARE_USER}:{rights}"])
+    else:
+        _run("/usr/bin/setfacl", "-m", f"u:{SHARE_USER}:--x", str(target.parent))
 
 
-def revoke_acl(target: Path, kind: str) -> None:
+def _other_file_shares_in(folder: Path, except_id: str = "") -> bool:
+    for row in _read():
+        if row.get("id") == except_id or row.get("kind") == "folder":
+            continue
+        if (common.REPO_ROOT / row["path"]).parent == folder:
+            return True
+    return False
+
+
+def revoke_acl(target: Path, kind: str, sid: str = "") -> None:
     _acl(target, kind, ["-x", f"u:{SHARE_USER}"])
     if kind == "folder":
         _acl(target, kind, ["-d", "-x", f"u:{SHARE_USER}"])
+    elif not _other_file_shares_in(target.parent, sid):
+        # the search bit on the folder goes too, unless another link needs it
+        _run("/usr/bin/setfacl", "-x", f"u:{SHARE_USER}", str(target.parent))
 
 
 # ---- the operations the hub calls -------------------------------------------
@@ -230,10 +305,10 @@ def revoke(sid: str) -> dict | None:
         return None
     unmount_share(sid)
     remove_conf(sid)
-    p = common.REPO_ROOT / row["path"]
-    if p.exists():
-        revoke_acl(p, row.get("kind", "file"))
-    _write([r for r in rows if r["id"] != sid])
+    _write([r for r in rows if r["id"] != sid])     # before the ACL: the folder's
+    p = common.REPO_ROOT / row["path"]              # search bit is kept only for
+    if p.exists():                                  # shares that are still live
+        revoke_acl(p, row.get("kind", "file"), sid)
     return _pub(row)
 
 
@@ -296,7 +371,7 @@ def sweep() -> list[str]:
             unmount_share(row["id"])
             remove_conf(row["id"])
             if p.exists():
-                revoke_acl(p, row.get("kind", "file"))
+                revoke_acl(p, row.get("kind", "file"), row["id"])
             out.append(f"expired {row['id']} ({row['path']})")
             continue
         if not p.exists():
@@ -304,13 +379,18 @@ def sweep() -> list[str]:
             remove_conf(row["id"])
             out.append(f"gone {row['id']} ({row['path']})")
             continue
-        target = DATA / row["id"]
-        if row.get("kind") == "file":
-            target = target / os.path.basename(row["path"])
-        if not is_mounted(target):
+        # Not "is it mounted" but "is it the RIGHT inode": an atomic replace
+        # of the shared file leaves a perfectly mounted orphan behind, which
+        # is how a set of edits through a link went nowhere on 2026-09-22.
+        # This also migrates a share made before file shares were mounted by
+        # their folder — the old mount is thrown away and made again.
+        if not mount_healthy(row):
             try:
+                unmount_share(row["id"])
                 mount_share(row["id"], p, row.get("kind", "file"), row.get("mode", "view"))
-                out.append(f"remounted {row['id']} ({row['path']})")
+                grant(p, row.get("kind", "file"), row.get("mode", "view"))
+                write_conf_again(row)
+                out.append(f"remounted {row['id']} ({row['path']}) — it was not serving the live file")
             except OSError as e:
                 out.append(f"could not remount {row['id']}: {e}")
         try:

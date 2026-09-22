@@ -250,7 +250,10 @@ it can only show what the caller could already open.
   no session key, no `/srv/kb` and — verified from inside — no way to open a
   connection to anything, not the internet and not the host. It sees only
   per-share bind mounts (read-only in the kernel unless the link may edit)
-  and a config file per share that never contains the real path. Revoking is
+  and a config file per share that never contains the real path. A
+  single-file link mounts the file's FOLDER — binding the file breaks the
+  moment anything replaces it — and the folder is opened to `kbshare` with
+  search only, so the kernel refuses to list it or read a sibling. Revoking is
   an unmount, so a leaked link dies in a second; expiry is enforced by a
   host timer AND by the container. A `_secrets/` path can never be published,
   and a shared `.html` artifact is served as source rather than run. The one
@@ -259,6 +262,17 @@ it can only show what the caller could already open.
   the same JavaScript and stylesheet every browser on the app downloads,
   served by suffix allowlist, with no path into `/srv/kb`.
   Full threat model: [public-sharing.md](public-sharing.md).
+- **A document's audience is its ACL, so a save has to carry it.** `kb-syncd`
+  writes a document by creating a temp file and renaming it into place, and
+  until 2026-09-22 it restored only owner, group and mode. The first
+  keystroke after a share therefore erased the named people and the indexer
+  from the file — and, because the stored mode is `0660` against a group of
+  `kb-users`, handed the whole company read and write in their place. The
+  flush now copies `system.posix_acl_access` onto the replacement (through
+  the fd, after `fchmod`, which rewrites the mask), and
+  `tests/e2e/test_external_merge.py::test_a_flush_keeps_the_files_audience`
+  types a sentence into a shared document and checks the entries are still
+  there.
 - **`kb-convert` parses untrusted binaries.** Anything a user uploads (docx,
   pptx, xlsx, pdf) is fed to third-party parsers. It runs as the non-root
   `kbindexer` in its own venv with a memory cap, so a parser exploit is

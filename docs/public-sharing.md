@@ -58,9 +58,27 @@ The hub (root) then, in this order:
    default ACL) for an editable one, on exactly that subtree. Mode bits alone
    would not do — a `0640` document is unreadable to the container, and a
    public link must not depend on a file happening to be world-readable.
-3. `mkdir /srv/kb-public/data/<id>` and `mount --bind` the target onto it —
-   a FOLDER onto the directory itself, a FILE onto `data/<id>/<name>` so its
-   siblings are never exposed — remounted `ro` unless the link may edit.
+3. `mkdir /srv/kb-public/data/<id>` and `mount --bind` onto it: a folder
+   share binds the folder; a single-file share binds **the folder the file
+   lives in**, and the conf names the one file inside it that may be served.
+   Remounted `ro` unless the link may edit.
+
+   *Why not bind the file itself?* Because a bind mount pins an **inode**,
+   and everything careful on this box replaces a file rather than rewriting
+   it — syncd flushes a document to a `.kbtmp` and renames it into place, as
+   do git, vim and half the tools an agent runs. The first such write leaves
+   the share holding an orphan: reads return the old text, writes land in a
+   file with no name, and both sides report success. That is exactly what
+   happened to a live link on 2026-09-22 (`findmnt` printed the source with
+   `//deleted` on the end, which is the tell).
+
+   A directory inode is not replaced, so the mount survives. The siblings are
+   then kept out by the kernel rather than by the mount: `kbshare` gets
+   **search only** (`--x`) on the folder and read/write on the one file, so
+   it can open that name and cannot list the folder or open anything else.
+   Routing enforces the same thing a second time (`only` in the conf), and
+   the sweep checks that what is mounted is still the live inode and remounts
+   when it is not.
 4. Write `/srv/kb-public/conf/<id>.json` (root:kbshare 0640): mode, expiry,
    title, the file's name, the scrypt password hash and the token hash.
    **Never the real path.**
@@ -155,7 +173,7 @@ unattributed sweep commit. Naming it is one of the open questions below.
 | Privileges | `--cap-drop ALL`, `--security-opt no-new-privileges`, Docker's default seccomp and AppArmor profiles |
 | Network | its own bridge (`kb-share-net`), published only on `127.0.0.1`, and two `DOCKER-USER` rules: answers to requests are allowed, **anything the container starts is dropped** — no internet, no host services. Verified by trying, from inside |
 | Limits | `--memory 256m --cpus 0.5 --pids-limit 200`, a 4 MB body cap, a 20 s socket timeout |
-| Data | only per-share bind mounts; `ro` in the kernel unless the link may edit, and an ACL that admits `kbshare` only to that subtree |
+| Data | only per-share bind mounts; `ro` in the kernel unless the link may edit. A folder share admits `kbshare` to that subtree; a file share mounts the folder and admits it to ONE file, with search-only on the folder itself — it cannot list the folder or read a sibling |
 | Assets | `/opt/kb-platform/frontend/static` mounted read-only at `/assets`, served by suffix allowlist (`.js .css .woff2 .woff .svg`) — public files either way, and the only writable thing in the container is a share that may be edited |
 | Secrets | none in the image or the environment; the cookie key is made at start and lives in memory |
 | Logs | one line per request to stdout → journald |
@@ -224,7 +242,11 @@ systemctl restart kb-hub
    it also means one wrong click shares a subtree.
 3. Should a share notify its creator when it is first opened, and when it is
    edited? (The inbox would carry it.)
-4. A document open in the app while a stranger saves through a link goes
+4. Nanoseconds do not survive JSON in a browser (`Number.MAX_SAFE_INTEGER`
+   is 9.0e15), so the page's version stamp is **microseconds**. Whole
+   seconds, which is where this started, cannot tell "I saved that" from
+   "somebody else saved in the same second".
+5. A document open in the app while a stranger saves through a link goes
    down syncd's normal external-edit path (`apply_external`): a deterministic
    three-way merge, with a conflicting region resolved in favour of whoever
    has it open and the loss logged. The public page then polls, sees the
