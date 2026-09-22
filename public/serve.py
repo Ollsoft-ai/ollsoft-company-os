@@ -170,11 +170,51 @@ textarea { width:100%; min-height:60vh; padding:1rem; border-radius:12px; border
 """
 
 
+# The same pages, wearing the platform's own theme when the bundle is there:
+# a folder listing, a password prompt and "nothing here" should not look like
+# a different product from the document they lead to. Tokens only — every
+# colour comes from the app's stylesheet.
+SHELL_CSS = """
+body { font-family: var(--sans); }
+header { display: flex; align-items: center; gap: .6rem; padding: .55rem .9rem;
+  border-bottom: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  font-size: .85rem; flex: 0 0 auto; }
+header b { color: var(--ink); font-weight: 600; font-size: .92rem; }
+main { width: 100%; max-width: 52rem; margin: 0 auto; padding: 1.4rem 1.2rem 4rem;
+  overflow: auto; }
+ul.files { list-style: none; padding: 0; margin: 0; }
+ul.files li { border-bottom: 1px solid var(--border); }
+ul.files a { display: flex; gap: .6rem; padding: .6rem .3rem; text-decoration: none;
+  color: var(--ink); border-radius: var(--r); }
+ul.files a:hover { background: var(--panel2); }
+ul.files span { color: var(--muted); font-size: .82rem; margin-left: auto; }
+form.pw { max-width: 22rem; margin: 4rem auto; text-align: center; }
+form.pw input[type=password] { width: 100%; padding: .6rem .7rem; border-radius: var(--r);
+  border: 1px solid var(--border); background: var(--panel); color: var(--ink); font: inherit; }
+form.pw button { margin-top: .8rem; padding: .55rem 1.2rem; border-radius: 999px; border: 0;
+  background: var(--accent); color: var(--on-accent, #fff); cursor: pointer; font: inherit; }
+textarea { width: 100%; min-height: 60vh; padding: 1rem; border-radius: var(--r);
+  border: 1px solid var(--border); background: var(--panel); color: var(--ink);
+  font: 14px/1.6 var(--mono); }
+pre { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r);
+  padding: .9rem 1rem; overflow: auto; }
+table { border-collapse: collapse; } td, th { border: 1px solid var(--border); padding: .35rem .6rem; }
+img, video { max-width: 100%; border-radius: var(--r); }
+blockquote { margin: 0; padding: .2rem 1rem; border-left: 3px solid var(--border); color: var(--muted); }
+.bar { display: flex; gap: .6rem; align-items: center; margin: .8rem 0; }
+.err { color: var(--danger); }
+"""
+
+
 def page(title: str, body: str, sub: str = "") -> bytes:
+    v = asset_stamp()
+    head = (f"<link rel=icon href='/assets/favicon.svg?v={v}'>"
+            f"<link rel=stylesheet href='/assets/style.css?v={v}'><style>{SHELL_CSS}</style>"
+            if editor_available() else f"<style>{CSS}</style>")
     return (f"<!doctype html><html lang=en><head><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
             f"<meta name=referrer content=no-referrer>"
-            f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body>"
+            f"<title>{html.escape(title)}</title>{head}</head><body>"
             f"<header><b>{html.escape(title)}</b><span>{html.escape(sub)}</span></header>"
             f"<main>{body}</main></body></html>").encode()
 
@@ -186,6 +226,9 @@ body.share-doc { height: 100%; display: flex; flex-direction: column; overflow: 
 .share-top { display: flex; align-items: center; gap: .6rem; padding: .55rem .9rem;
   border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto; }
 .share-top b { font-weight: 600; font-size: .92rem; }
+.share-top .back { color: var(--muted); text-decoration: none; font-size: .82rem;
+  border: 1px solid var(--border); border-radius: 999px; padding: .12rem .55rem; }
+.share-top .back:hover { color: var(--ink); border-color: var(--accent); }
 .share-top .where { color: var(--muted); font-size: .8rem; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .share-top .status { margin-left: auto; font-size: .78rem; color: var(--muted); }
@@ -215,6 +258,11 @@ def doc_page(conf: dict, base: str, rel: str, text: str, mtime: int, fallback: s
         "rich": rel.lower().endswith(".md"),
     }).replace("<", "\\u003c")
     editable = conf.get("mode") == "edit"
+    # A document reached THROUGH a folder share needs a way back to the list;
+    # a single-file share has nowhere to go.
+    parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+    back = ("" if conf.get("kind") == "file" else
+            f"<a class=back href='{base}/{urllib.parse.quote(parent)}'>← all files</a>")
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1,"
@@ -225,7 +273,7 @@ def doc_page(conf: dict, base: str, rel: str, text: str, mtime: int, fallback: s
         f"<link rel=stylesheet href='/assets/style.css?v={v}'>"
         f"<style>{DOC_CSS}</style></head>"
         "<body class='share-doc'>"
-        f"<header class=share-top><b>{html.escape(title)}</b>"
+        f"<header class=share-top>{back}<b>{html.escape(title)}</b>"
         f"<span class=where>{html.escape(rel)}</span>"
         f"<span class=badge>{'shared · you can edit' if editable else 'shared · read only'}</span>"
         "<span class=status id=status></span></header>"
