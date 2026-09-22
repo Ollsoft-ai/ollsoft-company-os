@@ -234,6 +234,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self.unlocked(sid, conf):
             return self.ask_password(sid, token)
         root = DATA / sid
+        # A single-file share is mounted as one file inside the share's
+        # directory, so its bare link would show a list of exactly one thing.
+        # Open the file instead — that is what was shared.
+        if not rest and conf.get("kind") == "file" and conf.get("name"):
+            rest = conf["name"]
         target = safe_join(root, rest)
         if target is None or not os.path.lexists(target):
             return self.fail()

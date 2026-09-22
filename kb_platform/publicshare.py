@@ -136,6 +136,7 @@ def write_conf(row: dict, token_hash: str) -> None:
     p = CONF / (row["id"] + ".json")
     p.write_text(json.dumps({
         "mode": row.get("mode", "view"),
+        "kind": row.get("kind", "file"),     # a file share opens the file, not a list of one
         "expires": int(row.get("expires") or 0),
         "title": row.get("title", ""),
         "name": os.path.basename(row["path"]),
