@@ -1223,16 +1223,49 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .pi-keys { flex: 0 0 auto; }
 
 /* ── Find in document (CodeMirror search panel) ───────────────────────────── */
-.cm-panels { background: var(--pop); color: var(--ink); border-color: var(--border) !important; }
-.cm-panel.cm-search { padding: .45rem .6rem; font-family: var(--sans); font-size: .78rem; }
+/* Find in the document (Ctrl+F). CodeMirror ships this panel unstyled — two
+   ragged rows of grey form controls with invisible labels. It is the only
+   piece of chrome a person sees WHILE writing, so it gets the same shapes as
+   everything else: one row that wraps, pill controls, the toggles reading as
+   toggles rather than as three bare checkboxes. */
+.cm-panels { background: linear-gradient(var(--panel), var(--panel)), var(--bg);
+  color: var(--ink); border-color: var(--border) !important; }
+.cm-panels-top { border-bottom: 1px solid var(--border) !important; }
+.cm-panel.cm-search { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
+  padding: .5rem .7rem; font-family: var(--sans); font-size: .8rem; }
+.cm-panel.cm-search br { display: none; }        /* the rows wrap on their own */
 .cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label {
-  font-family: var(--sans); font-size: .78rem; color: var(--ink); }
-.cm-panel.cm-search input[type="text"] { background: var(--bg); border: 1px solid var(--border);
-  border-radius: calc(var(--r) - 2px); padding: .25rem .45rem; }
+  font-family: var(--sans); font-size: .8rem; color: var(--ink); }
+.cm-panel.cm-search input[type="text"] { flex: 0 1 16rem; min-width: 9rem;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+  padding: .32rem .7rem; transition: border-color .12s ease, box-shadow .12s ease; }
+.cm-panel.cm-search input[type="text"]::placeholder { color: var(--faint); }
+.cm-panel.cm-search input[type="text"]:focus { outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .cm-panel.cm-search button { background: var(--panel2); border: 1px solid var(--border);
-  border-radius: calc(var(--r) - 2px); padding: .2rem .5rem; cursor: pointer; }
-.cm-panel.cm-search button:hover { border-color: var(--accent); color: var(--ink); }
-.cm-panel.cm-search [name="close"] { color: var(--muted); font-size: 1rem; border: 0; background: none; }
+  border-radius: 999px; padding: .3rem .75rem; cursor: pointer; font-weight: 500;
+  color: var(--muted); }
+.cm-panel.cm-search button:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--ink); }
+.cm-panel.cm-search button[name="replaceAll"], .cm-panel.cm-search button[name="select"] {
+  color: var(--muted); }
+/* the three switches: a pill that lights up when it is on, not a raw checkbox */
+.cm-panel.cm-search label { display: inline-flex; align-items: center; gap: .35rem;
+  padding: .26rem .6rem; border-radius: 999px; border: 1px solid transparent;
+  color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap; }
+.cm-panel.cm-search label:hover { color: var(--ink); }
+.cm-panel.cm-search label:has(input:checked) { color: var(--ink);
+  background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.cm-panel.cm-search input[type="checkbox"] { width: 13px; height: 13px; margin: 0;
+  accent-color: var(--accent); cursor: pointer; }
+.cm-panel.cm-search [name="close"] { margin-left: auto; color: var(--faint); font-size: 1.1rem;
+  line-height: 1; border: 0; background: none; padding: .2rem .35rem; }
+.cm-panel.cm-search [name="close"]:hover { color: var(--ink); background: var(--panel2); }
+@media (max-width: 880px) {
+  .cm-panel.cm-search { gap: .3rem; padding: .45rem .5rem; }
+  .cm-panel.cm-search input[type="text"] { flex: 1 1 100%; font-size: 16px; }
+}
 .cm-selectionMatch { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 
 /* ── Modals (permissions, admin, cron) ────────────────────────────────────── */
