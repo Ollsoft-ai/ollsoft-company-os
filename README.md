@@ -317,6 +317,7 @@ passwordless sudo to create those accounts.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/playwright install chromium        # for tests/e2e
+# optional: firefox + webkit for tests/e2e/test_cross_browser.py (they skip if absent)
 .venv/bin/python -m pytest tests/ -q
 ```
 

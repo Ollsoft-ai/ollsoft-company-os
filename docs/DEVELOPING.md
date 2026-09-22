@@ -51,6 +51,18 @@ CI runs them right after the installer. Everything else is Python, below.
 - `tests/cli/` drive the HTTP API with `httpx` (permission matrix, RLS, admin,
   security regressions). `tests/e2e/` drive a real chromium via Playwright
   (multiplayer convergence, the editor, artifacts, the file manager).
+- **One file drives the other engines.** Everything else here is Chromium,
+  including the phone tests — which emulate a phone's viewport and touch but
+  not its ENGINE, while every iPhone runs WebKit.
+  `tests/e2e/test_cross_browser.py` is a smoke pass (login, the rendered
+  markdown, a table cell, typing, the mode switch, a quiet console) in
+  Chromium, Firefox and WebKit; an engine that is not installed **skips**, so
+  CI stays Chromium-only. To have them locally:
+  `python -m playwright install firefox webkit` and, as root,
+  `python -m playwright install-deps webkit` (GTK). Native HTML5 drag cannot
+  be driven from a headless harness — the tab-drag tests synthesise the
+  `DragEvent`s and their `DataTransfer`, which tests our handlers, not the
+  browser's.
 - The root `conftest.py` seeds a namespace in `pytest_configure` and removes it
   in `pytest_unconfigure`. It has to be `configure`, not a fixture: ~20 modules
   read the credentials file at IMPORT time, so it must exist before collection.
