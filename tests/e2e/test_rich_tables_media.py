@@ -102,17 +102,29 @@ def doc_text(page):
     return page.evaluate("() => window.__kbview.state.doc.toString()")
 
 
+def cell(page, r, c):
+    """A cell renders its markdown until you put the cursor in it, so clicking
+    the cell is what produces the <input> these tests type into."""
+    page.locator(f'table.cm-table [data-cell="{r},{c}"]').click()
+    inp = page.locator(f'table.cm-table input[data-cell="{r},{c}"]')
+    inp.wait_for(state="visible", timeout=4000)
+    return inp
+
+
+def cell_text(page, r, c):
+    return page.locator(f'table.cm-table [data-cell="{r},{c}"] .cm-cell-md').inner_text()
+
+
 def test_table_renders_as_a_grid_and_edits_write_markdown(browser, doc):
     ctx, page = open_doc(browser, doc)
     page.wait_for_selector("table.cm-table", timeout=10000)
     # header + two body rows, two columns
     assert page.locator("table.cm-table tr").count() == 3
-    assert page.locator('table.cm-table input[data-cell="0,0"]').input_value() == "Task"
+    assert cell_text(page, 0, 0) == "Task"
 
     # typing in a cell writes back into the markdown source
-    cell = page.locator('table.cm-table input[data-cell="1,1"]')
-    cell.click()
-    cell.fill("peter")
+    inp = cell(page, 1, 1)
+    inp.fill("peter")
     page.wait_for_timeout(700)          # debounced writeback
     src = doc_text(page)
     assert "| Ship it | peter |" in src, src
@@ -129,7 +141,7 @@ def test_clicking_a_table_does_not_reveal_markdown(browser, doc):
     ctx, page = open_doc(browser, doc)
     page.wait_for_selector("table.cm-table", timeout=10000)
     before = page.locator("table.cm-table").bounding_box()
-    page.locator('table.cm-table input[data-cell="1,0"]').click()
+    cell(page, 1, 0)
     page.wait_for_timeout(400)
     assert page.locator("table.cm-table").count() == 1, "table turned back into markdown"
     after = page.locator("table.cm-table").bounding_box()
@@ -140,7 +152,7 @@ def test_clicking_a_table_does_not_reveal_markdown(browser, doc):
 def test_structural_buttons_add_and_remove(browser, doc):
     ctx, page = open_doc(browser, doc)
     page.wait_for_selector("table.cm-table", timeout=10000)
-    page.locator('table.cm-table input[data-cell="1,0"]').click()
+    cell(page, 1, 0)
     page.locator('.cm-tbl-bar button:has-text("+ row")').click()
     page.wait_for_timeout(500)
     assert page.locator("table.cm-table tr").count() == 4
@@ -215,3 +227,149 @@ def test_toolbar_inserts_a_table(browser, doc):
     assert page.locator("table.cm-table").count() == 2
     assert "| Column | Column |" in doc_text(page)
     ctx.close()
+
+
+# ---- what krystof asked for on 2026-09-22 ---------------------------------
+# "markdown in tables is not rendered, but should be. and also ctrl z in tables
+#  doesnt work. also the botto + row and - row and column should always
+#  append/remove to the latest row/column. but i should be able to rightclick
+#  somewhere on a row or column and create a new one in the middle"
+
+MD_TABLE_DOC = """# Rich cells
+
+| What | State |
+| --- | --- |
+| **Ship it** | `done` |
+| ~~Old plan~~ | [the brief](brief.md) |
+
+after the table
+"""
+
+
+@pytest.fixture
+def fresh(browser):
+    """A table document of this test's own — these rearrange the grid, and a
+    shared fixture would hand the next test somebody else's leftovers."""
+    c = api()
+    rel = kbdoc(f"tblrc_{int(time.time() * 1000)}.md")
+    assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)
+    assert c.post("/api/artifact/write",
+                  json={"path": rel, "content": TABLE_DOC}).status_code == 200
+    ctx, page = open_doc(browser, rel)
+    page.wait_for_selector("table.cm-table", timeout=10000)
+    yield page
+    ctx.close()
+    c.post("/api/fs/delete", json={"path": rel})
+
+
+@pytest.fixture(scope="module")
+def md_doc():
+    c = api()
+    rel = kbdoc(f"tblmd_{int(time.time())}.md")
+    assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)
+    assert c.post("/api/artifact/write",
+                  json={"path": rel, "content": MD_TABLE_DOC}).status_code == 200
+    yield rel
+    c.post("/api/fs/delete", json={"path": rel})
+
+
+def test_a_cell_renders_its_markdown_until_you_edit_it(browser, md_doc):
+    ctx, page = open_doc(browser, md_doc)
+    page.wait_for_selector("table.cm-table", timeout=10000)
+    # rendered: the marks are gone and real elements are there instead
+    assert cell_text(page, 1, 0) == "Ship it"
+    assert page.locator('[data-cell="1,0"] .cm-cell-md strong').count() == 1
+    assert page.locator('[data-cell="1,1"] .cm-cell-md code').inner_text() == "done"
+    assert page.locator('[data-cell="2,0"] .cm-cell-md s').count() == 1
+    link = page.locator('[data-cell="2,1"] .cm-cell-md a')
+    assert link.inner_text() == "the brief"
+    assert "brief.md" in (link.get_attribute("data-open-path") or "")
+    # a scheme that is not http(s)/mailto/tel never becomes a real href: an
+    # anchor in the app's own origin would run `javascript:` on activation
+    inp = cell(page, 2, 1)
+    inp.fill("[gotcha](javascript:alert(1))")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    bad = page.locator('[data-cell="2,1"] .cm-cell-md a')
+    assert bad.inner_text() == "gotcha"
+    assert bad.get_attribute("href") is None
+    assert bad.get_attribute("data-open-path") is None
+
+    # …and the raw markdown comes back the moment the cell is yours to type in
+    assert cell(page, 1, 0).input_value() == "**Ship it**"
+    # leaving it puts the rendering back, with the source unchanged
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    assert page.locator('[data-cell="1,0"] .cm-cell-md strong').count() == 1
+    assert "| **Ship it** | `done` |" in doc_text(page)
+    ctx.close()
+
+
+def test_ctrl_z_inside_a_cell_undoes_the_document(browser, fresh):
+    """A cell is an <input> the editor cannot see, so Ctrl+Z used to do
+    nothing at all there."""
+    page = fresh
+    inp = cell(page, 1, 1)
+    inp.fill("peter")
+    page.wait_for_timeout(700)                      # debounced writeback
+    assert "| Ship it | peter |" in doc_text(page)
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(600)
+    src = doc_text(page)
+    assert "| Ship it | alice |" in src, src
+    assert "peter" not in src
+    assert page.locator("table.cm-table").count() == 1, "the grid survived the undo"
+
+
+def test_the_bar_always_works_on_the_end_of_the_table(browser, fresh):
+    """Whichever cell you are in, `+ row` adds one at the bottom and `− row`
+    takes the last one away — that is what a row of buttons under a grid looks
+    like it does."""
+    page = fresh
+    cell(page, 1, 0)                                # sitting in the FIRST body row
+    page.locator('.cm-tbl-bar button:has-text("+ row")').click()
+    page.wait_for_timeout(700)
+    rows = [r.strip() for r in doc_text(page).splitlines() if r.startswith("|")]
+    assert rows[2].startswith("| Ship it"), rows     # the new row is not here
+    assert rows[-1] == "|  |  |", rows                # it is at the bottom
+    page.locator('.cm-tbl-bar button:has-text("− row")').click()
+    page.wait_for_timeout(700)
+    assert "| Ship it | alice |" in doc_text(page)
+    assert page.locator("table.cm-table tr").count() == 3
+
+
+def test_right_click_inserts_a_row_in_the_middle(browser, fresh):
+    page = fresh
+    page.locator('table.cm-table [data-cell="2,0"]').click(button="right")
+    page.wait_for_selector('[data-testid="ctx-menu"]', timeout=4000)
+    page.locator('[data-testid="ctx-menu"] button:has-text("Insert row above")').click()
+    page.wait_for_timeout(700)
+    rows = [r.strip() for r in doc_text(page).splitlines() if r.startswith("|")]
+    # header, delimiter, Ship it, the new empty row, Review
+    assert rows[2].startswith("| Ship it"), rows
+    assert rows[3] == "|  |  |", rows
+    assert rows[4].startswith("| Review"), rows
+
+    # …and a column in the middle, from the same menu
+    page.locator('table.cm-table [data-cell="0,1"]').click(button="right")
+    page.wait_for_selector('[data-testid="ctx-menu"]', timeout=4000)
+    page.locator('[data-testid="ctx-menu"] button:has-text("Insert column left")').click()
+    page.wait_for_timeout(700)
+    assert "| Task |  | Owner |" in doc_text(page)
+
+
+def test_right_click_deletes_the_row_you_point_at(browser, fresh):
+    page = fresh
+    page.locator('table.cm-table [data-cell="1,0"]').click(button="right")
+    page.wait_for_selector('[data-testid="ctx-menu"]', timeout=4000)
+    page.locator('[data-testid="ctx-menu"] button:has-text("Delete this row")').click()
+    page.wait_for_timeout(700)
+    src = doc_text(page)
+    assert "| Ship it | alice |" not in src, src
+    assert "| Review | carol |" in src
+    # the header row can never be deleted, so its menu does not offer it
+    page.locator('table.cm-table [data-cell="0,0"]').click(button="right")
+    page.wait_for_selector('[data-testid="ctx-menu"]', timeout=4000)
+    assert page.locator('[data-testid="ctx-menu"] button:has-text("Delete this row")').count() == 0
+    assert page.locator('[data-testid="ctx-menu"] button:has-text("Insert row above")').count() == 0
+    page.keyboard.press("Escape")

@@ -834,14 +834,26 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 .cm-table-wrap { margin: 0 var(--gutter); padding: .5rem 0; position: relative; overflow-x: auto; }
 .cm-table { border-collapse: collapse; font-size: .88rem; min-width: min(100%, 20rem);
   border-radius: var(--r); overflow: hidden; }
-.cm-table th, .cm-table td { border: 1px solid var(--border); padding: 0; vertical-align: middle; }
+.cm-table th, .cm-table td { border: 1px solid var(--border); padding: var(--cell-pad);
+  vertical-align: middle; }
 .cm-table th { background: var(--panel2); }
 .cm-table th input, .cm-table th { font-weight: 600; color: var(--ink); }
+/* A cell shows its markdown RENDERED; the raw text comes back — as an input,
+   which is then the cell's whole box — only while you are editing it. */
+.cm-td { cursor: text; }
+.cm-td.editing { padding: 0; }
+.cm-td.editing .cm-cell-md { display: none; }
+.cm-cell-md { display: block; min-width: 3.5rem; }
+.cm-cell-md:empty::after { content: "\00a0"; }     /* an empty cell keeps its height */
+.cm-cell-md code { font-family: var(--mono); font-size: .92em; color: var(--md-code);
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 .25em; }
+.cm-cell-md s { color: var(--muted); }
+.cm-md-dead { color: var(--muted); text-decoration-style: dotted; cursor: default; }
+.cm-cell-img { max-height: 3.4rem; max-width: 12rem; vertical-align: middle; border-radius: 4px; }
 .cm-table input { width: 100%; min-width: 4rem; box-sizing: border-box; background: transparent;
   border: 0; color: inherit; font: inherit; padding: var(--cell-pad); border-radius: 0; }
 .cm-table input:focus { outline: 2px solid var(--accent); outline-offset: -2px;
   background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.cm-table td:not(:has(input)), .cm-table th:not(:has(input)) { padding: var(--cell-pad); }
 .cm-tbl-bar { display: flex; gap: .25rem; margin-top: .3rem; opacity: 0; transition: opacity .12s ease; }
 .cm-table-wrap:hover .cm-tbl-bar, .cm-table-wrap:focus-within .cm-tbl-bar { opacity: 1; }
 .cm-tbl-bar button { font: 500 .72rem/1 var(--sans); color: var(--muted); cursor: pointer;

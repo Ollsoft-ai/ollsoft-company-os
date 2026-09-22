@@ -3,7 +3,7 @@ import { WebsocketProvider } from "y-websocket";
 import { EditorState, Compartment, StateField, StateEffect } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine,
          ViewPlugin, Decoration, WidgetType, dropCursor, drawSelection } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, undo, redo } from "@codemirror/commands";
 import { autocompletion } from "@codemirror/autocomplete";
 import { search as cmSearch, searchKeymap, openSearchPanel,
          highlightSelectionMatches } from "@codemirror/search";
@@ -280,6 +280,10 @@ class MediaWidget extends WidgetType {
 // The source of record is still the GFM table text in the document; the widget
 // is a view of it. Cell edits write back that ONE cell (minimal range, so two
 // people editing different cells merge); structural edits rewrite the block.
+//
+// A cell shows its markdown RENDERED until you put the cursor in it, which is
+// how the rest of this editor behaves: `**done**` reads as **done**, and the
+// asterisks come back the moment the cell is yours to type in.
 
 function splitRow(line, lineFrom) {
   const bars = [];
@@ -334,9 +338,101 @@ function tableToMarkdown(rows, align) {
   return out.join("\n");
 }
 
+// A link inside a cell. The rendered cell is not a CodeMirror decoration, so
+// the syntax-tree route the body of the document uses is not available here —
+// the anchor carries the resolved target itself and the cell opens it.
+// Only these ever become a real href. `isExternalUrl` is true of ANY scheme —
+// including `javascript:`, which as an anchor in the app's own origin would be
+// a document that runs code the moment someone follows a link in a cell.
+function safeHref(url) {
+  return /^(https?:|mailto:|tel:)/i.test(url) ? url : null;
+}
+
+function cellLink(label, url, dir) {
+  const a = document.createElement("a");
+  a.className = "cm-md-link";
+  a.appendChild(renderInlineMd(label || url, dir));
+  if (isExternalUrl(url)) {
+    const h = safeHref(url);
+    if (h) { a.href = h; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    else a.classList.add("cm-md-dead");     // shown, styled, goes nowhere
+  } else {
+    const rel = resolveDocPath(dir, url);
+    a.href = "#";
+    a.dataset.openPath = rel;
+    if (rel.split("/").includes("_secrets")) a.classList.add("cm-md-secret");
+  }
+  a.title = url + "  ·  click opens (click elsewhere in the cell to edit it)";
+  return a;
+}
+
+function openCellLink(a) {
+  const p = a.dataset.openPath;
+  if (p) openDeepLink(p);
+  else if (a.getAttribute("href")) window.open(a.href, "_blank", "noopener");
+}
+
+// Inline markdown, as DOM NODES built out of escaped text — a cell can contain
+// anything a document contains, and none of it may become markup. Only the
+// inline forms: a cell is one line, so headings, lists and fences have no
+// meaning in it. `<br>` is the one HTML form GFM leaves people no alternative
+// to, so it is understood literally and nothing else is.
+function renderInlineMd(text, dir) {
+  const frag = document.createDocumentFragment();
+  let buf = "", i = 0;
+  const flush = () => { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ""; } };
+  const wrap = (tag, inner) => {
+    flush();
+    const e = document.createElement(tag);
+    e.appendChild(renderInlineMd(inner, dir));
+    frag.appendChild(e);
+  };
+  while (i < text.length) {
+    const rest = text.slice(i);
+    let m;
+    if (text[i] === "\\" && /[\\`*_~[\]()<>!|]/.test(text[i + 1] || "")) {
+      buf += text[i + 1]; i += 2; continue;
+    }
+    if ((m = /^(`+)([^`]+)\1/.exec(rest))) {
+      flush();
+      const e = document.createElement("code");
+      e.textContent = m[2].trim();
+      frag.appendChild(e);
+    } else if ((m = /^!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/.exec(rest))) {
+      flush();
+      const img = new Image();
+      img.className = "cm-cell-img";
+      img.src = resolveMediaUrl(dir, m[2]);
+      img.alt = m[1]; img.title = m[1] || m[2];
+      frag.appendChild(img);
+    } else if ((m = /^\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/.exec(rest))) {
+      flush();
+      frag.appendChild(cellLink(m[1], m[2], dir));
+    } else if ((m = /^(\*\*|__)(?=\S)([\s\S]+?)\1/.exec(rest))) {
+      wrap("strong", m[2]);
+    } else if ((m = /^~~(?=\S)([\s\S]+?)~~/.exec(rest))) {
+      wrap("s", m[1]);
+    } else if ((m = /^([*_])(?=\S)([\s\S]+?)\1/.exec(rest))) {
+      wrap("em", m[2]);
+    } else if ((m = /^<br\s*\/?>/i.exec(rest))) {
+      flush();
+      frag.appendChild(document.createElement("br"));
+    } else if ((m = /^https?:\/\/[^\s<>()]+/.exec(rest))) {
+      flush();
+      frag.appendChild(cellLink(m[0], m[0], dir));
+    } else {
+      buf += text[i++];
+      continue;
+    }
+    i += m[0].length;
+  }
+  flush();
+  return frag;
+}
+
 class TableWidget extends WidgetType {
-  constructor(md, readOnly) { super(); this.md = md; this.readOnly = readOnly; }
-  eq(o) { return o.md === this.md && o.readOnly === this.readOnly; }
+  constructor(md, readOnly, dir) { super(); this.md = md; this.readOnly = readOnly; this.dir = dir; }
+  eq(o) { return o.md === this.md && o.readOnly === this.readOnly && o.dir === this.dir; }
   toDOM(view) {
     const dom = document.createElement("div");
     dom.className = "cm-table-wrap";
@@ -362,6 +458,7 @@ class TableWidget extends WidgetType {
     const table = document.createElement("table");
     table.className = "cm-table";
     const ro = this.readOnly;
+    const dir = this.dir;
     // where the caret is, for "insert row below" / "delete this column"
     let focus = { r: 0, c: 0 };
 
@@ -386,7 +483,18 @@ class TableWidget extends WidgetType {
       view.dispatch({ changes: { from: cell.from, to: cell.to, insert } });
     };
 
-    const restructure = (fn) => {
+    // Put the cursor back in a cell after a redraw threw the live input away.
+    // `__busy` is up from the dispatch until the redraw has settled: an input
+    // that loses focus by being REMOVED must not write its old text back,
+    // because after a row insert its coordinates mean a different cell.
+    const refocus = (want) => requestAnimationFrame(() => {
+      dom.__busy = false;
+      const td = dom.querySelector(`[data-cell="${want.r},${want.c}"]`) ||
+                 dom.querySelector('[data-cell="0,0"]');
+      if (td && td.__edit) td.__edit();
+    });
+
+    const restructure = (fn, want) => {
       const m = model();
       if (!m) return;
       const grid = m.rows.map((row) => row.map((cell) => cell.text));
@@ -396,47 +504,119 @@ class TableWidget extends WidgetType {
       if (JSON.stringify([grid, al]) === before) return;   // guarded op declined
       const md = tableToMarkdown(grid, al);
       dom.__force = true;                                  // redraw even with focus inside
-      const want = { r: focus.r, c: focus.c };
+      dom.__busy = true;
+      const landing = want || { r: focus.r, c: focus.c };
       view.dispatch({ changes: { from: m.from, to: m.to, insert: md } });
-      // put the caret back where the user was working
-      requestAnimationFrame(() => {
-        const sel = dom.querySelector(`input[data-cell="${want.r},${want.c}"]`) ||
-                    dom.querySelector('input[data-cell="0,0"]');
-        if (sel) sel.focus();
-      });
+      refocus(landing);
+    };
+
+    // Undo has to reach the document. Everything typed in a cell is a normal
+    // edit of the markdown underneath, but the keystroke happens inside an
+    // <input> the editor cannot see — so Ctrl+Z used to undo nothing at all
+    // (or, worse, only the browser's own idea of the input's history).
+    const undoFromCell = (r, c, inp, isRedo) => {
+      clearTimeout(inp._t);
+      writeCell(r, c, inp.value);        // land what is pending, then step back
+      dom.__force = true;
+      dom.__busy = true;
+      (isRedo ? redo : undo)(view);
+      refocus({ r, c });
+    };
+
+    const rowCount = () => (model() || { rows }).rows.length;
+    const colCount = () => ((model() || { rows }).rows[0] || []).length;
+    const addRow = (at) => restructure((g) => g.splice(at, 0, g[0].map(() => "")),
+                                       { r: at, c: 0 });
+    const addCol = (at) => restructure((g, al) => {
+      g.forEach((row) => row.splice(at, 0, ""));
+      al.splice(at, 0, "");
+    }, { r: focus.r, c: at });
+    const dropRow = (at) => restructure((g) => {
+      if (g.length > 2 && at > 0) g.splice(at, 1);
+      else kbToast("A table keeps its header row and one body row", "err");
+    }, { r: Math.max(1, at - 1), c: focus.c });
+    const dropCol = (at) => restructure((g, al) => {
+      if ((g[0] || []).length > 1) { g.forEach((row) => row.splice(at, 1)); al.splice(at, 1); }
+      else kbToast("A table needs at least one column", "err");
+    }, { r: focus.r, c: Math.max(0, at - 1) });
+
+    const cellMenu = (r, c, td) => {
+      const items = [{ icon: I.pencil, label: "Edit this cell", fn: () => td.__edit() }, "-"];
+      if (r > 0) items.push({ icon: I.plus, label: "Insert row above", fn: () => addRow(r) });
+      items.push({ icon: I.plus, label: "Insert row below", fn: () => addRow(r + 1) });
+      items.push({ icon: I.plus, label: "Insert column left", fn: () => addCol(c) });
+      items.push({ icon: I.plus, label: "Insert column right", fn: () => addCol(c + 1) });
+      items.push("-");
+      if (r > 0) items.push({ icon: I.trash, label: "Delete this row", danger: true,
+                              fn: () => dropRow(r) });
+      items.push({ icon: I.trash, label: "Delete this column", danger: true,
+                   fn: () => dropCol(c) });
+      return items;
     };
 
     rows.forEach((row, r) => {
       const tr = document.createElement("tr");
       row.forEach((cell, c) => {
         const td = document.createElement(r === 0 ? "th" : "td");
+        td.className = "cm-td";
+        td.setAttribute("data-cell", r + "," + c);
         if (align[c]) td.style.textAlign = align[c];
-        if (ro) {
-          td.textContent = cell.text;
-        } else {
-          const inp = document.createElement("input");
+        let raw = cell.text.replace(/\\\|/g, "|");
+        const shown = document.createElement("span");
+        shown.className = "cm-cell-md";
+        const paint = () => shown.replaceChildren(renderInlineMd(raw, dir));
+        paint();
+        td.appendChild(shown);
+        tr.appendChild(td);
+        if (ro) return;
+
+        let inp = null;
+        const close = () => {
+          if (!inp) return;
+          const el = inp;
+          inp = null;                       // before blur/remove re-enters here
+          clearTimeout(el._t);
+          if (!dom.__busy) { raw = el.value; writeCell(r, c, el.value); }
+          el.remove();
+          td.classList.remove("editing");
+          paint();
+        };
+        const edit = () => {
+          focus = { r, c };
+          if (inp) { inp.focus(); inp.select(); return; }
+          // hold the column at the width it is rendering at, so entering a
+          // cell does not make the table jump sideways under the pointer
+          const w = td.getBoundingClientRect().width;
+          inp = document.createElement("input");
           inp.type = "text";
-          inp.value = cell.text.replace(/\\\|/g, "|");
-          inp.size = Math.max(6, Math.min(40, inp.value.length + 1));
+          inp.value = raw;
+          inp.size = Math.max(6, Math.min(40, raw.length + 1));
+          inp.style.minWidth = Math.max(40, Math.round(w) - 14) + "px";
           inp.setAttribute("data-cell", r + "," + c);
-          inp.addEventListener("focus", () => { focus = { r, c }; });
           inp.addEventListener("input", () => {
             inp.size = Math.max(6, Math.min(40, inp.value.length + 1));
             clearTimeout(inp._t);
             inp._t = setTimeout(() => writeCell(r, c, inp.value), 400);
           });
-          inp.addEventListener("blur", () => {
-            clearTimeout(inp._t); writeCell(r, c, inp.value);
-          });
-          // keys typed in a cell are the table's business, not the editor's
+          inp.addEventListener("blur", close);
+          // keys typed in a cell are the table's business, not the editor's —
+          // except the ones that are about the DOCUMENT, which are forwarded
           inp.addEventListener("keydown", (e) => {
             e.stopPropagation();
+            const mod = e.metaKey || e.ctrlKey;
+            if (mod && (e.key === "z" || e.key === "Z" || e.key === "y")) {
+              e.preventDefault();
+              undoFromCell(r, c, inp, e.key === "y" || e.shiftKey);
+              return;
+            }
             const go = (dr, dc) => {
-              const sel = dom.querySelector(
-                `input[data-cell="${r + dr},${c + dc}"]`);
-              if (sel) { e.preventDefault(); clearTimeout(inp._t);
-                         writeCell(r, c, inp.value); sel.focus(); sel.select(); }
-              return !!sel;
+              const next = dom.querySelector(`[data-cell="${r + dr},${c + dc}"]`);
+              if (next && next.__edit) {
+                e.preventDefault(); clearTimeout(inp._t);
+                writeCell(r, c, inp.value);
+                next.__edit();
+              }
+              return !!(next && next.__edit);
             };
             if (e.key === "Tab") { if (!go(0, e.shiftKey ? -1 : 1)) go(e.shiftKey ? -1 : 1, 0); }
             else if (e.key === "ArrowDown") go(1, 0);
@@ -444,12 +624,28 @@ class TableWidget extends WidgetType {
             else if (e.key === "Enter") {
               e.preventDefault();
               clearTimeout(inp._t); writeCell(r, c, inp.value);
-              if (!go(1, 0)) restructure((g) => g.push(g[0].map(() => "")));
+              if (!go(1, 0)) addRow(rowCount());
             } else if (e.key === "Escape") { inp.blur(); view.focus(); }
           });
+          td.classList.add("editing");
           td.appendChild(inp);
-        }
-        tr.appendChild(td);
+          inp.focus(); inp.select();
+        };
+        td.__edit = edit;
+
+        td.addEventListener("mousedown", (e) => {
+          if (e.button !== 0 || inp) return;
+          const a = e.target.closest("a");
+          if (a) { e.preventDefault(); openCellLink(a); return; }
+          if (e.target.tagName === "IMG") return;   // let a picture be a picture
+          e.preventDefault();                       // no text selection, no caret move
+          edit();
+        });
+        td.addEventListener("contextmenu", (e) => {
+          e.preventDefault(); e.stopPropagation();
+          focus = { r, c };
+          openCtxMenu(cellMenu(r, c, td), e.clientX, e.clientY);
+        });
       });
       table.appendChild(tr);
     });
@@ -465,20 +661,14 @@ class TableWidget extends WidgetType {
       b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
       bar.appendChild(b);
     };
-    btn("+ row", "Insert a row below the one you're in",
-        () => restructure((g) => g.splice(Math.max(1, focus.r + 1), 0, g[0].map(() => ""))));
-    btn("+ col", "Insert a column to the right", () => restructure((g, al) => {
-      g.forEach((row) => row.splice(focus.c + 1, 0, ""));
-      al.splice(focus.c + 1, 0, "");
-    }));
-    btn("− row", "Delete the row you're in (never the header)", () => restructure((g) => {
-      if (g.length > 2 && focus.r > 0) g.splice(focus.r, 1);
-      else kbToast("A table keeps its header row and one body row", "err");
-    }));
-    btn("− col", "Delete the column you're in", () => restructure((g, al) => {
-      if ((g[0] || []).length > 1) { g.forEach((row) => row.splice(focus.c, 1)); al.splice(focus.c, 1); }
-      else kbToast("A table needs at least one column", "err");
-    }));
+    // The bar works on the END of the table — that is what a row of buttons
+    // under a grid looks like it does. Anywhere in the middle is a right-click
+    // on the cell you mean.
+    const MIDDLE = "  ·  right-click a cell to insert in the middle";
+    btn("+ row", "Add a row at the bottom" + MIDDLE, () => addRow(rowCount()));
+    btn("+ col", "Add a column at the end" + MIDDLE, () => addCol(colCount()));
+    btn("− row", "Remove the last row" + MIDDLE, () => dropRow(rowCount() - 1));
+    btn("− col", "Remove the last column" + MIDDLE, () => dropCol(colCount() - 1));
     dom.appendChild(bar);
   }
 }
@@ -486,14 +676,14 @@ class TableWidget extends WidgetType {
 // A table spans whole lines, so its decoration REPLACES line breaks — CodeMirror
 // only accepts that from a state field (view plugins may not), which is why
 // tables live here instead of inside livePreview().
-function buildTableDecos(state) {
+function buildTableDecos(state, dir) {
   const ranges = [];
   syntaxTree(state).iterate({ enter: (n) => {
     if (n.name !== "Table") return;
     const from = state.doc.lineAt(n.from).from;
     const to = state.doc.lineAt(n.to).to;
     ranges.push(Decoration.replace({
-      widget: new TableWidget(state.sliceDoc(from, to), state.readOnly),
+      widget: new TableWidget(state.sliceDoc(from, to), state.readOnly, dir),
       block: true,
     }).range(from, to));
     return false;
@@ -501,15 +691,17 @@ function buildTableDecos(state) {
   return Decoration.set(ranges, true);
 }
 
-const tableField = StateField.define({
-  create: (state) => buildTableDecos(state),
+// Takes the document's folder for the same reason livePreview() does: a link
+// or a picture in a cell is written relative to the file it lives in.
+const tableField = (dir) => StateField.define({
+  create: (state) => buildTableDecos(state, dir),
   update(value, tr) {
     // Also rebuild when the SYNTAX TREE changed without the doc changing:
     // CodeMirror parses incrementally, so a table below the fold isn't in the
     // tree yet when a long document opens, and no further edit may ever come.
     if (!tr.docChanged && !tr.reconfigured &&
         syntaxTree(tr.state) === syntaxTree(tr.startState)) return value;
-    return buildTableDecos(tr.state);
+    return buildTableDecos(tr.state, dir);
   },
   provide: (f) => [
     EditorView.decorations.from(f),
@@ -1231,7 +1423,7 @@ function pasteAsLink(e, view) {
 // ---- editing mode (rich | source) ------------------------------------------
 function modeExts(tab) {
   return tab.mode === "rich"
-    ? [livePreview(dirName(tab.path)), tableField]
+    ? [livePreview(dirName(tab.path)), tableField(dirName(tab.path))]
     : [lineNumbers(), highlightActiveLine()];
 }
 
@@ -1640,10 +1832,12 @@ function tbTable() {
   const md = "| Column | Column |\n| --- | --- |\n|  |  |\n|  |  |";
   const at = line.to;
   v.dispatch({ changes: { from: at, insert: (line.text.trim() ? "\n\n" : "\n") + md + "\n" } });
-  // focus the first cell of the table we just made
+  // focus the first cell of the table we just made (a cell renders its
+  // markdown until it is being edited, so ask it to open rather than
+  // looking for an <input> that does not exist yet)
   setTimeout(() => {
-    const inp = v.dom.querySelector('.cm-table-wrap input[data-cell="0,0"]');
-    if (inp) { inp.focus(); inp.select(); }
+    const td = v.dom.querySelector('.cm-table-wrap [data-cell="0,0"]');
+    if (td && td.__edit) td.__edit();
   }, 40);
 }
 

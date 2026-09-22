@@ -392,6 +392,19 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   dropped on a folder still moves the file. A **Source** toggle (persisted in
   `localStorage`) drops to raw markdown with line numbers. GFM task/strikethrough/
   table nodes come from `@lezer/markdown` extensions.
+- **Tables are a grid you type into** (`TableWidget`, a block decoration in its
+  own `StateField` — a view plugin may not replace line breaks). The GFM text
+  stays the truth: a cell edit rewrites that ONE cell's range, so two people in
+  different cells merge, and a structural change rewrites the block. A cell
+  shows its markdown **rendered** (`renderInlineMd` — bold, italic, strike,
+  code, links, images, `<br>`, built as DOM nodes out of escaped text, so a
+  document can never inject markup and only http/mailto/tel ever becomes an
+  href) and hands back the raw text as an `<input>` while the cursor is in it.
+  Keys typed in a cell belong to the table, except Ctrl+Z/Ctrl+Shift+Z, which
+  are the document's: they flush the pending cell write and run the editor's
+  own undo. The bar under the grid works on the END of the table (add/remove
+  the last row or column); anywhere in the middle is a right-click on the cell
+  you mean, which also deletes that row or column.
 - **Reading affordances in the rendered view**: a `code span` carries the same
   one-click copy a fenced block has (`InlineCopyWidget`, faint until hovered —
   inline code is everywhere in these documents), and an **@mention of a real
