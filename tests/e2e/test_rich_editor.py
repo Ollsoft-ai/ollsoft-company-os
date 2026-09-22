@@ -676,3 +676,54 @@ def test_a_list_hangs_and_its_wrapped_lines_line_up(browser):
     finally:
         cleanup([path])
         ctx.close()
+
+
+def test_a_click_lands_on_the_line_you_clicked_even_below_a_table(browser):
+    """A block widget's spacing has to be inside its box.
+
+    CodeMirror measures a widget with getBoundingClientRect, which excludes
+    margins, so a vertical margin on the table (or image) widget makes every
+    line below it paint lower than the editor believes — and a click then
+    puts the caret one line off. Clicking the first checkbox and landing on
+    the second is how it showed up (2026-09-22).
+    """
+    name = f"clickmap_{int(time.time())}.md"
+    body = (
+        "# Head\n\n"
+        "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+        "Plain paragraph one that is long enough to click into comfortably\n\n"
+        "- Bullet one that is long enough to click into comfortably here\n\n"
+        "- [ ] Task one that is long enough to click into comfortably here\n"
+        "- [ ] Task two that is long enough to click into comfortably here\n\n"
+        "> Quote one that is long enough to click into comfortably here\n\n"
+        "Final paragraph that is long enough to click into comfortably\n"
+    )
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = login(ctx, "alice")
+    c = httpx.Client(base_url=BASE, timeout=20)
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
+    assert c.post("/api/artifact/write", json={"path": kbdoc(name), "content": body}).status_code == 200
+    try:
+        page.goto(BASE + "/" + kbdoc(name))
+        page.wait_for_function("() => window.__kbview && window.__kbview.state.doc.length > 10", timeout=20000)
+        page.wait_for_timeout(900)
+        bad = page.evaluate("""() => {
+          const v = window.__kbview, out = [];
+          for (const el of document.querySelectorAll('.cm-line')) {
+            const shown = (el.textContent || '').trim();
+            if (!shown) continue;
+            const r = el.getBoundingClientRect();
+            const pos = v.posAtCoords({x: r.left + Math.min(150, r.width - 20), y: r.top + r.height / 2});
+            if (pos == null) { out.push([shown, '(nothing)']); continue; }
+            const line = v.state.doc.lineAt(pos).text.trim();
+            // the painted line may drop markup (- [ ], >, the bullet glyph),
+            // so compare on the words that survive both
+            const words = shown.replace(/^[•\u2022\s]+/, '').split(' ').slice(0, 3).join(' ');
+            if (words && !line.includes(words)) out.push([shown.slice(0, 30), line.slice(0, 30)]);
+          }
+          return out;
+        }""")
+        assert bad == [], f"clicks landed on the wrong line: {bad}"
+    finally:
+        c.post("/api/fs/delete", json={"path": kbdoc(name), "permanent": True})
+        ctx.close()

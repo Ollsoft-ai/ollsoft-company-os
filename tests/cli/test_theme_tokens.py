@@ -130,3 +130,27 @@ def test_the_stylesheet_is_structurally_balanced():
                 depth = 0
     assert not problems, "style.css is malformed:\n  " + "\n  ".join(problems)
     assert depth == 0, f"style.css ends inside {depth} unclosed block(s)"
+
+
+def test_no_block_widget_carries_a_vertical_margin():
+    """CodeMirror measures a block widget with getBoundingClientRect, which
+    does not include margins. A vertical margin on one therefore makes every
+    line below it paint lower than the editor's height map believes, and a
+    click lands on the wrong line (2026-09-22: the first checkbox in a list
+    under a table put the caret on the second). Spacing goes inside the box."""
+    css = re.sub(r"/\*.*?\*/", "", CSS.read_text(), flags=re.S)
+    widgets = (".cm-table-wrap", ".cm-img-embed")     # the block widgets' root elements
+    bad = []
+    for sel, body in _blocks(css):
+        for w in widgets:
+            if not re.search(rf"(^|,\s*){re.escape(w)}\s*(,|$)", sel.strip()):
+                continue
+            for prop, value in re.findall(r"([a-z-]+)\s*:\s*([^;]+)", body):
+                if prop == "margin" and len(value.split()) in (1, 3, 4):
+                    bad.append(f"{sel}: margin: {value.strip()} (shorthand sets top/bottom)")
+                elif prop == "margin" and len(value.split()) == 2 and value.split()[0] not in ("0", "0px"):
+                    bad.append(f"{sel}: margin: {value.strip()} (first value is top/bottom)")
+                elif prop in ("margin-top", "margin-bottom", "margin-block",
+                              "margin-block-start", "margin-block-end") and value.strip() not in ("0", "0px"):
+                    bad.append(f"{sel}: {prop}: {value.strip()}")
+    assert not bad, ("a block widget must not carry vertical margin:\n  " + "\n  ".join(bad))

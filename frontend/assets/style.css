@@ -804,7 +804,7 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 .cm-hr-line { display: inline-block; width: 100%; border-top: 1px solid var(--border); vertical-align: middle; }
 .cm-task { display: inline-flex; align-items: center; margin-right: .35rem; }
 .cm-task-toggle { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; vertical-align: -2px; }
-.cm-img-embed { display: block; margin: .4rem 0; position: relative; width: fit-content;
+.cm-img-embed { display: block; padding: .4rem 0; position: relative; width: fit-content;
   max-width: 100%; }
 .cm-img-embed img, .cm-img-embed video { max-width: 100%; max-height: 60vh; border-radius: var(--r);
   border: 1px solid var(--border); background: var(--panel); display: block; }
@@ -825,7 +825,13 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
 /* ---- tables: rendered as a real grid you type into ---------------------- */
 /* a table is a block widget, not a line: it needs the column's gutter of
    its own, or the grid starts at the pane's edge while the text sits 96px in */
-.cm-table-wrap { margin: .5rem var(--gutter); position: relative; overflow-x: auto; }
+/* A block widget's spacing must be INSIDE its box. CodeMirror measures a
+   widget with getBoundingClientRect, which excludes margins, so a vertical
+   margin here makes every line below it paint lower than the editor thinks —
+   and a click then lands one line off. It cost krystof a morning of clicking
+   the wrong checkbox (2026-09-22). Horizontal margin is safe: it changes no
+   height. Same rule for the image widget below. */
+.cm-table-wrap { margin: 0 var(--gutter); padding: .5rem 0; position: relative; overflow-x: auto; }
 .cm-table { border-collapse: collapse; font-size: .88rem; min-width: min(100%, 20rem);
   border-radius: var(--r); overflow: hidden; }
 .cm-table th, .cm-table td { border: 1px solid var(--border); padding: 0; vertical-align: middle; }
