@@ -4,7 +4,10 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 mkdirSync("static", { recursive: true });
 
 await esbuild.build({
-  entryPoints: ["src/app.js"],
+  // Two pages: the app, and the document page the public-link container
+  // serves. They share `richview.js` through a split chunk, which is the
+  // point — a fix to the writing surface lands in both.
+  entryPoints: ["src/app.js", "src/publicdoc.js"],
   bundle: true,
   format: "esm",
   // One entry, one lazy chunk: `import("./term.js")` in app.js becomes

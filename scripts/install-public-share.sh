@@ -15,6 +15,11 @@ KB_SHARE_BRAND_DEFAULT="${KB_SHARE_BRAND:-Company OS}"
 IMAGE="kb-share:1"
 PUBROOT="${KB_PUBLIC_ROOT:-/srv/kb-public}"
 REPO="${KB_REPO:-/srv/kb}"
+# The platform's built frontend. Mounted read-only so a shared document opens
+# in the REAL editor; a frontend deploy then updates the public page too,
+# with no image rebuild. Nothing in here is secret — every browser on the app
+# downloads the same files.
+ASSETS="${KB_SHARE_ASSETS_DIR:-/opt/kb-platform/frontend/static}"
 STORE_DIR="/var/lib/kb-shares"
 USER_NAME="kbshare"
 NETWORK="kb-share-net"
@@ -65,6 +70,17 @@ install -d -m 0755 -o root -g root "$PUBROOT/data"
 install -d -m 0750 -o root -g "$USER_NAME" "$PUBROOT/conf"
 install -d -m 0700 -o root -g root "$STORE_DIR"
 echo "  $PUBROOT/{data,conf}, $STORE_DIR"
+
+say "the frontend bundle the editor page needs"
+if [ -f "$ASSETS/publicdoc.js" ]; then
+  echo "  $ASSETS (publicdoc.js present)"
+else
+  echo "  WARNING: $ASSETS/publicdoc.js is missing — a shared document will fall"
+  echo "  back to the plain rendered page. Build and deploy the frontend"
+  echo "  (cd frontend && node build.mjs; sudo bash scripts/deploy.sh) and"
+  echo "  restart kb-share."
+  install -d -m 0755 "$ASSETS"
+fi
 
 say "image"
 docker build -q -t "$IMAGE" "$SRC/public" | sed 's/^/  /'
@@ -123,6 +139,7 @@ ExecStart=/usr/bin/docker run --rm --name kb-share \\
   --publish 127.0.0.1:${PORT}:8080 \\
   --mount type=bind,source=${PUBROOT}/conf,target=/conf,readonly \\
   --mount type=bind,source=${PUBROOT}/data,target=/data,bind-propagation=rslave \\
+  --mount type=bind,source=${ASSETS},target=/assets,readonly \\
   --env KB_SHARE_BRAND \\
   ${IMAGE}
 ExecStop=/usr/bin/docker stop kb-share
@@ -163,6 +180,10 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now kb-share.service kb-share-sweep.timer
+# `enable --now` starts a unit that is not running and leaves a running one
+# alone, so an UPDATED ExecStart (a new mount, a new image) would not take
+# effect until the next reboot. Re-running this script means "make it so".
+systemctl restart kb-share.service
 sleep 2
 systemctl is-active kb-share.service >/dev/null && echo "  kb-share is up on 127.0.0.1:${PORT}"
 

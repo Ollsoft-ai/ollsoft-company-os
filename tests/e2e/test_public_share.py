@@ -151,3 +151,131 @@ def test_the_panel_offers_a_link_and_shows_it_once(browser):
             a.post("/fs/public/revoke", json={"id": sid})
         a.post("/api/fs/delete", json={"path": path, "permanent": True})
         ctx.close()
+
+
+# ---- the page a stranger actually sees --------------------------------------
+# "why does the sharing service not use the actual editor code we've spent so
+#  much time tuning?" — krystof, 2026-09-22. It does now: the container mounts
+# the platform's built bundle read-only and serves the same rich editor.
+
+SHARE_HTTP = os.environ.get("KB_SHARE_LOCAL", "http://127.0.0.1:8402")
+
+
+def _container_up() -> bool:
+    try:                                  # any answer at all means it is there
+        httpx.get(SHARE_HTTP + "/s/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbb", timeout=2)
+        return True
+    except httpx.HTTPError:
+        return False
+
+
+container = pytest.mark.skipif(not _container_up(),
+                               reason="the kb-share container is not running on this box")
+
+
+def wait_for_body(c, path, needle, timeout=15):
+    """The page saves a moment after you stop typing — wait for the file, not
+    for a status chip that may still be showing the last save."""
+    end = time.time() + timeout
+    body = ""
+    while time.time() < end:
+        body = c.get("/api/file", params={"path": path}).text
+        if needle in body:
+            return body
+        time.sleep(0.4)
+    raise AssertionError(f"{needle!r} never reached {path}: {body[:400]}")
+
+
+@pytest.fixture
+def shared_doc():
+    """A real, live public link to a markdown document — revoked afterwards."""
+    a = api("alice")
+    path = doc(f"pubdoc-{int(time.time() * 1000)}.md")
+    write(a, path, "# The brief\n\n- [ ] one thing\n\n| What | Who |\n| --- | --- |\n| **ship** | you |\n")
+    made = {}
+
+    def make(mode="view"):
+        r = a.post("/fs/public", json={"path": path, "mode": mode, "days": 2})
+        assert r.status_code == 200, r.text
+        sh = r.json()["share"]
+        made["id"] = sh["id"]
+        tok = sh["url"].rsplit("/", 1)[-1]
+        return f"{SHARE_HTTP}/s/{sh['id']}/{tok}", path
+    yield make
+    if made.get("id"):
+        a.post("/fs/public/revoke", json={"id": made["id"]})
+    a.post("/api/fs/delete", json={"path": path, "permanent": True})
+
+
+@container
+def test_a_shared_document_opens_in_the_real_editor(browser, shared_doc):
+    url, path = shared_doc("view")
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector(".cm-content", timeout=15000)
+        # the SAME rendered view the app gives: a heading line, a real
+        # checkbox, and a table you could type into if you were allowed
+        assert page.locator(".cm-h1").count() >= 1
+        assert page.locator(".cm-task input[type=checkbox]").count() == 1
+        assert page.locator("table.cm-table").count() == 1
+        assert page.locator('table.cm-table [data-cell="1,0"] .cm-cell-md strong').count() == 1
+        # …and read-only means read-only: no cell inputs, no save
+        page.locator('table.cm-table [data-cell="1,0"]').click()
+        page.wait_for_timeout(300)
+        assert page.locator("table.cm-table input").count() == 0
+        assert page.locator(".cm-task input[type=checkbox]").first.is_disabled()
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
+@container
+def test_an_edit_link_saves_through_the_container(browser, shared_doc):
+    url, path = shared_doc("edit")
+    a = api("alice")
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector(".cm-content", timeout=15000)
+        page.locator(".cm-content").click()
+        page.keyboard.press("Control+End")
+        page.keyboard.type("\nfrom the outside")
+        page.wait_for_selector("#status:has-text('Saved')", timeout=10000)
+        assert not errors, errors
+        # the platform sees the stranger's edit in the real file
+        wait_for_body(a, path, "from the outside")
+        # a cell in the table is editable through the link too
+        page.locator('table.cm-table [data-cell="1,1"]').click()
+        inp = page.locator('table.cm-table input[data-cell="1,1"]')
+        inp.wait_for(state="visible", timeout=4000)
+        inp.fill("them")
+        page.keyboard.press("Escape")
+        wait_for_body(a, path, "| **ship** | them |")
+    finally:
+        ctx.close()
+
+
+@container
+def test_the_page_picks_up_an_edit_made_in_the_app(browser, shared_doc):
+    """No CRDT out here — the page asks the container for the file's timestamp
+    every few seconds, which is enough to see a colleague's edit land."""
+    url, path = shared_doc("view")
+    a = api("alice")
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector(".cm-content", timeout=15000)
+        write(a, path, "# The brief\n\nrewritten in the app\n")
+        page.wait_for_function(
+            "() => document.querySelector('.cm-content').textContent.includes('rewritten in the app')",
+            timeout=20000)
+    finally:
+        ctx.close()

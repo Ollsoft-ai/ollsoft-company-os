@@ -274,7 +274,9 @@ session. The panel says exactly that above the people list.
 
 ## 8. The UI shell — tabs, terminals, cron panel
 
-VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js`):
+VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js`;
+the writing surface itself is `frontend/src/richview.js`, which knows nothing
+about the app — see §8.1):
 
 - **File tree actions** (on hover): `＋` new file, `⊞` new folder, `⇪` upload files
   (all three only on folders you can write), `⚙` permissions, `✕` delete (only
@@ -405,6 +407,17 @@ VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js
   own undo. The bar under the grid works on the END of the table (add/remove
   the last row or column); anywhere in the middle is a right-click on the cell
   you mean, which also deletes that row or column.
+- **The writing surface is a module of its own** (`richview.js`): widgets,
+  live-preview decorations, tables, list metrics, @mentions, the markdown
+  highlight style. It imports nothing from `app.js` — how to toast, ask, draw
+  a menu, open a path, resolve a relative path to a URL and who may be
+  @mentioned all arrive through one `init({…})` call. That is what lets the
+  **public-link container mount the same editor** (`publicdoc.js`, see
+  [public-sharing.md](public-sharing.md)): a stranger with a link gets the
+  rendered markdown, the tables and the checkboxes a colleague gets, with a
+  plain mtime-checked save instead of the CRDT. Both entry points are built
+  by the same esbuild run and share the module through a split chunk, so a
+  fix to the surface lands in both.
 - **Reading affordances in the rendered view**: a `code span` carries the same
   one-click copy a fenced block has (`InlineCopyWidget`, faint until hovered —
   inline code is everywhere in these documents), and an **@mention of a real

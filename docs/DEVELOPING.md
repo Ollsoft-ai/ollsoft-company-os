@@ -155,6 +155,18 @@ buttons in the chrome go into a named slot (`slot("topbar")`).
 These were designed during the build (some deliberately deferred) and are the
 natural next steps.
 
+- **Where a piece of frontend belongs.** `richview.js` is the writing surface
+  and knows nothing about this app: no tabs, no CRDT, no tree, no session, no
+  `fetch` of a platform route. Anything it needs from a host — how to toast,
+  ask, draw a menu, open a path, turn a relative path into a URL, list who
+  may be @mentioned — arrives through `init()`, because the public-link
+  container mounts the very same module (`publicdoc.js`) with a plain save
+  behind it. Put app machinery (the upload tray, the file tree, deep links)
+  in `app.js` and pass it in. `node --test tests/js/module-boundaries.test.mjs`
+  fails when a module uses a name it neither declares nor imports: esbuild
+  leaves such a reference as a global, and the page throws the first time
+  that line runs — which is how the first attempt at this split shipped a
+  blank app (`StateEffect`, 2026-09-22).
 - **A named indexer grant on a FOLDER stops its sidecars.** POSIX ACL
   evaluation stops at the first matching named user entry, so a folder
   carrying `user:kbindexer:r-x` no longer lets `kb-convert` (which runs as

@@ -253,7 +253,11 @@ it can only show what the caller could already open.
   and a config file per share that never contains the real path. Revoking is
   an unmount, so a leaked link dies in a second; expiry is enforced by a
   host timer AND by the container. A `_secrets/` path can never be published,
-  and a shared `.html` artifact is served as source rather than run.
+  and a shared `.html` artifact is served as source rather than run. The one
+  thing it may read besides a share is the platform's built frontend, mounted
+  read-only at `/assets` so a shared document opens in the real editor —
+  the same JavaScript and stylesheet every browser on the app downloads,
+  served by suffix allowlist, with no path into `/srv/kb`.
   Full threat model: [public-sharing.md](public-sharing.md).
 - **`kb-convert` parses untrusted binaries.** Anything a user uploads (docx,
   pptx, xlsx, pdf) is fed to third-party parsers. It runs as the non-root

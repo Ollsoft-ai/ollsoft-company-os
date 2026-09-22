@@ -91,16 +91,54 @@ leaked token reaches an empty directory a second later — no cache, no
 
 ## What it serves
 
-- **Read**: rendered Markdown (the same sanitiser rules as the chat), a folder
-  listing, images inline, everything else as a download.
-- **Edit** (only for an edit share): a plain textarea and a Save, with an
-  mtime check so two strangers cannot silently overwrite each other. No CRDT,
-  no websocket to syncd, no terminal, no agents, no search, no uploads.
+- **A document opens in the platform's own editor.** Not a rendered copy and
+  not a textarea: `frontend/src/publicdoc.js` mounts the same `richview.js`
+  the app mounts — rendered markdown, tables you type into, checkboxes, the
+  themed find panel, the same stylesheet. A stranger sees what a colleague
+  sees. The bundle is bind-mounted into the container read-only from
+  `/opt/kb-platform/frontend/static` and served under `/assets` with the
+  build's stamp on every URL, so a frontend deploy updates the public page
+  too, with no image rebuild. Nothing in it is secret — every browser on the
+  app downloads the same files — and the container still cannot read one byte
+  of `/srv/kb`.
+- **Read**: the editor, read-only (no cell inputs, disabled checkboxes, no
+  media actions). A folder is still a plain listing; images and other files
+  are served as themselves.
+- **Edit** (only for an edit share): the same editor, writable, saving 1.2 s
+  after you stop typing (and on Ctrl+S) through `__save`, which refuses a
+  write whose `mtime` is not the one the page loaded — so two strangers
+  cannot silently overwrite each other. No CRDT, no websocket to syncd, no
+  terminal, no agents, no uploads.
+- **Somebody else's change arrives by polling.** Every five seconds the page
+  asks `__stat` for the file's timestamp; when it moves and the visitor has
+  nothing unsaved, it pulls `__raw` and swaps the text in. A reader sees an
+  edit land within seconds; a writer with unsaved text is told rather than
+  overwritten.
+- **No JavaScript**: the server-rendered markdown (and, for an edit share,
+  the old textarea form) is still there, inside `<noscript>`.
 - **Artifacts are not run.** A shared `.html` is shown as source, not
   executed. Running someone's JavaScript on a public origin that also serves
   other people's shares is a cross-share hole waiting to happen. If a client
   really must see a live dashboard, that is a second decision with its own
   origin per share, not a v1 default.
+
+### Why not real multiplayer with anonymous visitors?
+
+It is possible, and it is not free. Live cursors mean the container joining
+the document's CRDT room, which means a websocket from the public container
+to `kb-syncd` — the one door this design keeps shut. `kb-syncd` speaks for
+every document on the box and authenticates by platform session; teaching it
+"this connection may have exactly this one document, as nobody, because a
+token says so" is a new authentication path in the most privileged daemon
+here, reachable from the internet.
+
+The cheap 90% is what is built: polling shows a reader other people's edits
+within seconds and stops two writers clobbering each other. If live cursors
+on a public link are actually wanted, the honest shape is a **relay endpoint
+of its own** — a separate listener, share-scoped, that holds one Y.Doc per
+live share, accepts only `id + token`, and syncs to the file rather than into
+syncd's world. That is a project, not a flag, and it should be decided as
+one.
 
 A write lands as the host user `kbshare`, which owns nothing else and belongs
 to no group, so `ls -l` tells you an edit came from outside. Git history does
@@ -118,6 +156,7 @@ unattributed sweep commit. Naming it is one of the open questions below.
 | Network | its own bridge (`kb-share-net`), published only on `127.0.0.1`, and two `DOCKER-USER` rules: answers to requests are allowed, **anything the container starts is dropped** — no internet, no host services. Verified by trying, from inside |
 | Limits | `--memory 256m --cpus 0.5 --pids-limit 200`, a 4 MB body cap, a 20 s socket timeout |
 | Data | only per-share bind mounts; `ro` in the kernel unless the link may edit, and an ACL that admits `kbshare` only to that subtree |
+| Assets | `/opt/kb-platform/frontend/static` mounted read-only at `/assets`, served by suffix allowlist (`.js .css .woff2 .woff .svg`) — public files either way, and the only writable thing in the container is a share that may be edited |
 | Secrets | none in the image or the environment; the cookie key is made at start and lives in memory |
 | Logs | one line per request to stdout → journald |
 
@@ -184,4 +223,10 @@ systemctl restart kb-hub
 2. Folder shares: recursive, or one level? Recursive is what people expect;
    it also means one wrong click shares a subtree.
 3. Should a share notify its creator when it is first opened, and when it is
-   edited? (The notification design below would carry it.)
+   edited? (The inbox would carry it.)
+4. A document open in the app while a stranger saves through a link goes
+   down syncd's normal external-edit path (`apply_external`): a deterministic
+   three-way merge, with a conflicting region resolved in favour of whoever
+   has it open and the loss logged. The public page then polls, sees the
+   merged file and shows it. Worth a test of its own — the case has never
+   been exercised deliberately.

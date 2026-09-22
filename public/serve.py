@@ -12,6 +12,12 @@ it. Both are put there by the platform, as root, outside this process.
                          "title": str, "name": str,
                          "pw": {"salt": hex, "hash": hex} | null,
                          "token_hash": hex}
+    /assets/…           the platform's own frontend bundle, read-only: a
+                        document opens in the REAL editor, not a textarea
+
+Nothing under /assets is secret — it is the same JavaScript and stylesheet
+every browser on the app already downloads — and mounting it rather than
+copying it into the image means a frontend deploy updates this page too.
 
 Everything it renders is escaped; Markdown is rendered with raw HTML turned
 off, so there is no path from a document's bytes to executable script. A
@@ -32,12 +38,32 @@ from pathlib import Path
 
 DATA = Path(os.environ.get("KB_SHARE_DATA", "/data"))
 CONF = Path(os.environ.get("KB_SHARE_CONF", "/conf"))
+ASSETS = Path(os.environ.get("KB_SHARE_ASSETS", "/assets"))
 PORT = int(os.environ.get("KB_SHARE_PORT", "8080"))
 BRAND = os.environ.get("KB_SHARE_BRAND", "Company OS")
 MAX_BODY = 4 * 1024 * 1024
 COOKIE_KEY = secrets.token_bytes(32)          # per boot, in memory only
 ID_RE = re.compile(r"^[a-z2-7]{16,32}$")      # base32, as the platform mints them
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
+# What the editor page is allowed to fetch out of the mounted bundle. An
+# allowlist of suffixes, not of names, because the chunk names carry hashes.
+ASSET_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+               ".woff2": "font/woff2", ".woff": "font/woff", ".svg": "image/svg+xml"}
+EDITABLE_EXT = (".md", ".txt", ".csv")
+
+
+def asset_stamp() -> int:
+    """One number that changes when the bundle does, for the ?v= on its URLs —
+    the same trick the app plays with its own build stamp, so these files can
+    be served immutable and still update the moment a deploy lands."""
+    try:
+        return int((ASSETS / "publicdoc.js").stat().st_mtime)
+    except OSError:
+        return 0
+
+
+def editor_available() -> bool:
+    return (ASSETS / "publicdoc.js").is_file() and (ASSETS / "style.css").is_file()
 
 try:
     from markdown_it import MarkdownIt
@@ -153,6 +179,63 @@ def page(title: str, body: str, sub: str = "") -> bytes:
             f"<main>{body}</main></body></html>").encode()
 
 
+# The chrome around the editor. Everything inside the document is the app's
+# own stylesheet, loaded from /assets — this is only the strip at the top.
+DOC_CSS = """
+body.share-doc { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.share-top { display: flex; align-items: center; gap: .6rem; padding: .55rem .9rem;
+  border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto; }
+.share-top b { font-weight: 600; font-size: .92rem; }
+.share-top .where { color: var(--muted); font-size: .8rem; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.share-top .status { margin-left: auto; font-size: .78rem; color: var(--muted); }
+.share-top .status.ok { color: var(--ok, var(--accent)); }
+.share-top .status.err { color: var(--danger); }
+.share-top .badge { font-size: .7rem; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: .1rem .45rem; }
+#doc { flex: 1 1 auto; min-height: 0; }
+#doc .cm-editor { height: 100%; }
+body.share-doc noscript { display: block; padding: 1.5rem; }
+"""
+
+
+def doc_page(conf: dict, base: str, rel: str, text: str, mtime: int, fallback: str) -> bytes:
+    """The real editor, mounted on one file.
+
+    The document arrives inside the page (one round trip, and the text is
+    already on the server's tongue), as JSON in a data block rather than
+    interpolated into script source — `</script>` in a document must close
+    nothing.
+    """
+    v = asset_stamp()
+    title = conf.get("title") or conf.get("name") or BRAND
+    payload = json.dumps({
+        "base": base, "path": rel, "name": os.path.basename(rel),
+        "mode": conf.get("mode", "view"), "mtime": mtime, "text": text,
+        "rich": rel.lower().endswith(".md"),
+    }).replace("<", "\\u003c")
+    editable = conf.get("mode") == "edit"
+    return (
+        "<!doctype html><html lang=en><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1,"
+        "viewport-fit=cover,interactive-widget=resizes-content'>"
+        "<meta name=referrer content=no-referrer>"
+        f"<title>{html.escape(title)}</title>"
+        f"<link rel=icon href='/assets/favicon.svg?v={v}'>"
+        f"<link rel=stylesheet href='/assets/style.css?v={v}'>"
+        f"<style>{DOC_CSS}</style></head>"
+        "<body class='share-doc'>"
+        f"<header class=share-top><b>{html.escape(title)}</b>"
+        f"<span class=where>{html.escape(rel)}</span>"
+        f"<span class=badge>{'shared · you can edit' if editable else 'shared · read only'}</span>"
+        "<span class=status id=status></span></header>"
+        "<div id=doc></div>"
+        f"<script type='application/json' id='kb-conf'>{payload}</script>"
+        f"<script type=module src='/assets/publicdoc.js?v={v}'></script>"
+        f"<noscript>{fallback}</noscript>"
+        "</body></html>").encode()
+
+
 def render_markdown(text: str) -> str:
     if _MD is not None:
         return _MD.render(text)
@@ -176,10 +259,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
+        # 'self' scripts are the platform's own bundle out of /assets, never
+        # anything a shared document contains: markdown is rendered with raw
+        # HTML off and an .html artifact is shown as source.
         self.send_header("Content-Security-Policy",
                          "default-src 'none'; img-src 'self' data:; media-src 'self'; "
-                         "style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; "
-                         "frame-ancestors 'none'")
+                         "script-src 'self'; connect-src 'self'; font-src 'self'; "
+                         "style-src 'self' 'unsafe-inline'; form-action 'self'; "
+                         "base-uri 'none'; frame-ancestors 'none'")
         for k, v in (extra or {}):
             self.send_header(k, v)
         self.end_headers()
@@ -227,17 +314,30 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
+        # /static/ as well as /assets/: the platform's stylesheet points at
+        # "/static/fonts/…" absolutely (it is served from /static there), and
+        # the shared page uses that stylesheet unmodified.
+        path = self.path.split("?")[0]
+        for prefix in ("/assets/", "/static/"):
+            if path.startswith(prefix):
+                return self.asset(path[len(prefix):])
         r = self.route()
         if r is None:
             return self.fail()
-        sid, token, rest, conf, _ = r
+        sid, token, rest, conf, q = r
         if not self.unlocked(sid, conf):
             return self.ask_password(sid, token)
+        if rest in ("__raw", "__stat"):
+            return self.file_api(rest, sid, q)
         root = DATA / sid
         # A single-file share is mounted as one file inside the share's
         # directory, so its bare link would show a list of exactly one thing.
-        # Open the file instead — that is what was shared.
-        if not rest and conf.get("kind") == "file" and conf.get("name"):
+        # Open the file instead — that is what was shared. `kind` is recent;
+        # a conf written before it exists says nothing, so fall back to "the
+        # share's own name is a file in here", which is true of exactly the
+        # single-file case.
+        if not rest and conf.get("name") and conf.get("kind") in (None, "file") \
+                and (DATA / sid / conf["name"]).is_file():
             rest = conf["name"]
         target = safe_join(root, rest)
         if target is None or not os.path.lexists(target):
@@ -246,6 +346,41 @@ class Handler(BaseHTTPRequestHandler):
         if target.is_dir():
             return self.listing(sid, token, root, target, title)
         return self.one_file(sid, token, root, target, conf, title)
+
+    def asset(self, rel: str):
+        """The platform's own bundle, read-only and by suffix. No share, no
+        token: these are the same files every browser on the app downloads."""
+        target = safe_join(ASSETS, urllib.parse.unquote(rel))
+        if target is None or not target.is_file():
+            return self.fail()
+        ctype = ASSET_TYPES.get(target.suffix.lower())
+        if ctype is None:
+            return self.fail()
+        try:
+            data = target.read_bytes()
+        except OSError:
+            return self.fail()
+        # every URL carries ?v=<stamp>, so a year is honest
+        self.send(200, data, ctype, extra=[("Cache-Control", "public, max-age=31536000, immutable")])
+
+    def file_api(self, what: str, sid: str, q: dict):
+        """`__raw` is the document's text, `__stat` is just its timestamp —
+        the two halves of noticing that somebody else has been typing."""
+        rel = (q.get("path") or [""])[0]
+        target = safe_join(DATA / sid, rel)
+        if target is None or not target.is_file() or not rel.lower().endswith(EDITABLE_EXT):
+            return self.fail()
+        try:
+            st = target.stat()
+            if what == "__stat":
+                body = json.dumps({"mtime": int(st.st_mtime), "size": st.st_size}).encode()
+                return self.send(200, body, "application/json",
+                                 extra=[("Cache-Control", "no-store")])
+            text = target.read_text(errors="replace")[:2_000_000]
+        except OSError:
+            return self.fail(403, "Cannot read that")
+        self.send(200, text.encode(), "text/plain; charset=utf-8",
+                  extra=[("Cache-Control", "no-store"), ("X-KB-Mtime", str(int(st.st_mtime)))])
 
     def listing(self, sid, token, root, target, title):
         rows = []
@@ -267,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
     def one_file(self, sid, token, root, target, conf, title):
         name = target.name
         ctype, _ = mimetypes.guess_type(name)
-        editable = conf.get("mode") == "edit" and name.lower().endswith((".md", ".txt", ".csv"))
+        editable = conf.get("mode") == "edit" and name.lower().endswith(EDITABLE_EXT)
         base = f"/s/{urllib.parse.quote(sid)}/{urllib.parse.quote(token)}"
         if name.lower().endswith((".md", ".txt", ".csv", ".html", ".htm", ".json", ".yml", ".yaml")):
             try:
@@ -280,13 +415,21 @@ class Handler(BaseHTTPRequestHandler):
                 # an artifact is shown as SOURCE: running a stranger's script on
                 # this origin would be a hole between shares
                 body = "<pre><code>" + html.escape(text) + "</code></pre>"
+            rel = str(target.relative_to(root))
             if editable:
                 body += (f"<form method=post action='{base}/__save'>"
-                         f"<input type=hidden name=path value='{html.escape(str(target.relative_to(root)))}'>"
+                         f"<input type=hidden name=path value='{html.escape(rel)}'>"
                          f"<input type=hidden name=mtime value='{int(target.stat().st_mtime)}'>"
                          f"<div class=bar><span class=muted>You can edit this.</span></div>"
                          f"<textarea name=text>{html.escape(text)}</textarea>"
                          f"<button>Save</button></form>")
+            # A document opens in the platform's own editor — the same rendered
+            # markdown, tables and checkboxes a colleague sees — with what is
+            # above as the no-JavaScript fallback. If the bundle is not mounted
+            # (an older install), that fallback IS the page.
+            if name.lower().endswith(EDITABLE_EXT) and editor_available():
+                return self.send(200, doc_page(conf, base, rel, text,
+                                               int(target.stat().st_mtime), body))
             return self.send(200, page(title, body, name))
         try:
             data = target.read_bytes()
@@ -303,7 +446,18 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), MAX_BODY)
         except ValueError:
             return self.fail(400, "Bad request")
-        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        raw = self.rfile.read(length).decode("utf-8", "replace")
+        as_json = "json" in (self.headers.get("Content-Type") or "").lower()
+        if as_json:
+            try:
+                body = json.loads(raw)
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.fail(400, "Bad request")
+            form = {k: [v if isinstance(v, str) else str(v)] for k, v in body.items()}
+        else:
+            form = urllib.parse.parse_qs(raw)
         if rest == "__unlock":
             key = f"{sid}:{self.address_string()}"
             if too_many(key):
@@ -320,18 +474,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(403, "This link is read-only")
             rel = (form.get("path") or [""])[0]
             target = safe_join(DATA / sid, rel)
-            if target is None or not target.is_file() or not rel.lower().endswith((".md", ".txt", ".csv")):
+            if target is None or not target.is_file() or not rel.lower().endswith(EDITABLE_EXT):
                 return self.fail(400, "Cannot write that")
             try:
                 was = int((form.get("mtime") or ["0"])[0])
             except ValueError:
                 was = 0
             if was and int(target.stat().st_mtime) != was:
+                if as_json:
+                    return self.send(409, json.dumps({"error": "changed"}).encode(),
+                                     "application/json")
                 return self.fail(409, "Somebody else saved while you were writing. Reload and try again.")
             try:
                 target.write_text((form.get("text") or [""])[0])
             except OSError as e:
+                if as_json:
+                    return self.send(403, json.dumps({"error": str(e)}).encode(),
+                                     "application/json")
                 return self.fail(403, f"Could not save: {e}")
+            if as_json:
+                return self.send(200, json.dumps(
+                    {"ok": True, "mtime": int(target.stat().st_mtime)}).encode(),
+                    "application/json", extra=[("Cache-Control", "no-store")])
             self.send(303, b"", extra=[("Location", f"/s/{sid}/{token}/{urllib.parse.quote(rel)}")])
             return
         self.fail()

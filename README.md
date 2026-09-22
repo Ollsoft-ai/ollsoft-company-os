@@ -205,6 +205,9 @@ ollsoft-company-os/
 │   └── indexer.py          markdown → Postgres index (RLS metadata, ACLs, tasks)
 ├── frontend/               vanilla-JS SPA (CodeMirror 6 + Yjs + xterm), esbuild
 │   ├── src/app.js          the whole client
+│   ├── src/richview.js     the writing surface: widgets, live preview, tables, @mentions
+│   │                       (no app inside it — the public-link page mounts the same module)
+│   ├── src/publicdoc.js    that surface with no app behind it: one file, a plain save
 │   ├── src/dictation.js    microphone capture + push-to-talk (owns no routing)
 │   ├── assets/             hand-authored shell: app.html, login.html, style.css, logos
 │   ├── static/             build output (generated, gitignored)
