@@ -78,19 +78,47 @@ if [ -n "${newest:-}" ] && [ "$age" -gt 900 ]; then
   fi
 fi
 
-# --- 6. disk ------------------------------------------------------------------
-pct=$(df --output=pcent / | tail -1 | tr -dc '0-9')
-[ "${pct:-0}" -ge 85 ] && note "root disk at ${pct}% — act before syncd/postgres start failing writes"
+# --- 6. disk and inodes -------------------------------------------------------
+# Messages here are STABLE text — deliberately NO percentage. An alert fires
+# whenever this line CHANGES, so "root disk at 86%" re-fires on every point the
+# disk climbs and rewrites health.md (and a syncd commit) with it — the exact
+# flapping the check-8 comment below warns about. Buckets, not numbers: the
+# figure belongs in `df`, which the operator runs once an alert says to look.
+#
+# /boot is checked too, and separately: it is its own small filesystem (~880M)
+# and fills from retained kernel packages long before / is anywhere near full,
+# so a root-only check reports plenty of space right up until apt breaks.
+disk_pct() { df --output=pcent "$1" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+for mp in / /boot; do
+  mountpoint -q "$mp" 2>/dev/null || [ "$mp" = "/" ] || continue
+  p=$(disk_pct "$mp"); p=${p:-0}
+  if [ "$mp" = "/" ]; then label="root disk"; else label="$mp"; fi
+  if   [ "$p" -ge 95 ]; then note "$label is CRITICALLY full (over 95%) — writes are about to fail"
+  elif [ "$p" -ge 85 ]; then note "$label is over 85% full — act before syncd/postgres start failing writes"
+  fi
+done
 
-# --- 7. backups exist and are recent ------------------------------------------
-# Until off-box backups are automated this WILL alert once when snapshots age
-# past 48h — that is the check working, not the check being wrong.
-newest_bk=$(find /home/krystof/backups -maxdepth 2 -name SHA256SUMS -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
-if [ -z "$newest_bk" ]; then
-  note "no verified backups found at all"
-elif [ $(( $(date +%s) - ${newest_bk%.*} )) -gt 172800 ]; then
-  note "newest backup is older than 48h"
-fi
+# Inodes fail writes with "No space left on device" while df shows free GB —
+# a failure mode that reads as a lie unless something names it explicitly.
+# NB: `df --output=ipcent` without -i; `df -i --output=ipcent` prints nothing.
+ipct=$(df --output=ipcent / 2>/dev/null | tail -1 | tr -dc '0-9')
+[ "${ipct:-0}" -ge 85 ] && note "root filesystem is over 85% of its inodes — new files will fail even though df shows free space"
+
+# --- 7. backups — REMOVED 2026-09-25 ------------------------------------------
+# There used to be a check here that alerted when the newest verified snapshot
+# under /home/krystof/backups aged past 48h. Removed at the operator's request:
+# the machine is backed up EXTERNALLY, off-box, which is the better arrangement
+# and the thing the old comment here was waiting for.
+#
+# What it measured was the age of the local `kb-backup` snapshots — which are
+# ad-hoc, taken before risky changes, and deliberately NOT on a schedule. So
+# once off-box backups existed, this check only ever reported "nobody has run a
+# manual pre-change snapshot lately", which is not a fault and fired a standing
+# alert that masked real ones.
+#
+# Do not re-add it as-is. A useful backup check here would have to verify the
+# EXTERNAL backup actually ran and restores — this box cannot see that, so the
+# check belongs wherever that backup runs, not in this script.
 
 # --- 8. semantic search (kb-embedd) ------------------------------------------
 # Only where it is set up. Messages are STABLE text — no amounts, no counts —
@@ -165,7 +193,14 @@ if [ "$cur" != "$prev" ] || [ ! -f "$H" ]; then
     if [ "$cur" = "OK" ]; then echo "**All checks passing.**"
     else echo "**Problems:**"; for f in "${FAILS[@]}"; do echo "- $f"; done; fi
     echo
-    echo "_Written by kb-heartbeat (every 5 min, alerts on change via ntfy)._"
+    # Describe what actually happens, by reading the flag — this footer claimed
+    # "alerts via ntfy" for the whole period pushes were switched off, which is
+    # how a reader concludes the monitoring is dead when it is merely quiet.
+    if [ "$(. /etc/kb/kb.env 2>/dev/null; echo "${KB_ALERT_PUSH:-0}")" = "1" ]; then
+      echo "_Written by kb-heartbeat (every 5 min, on state change). Alerts: /var/log/kb/alerts.log and pushed to ntfy._"
+    else
+      echo "_Written by kb-heartbeat (every 5 min, on state change). Alerts are recorded in /var/log/kb/alerts.log; push notifications are off._"
+    fi
   } > "$H"
   chown root:kb-users "$H" 2>/dev/null; chmod 644 "$H" 2>/dev/null
 fi
