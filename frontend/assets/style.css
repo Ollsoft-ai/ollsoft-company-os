@@ -1762,8 +1762,11 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   body.term-max .sidebar, body.maximized .sidebar { top: 0; padding-top: max(.45rem, env(safe-area-inset-top)); }
   body.term-max .scrim, body.maximized .scrim { inset: 0; z-index: 59; }
 
-  /* tabs a person can read: the strip scrolls, the names stay whole */
-  .tab { flex: 0 0 auto; min-width: 7rem; max-width: 62vw; }
+  /* Every tab the same width, as on a desktop — so closing one slides the
+     next into its place and the next × lands under the same thumb (the
+     close-streak lock holds the width until you touch anything else). The
+     minimum keeps a name readable; past it the strip scrolls. */
+  .tab { flex: 1 1 0; min-width: 9rem; max-width: var(--tab-max); }
   .pane-handle { min-height: 44px; padding: .55rem .9rem; }
   .chat-row { min-height: 44px; padding: .45rem .5rem; }
   .chats-new { min-height: 32px; }

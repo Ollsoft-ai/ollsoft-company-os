@@ -727,7 +727,10 @@ about the app — see §8.1):
   `lockTabStrip` pins `--tab-max` to the width the tabs measured at the moment
   of the close. The strip keeps that width (leaving a gap at the right, exactly
   as Chrome does) until `pointerleave` on the strip, a new tab, or a window
-  resize releases it, and the transition on `max-width` glides them back. Only a
+  resize releases it, and the transition on `max-width` glides them back.
+  A phone follows the same rule with a wider floor (9rem: a thumb-sized `×`
+  plus a readable name), and there — with no pointer to leave the strip —
+  the streak ends at the next touch anywhere else. Only a
   close the MOUSE performed freezes anything (`closeTab(t, fromPointer)`): a
   keyboard close, or a tab retired because its file was deleted, has no cursor
   to keep a `×` under and must re-flow at once. While locked, every `×` is shown

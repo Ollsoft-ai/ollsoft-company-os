@@ -573,7 +573,11 @@ def test_finger_sliding_off_the_panel_leaves_no_phantom_touch(browser):
     # slop), lift outside the terminal on the header's label. (Upwards: below
     # the terminal sits the keybar, and a lift there is a legitimate tap on a
     # key — ctrl at the centre, which would arm itself.)
-    x, y = b["x"] + b["w"] * 0.6, b["y"] + 3
+    # Under the tab's LABEL, well clear of its ×: Chrome's touch adjustment
+    # snaps a tap to a button within a finger's radius, and a lift a few px
+    # from the × closed the terminal instead of testing the slide.
+    nm = page.locator("#panes .tab.current .tab-name").bounding_box()
+    x, y = nm["x"] + nm["width"] / 2, b["y"] + 3
     assert page.evaluate("([x, y]) => !document.elementFromPoint(x, y).closest('button')", [x, y - 8]), \
         "the lift must land on nothing clickable"
     cdp.send("Input.dispatchTouchEvent", {"type": "touchStart",
@@ -760,6 +764,29 @@ def test_the_tabs_are_the_top_of_a_phone_screen(browser):
     page.wait_for_timeout(400)
     page.click("#nav-btn")
     page.wait_for_function("() => !document.body.classList.contains('nav-open')")
+    ctx.close()
+
+
+def test_closing_tabs_on_a_phone_keeps_the_next_x_under_the_thumb(browser):
+    """Phone tabs are all one width, as on a desktop: tapping × slides the
+    next tab into the closed one's place, so tapping one spot closes them one
+    by one — and the strip springs back once you touch anything else."""
+    ctx, page = m_login(browser)
+    _open_three(page)
+    widths = page.evaluate("() => [...document.querySelectorAll('#panes .tab')].map(t => t.getBoundingClientRect().width)")
+    assert len(widths) == 3 and max(widths) - min(widths) <= 1, widths
+    page.evaluate("() => { document.querySelector('#panes .tabbar').scrollLeft = 0; }")
+    x = page.locator("#panes .tab .tab-x").first.bounding_box()
+    tx, ty = x["x"] + x["width"] / 2, x["y"] + x["height"] / 2
+    for left in (2, 1):
+        page.touchscreen.tap(tx, ty)
+        page.wait_for_function(f"() => document.querySelectorAll('#panes .tab').length === {left}")
+        page.wait_for_timeout(150)
+    locked = page.evaluate("() => document.querySelector('#panes .tab').getBoundingClientRect().width")
+    assert abs(locked - widths[0]) <= 1, ("held at its width through the streak", locked, widths)
+    # a touch anywhere else ends the streak: the last tab takes its room back
+    page.touchscreen.tap(200, 500)
+    page.wait_for_function(f"() => document.querySelector('#panes .tab').getBoundingClientRect().width > {locked + 20}")
     ctx.close()
 
 
