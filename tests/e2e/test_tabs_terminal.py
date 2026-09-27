@@ -93,9 +93,10 @@ def test_terminal_panel_hide_keeps_shell_running(browser):
     # hide the panel (▾) — the shell must keep running underneath
     page.click('[data-testid="term-hide"]')
     page.wait_for_selector("#terminal-panel", state="hidden")
-    # re-open: same terminal, same shell state
-    user_menu(page); page.click('[data-testid="toggle-term"]')
-    page.wait_for_selector("#terminal .xterm-rows")
+    # re-open with Ctrl+` (the menu item would open a NEW shell): same
+    # terminal, same shell state
+    page.keyboard.press("Control+Backquote")
+    page.wait_for_selector("#terminal-panel:not([hidden]) .xterm-rows")
     page.click("#terminal")
     page.keyboard.type("echo again_$MARKER")
     page.keyboard.press("Enter")
@@ -111,6 +112,37 @@ def test_terminal_panel_hide_keeps_shell_running(browser):
     page.keyboard.type("exit")
     page.keyboard.press("Enter")
     page.wait_for_selector("#terminal-panel", state="hidden", timeout=10000)
+    ctx.close()
+
+
+def test_the_menu_terminal_item_always_opens_a_new_shell(browser):
+    """The user menu's Terminal item never jumps back to a terminal you
+    already have — with one showing, and with the panel hidden, it opens a
+    new shell and shows it. Getting back to an old one is Ctrl+`'s job."""
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_selector("#terminal .xterm-rows")
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_function("() => window.__kbterms.length === 2")
+    assert page.locator("#term-tabs .term-tab").count() == 2
+    assert page.evaluate("""() => { const t = [...document.querySelectorAll('#term-tabs .term-tab')];
+      return t.indexOf(document.querySelector('#term-tabs .term-tab.current')); }""") == 1, \
+        "the new terminal is the one showing"
+
+    page.click('[data-testid="term-hide"]')
+    page.wait_for_selector("#terminal-panel", state="hidden")
+    user_menu(page); page.click('[data-testid="toggle-term"]')
+    page.wait_for_function("() => window.__kbterms.length === 3")
+    page.wait_for_selector("#terminal-panel:not([hidden])")
+    assert page.evaluate("""() => { const t = [...document.querySelectorAll('#term-tabs .term-tab')];
+      return t.indexOf(document.querySelector('#term-tabs .term-tab.current')); }""") == 2
+
+    # kill all three via their tab × — the shells must not outlive the test
+    for n in (2, 1, 0):
+        page.locator("#term-tabs .term-tab").first.hover()
+        page.locator("#term-tabs .term-tab .term-x").first.click()
+        page.wait_for_function(f"() => window.__kbterms.length === {n}")
     ctx.close()
 
 

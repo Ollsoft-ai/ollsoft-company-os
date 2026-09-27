@@ -125,7 +125,7 @@ or the backends.
 | **group** | a tab strip and one visible tab — today's pane, and also the terminal panel |
 | **column** | a vertical stack of groups with height fractions |
 | **workspace** | the columns, side by side, with width fractions — today's `#panes` |
-| **dock** | the one group outside the workspace: a band at the bottom (default) or a column on the right or left; where terminals open, what the Terminal button and Ctrl+` toggle, the only group that may be empty and collapsed |
+| **dock** | the one group outside the workspace: a band at the bottom (default) or a column on the right or left; where terminals open, what Ctrl+` toggles, the only group that may be empty and collapsed |
 | **layout** | workspace + dock |
 
 ### 3.2 The shape
@@ -222,10 +222,12 @@ Three notions, kept apart because they are apart today:
 
 - A **document** opens in the group of `active`, else the first group.
 - A **terminal** opens in the dock, expanding it if collapsed — today's
-  behaviour — from ＋ in the dock header, Ctrl+Shift+`, and launchers.
+  behaviour — from ＋ in the dock header, Ctrl+Shift+`, the user menu's
+  Terminal item (always a new shell, never a jump to an old one), and
+  launchers.
   Terminals reach other groups by being dragged there (or "Move tab" in the
   palette). There is no per-group ＋ in the first version.
-- **Ctrl+` and the Terminal button**: the dock has tabs → toggle it (hide,
+- **Ctrl+`**: the dock has tabs → toggle it (hide,
   or show and focus its terminal); the dock is empty but a terminal exists
   elsewhere → focus the most recently used terminal, no spawn (the user who
   dragged their only terminal to the right and presses Ctrl+` "to hide it"

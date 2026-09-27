@@ -792,7 +792,7 @@ def test_the_keybar_never_covers_the_terminal(browser):
 
 def test_opening_the_terminal_on_a_phone_gives_you_a_tab(browser):
     """A phone's terminal is a tab beside the documents: asking for one opens
-    it there, asking again returns to it, and a session built on a desktop —
+    it there, asking again opens another there, and a session built on a desktop —
     terminals in the panel — is lifted into the workspace on arrival."""
     ctx, page = m_login(browser)
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]'); wait_path(page, doc("overview.md"))
@@ -804,13 +804,17 @@ def test_opening_the_terminal_on_a_phone_gives_you_a_tab(browser):
     assert page.locator("#panes .term-tab").count() == 1
     assert page.locator("#terminal-panel").is_hidden(), "no panel on a phone"
     assert page.evaluate("() => document.querySelectorAll('#panes .tab').length") == 2, "beside the document"
-    # asking again goes back to it instead of opening a second shell
+    # asking again opens a second shell beside it — the menu item is always
+    # "a new terminal" — and closing that one leaves the first
     page.click("#nav-btn")
     page.wait_for_function("() => document.body.classList.contains('nav-open')")
     page.wait_for_timeout(400)
     user_menu(page); page.click('[data-testid="toggle-term"]')
-    page.wait_for_function("() => !!document.querySelector('#panes .tab.current.term-tab')")
-    assert page.evaluate("() => window.__kbterms.length") == 1
+    page.wait_for_function("() => window.__kbterms.length === 2")
+    assert page.locator("#panes .term-tab").count() == 2
+    assert page.locator("#terminal-panel").is_hidden(), "still no panel on a phone"
+    page.click("#panes .tab.current .tab-x")
+    page.wait_for_function("() => window.__kbterms.length === 1")
     # A session built on a desktop, opened on a phone: its record has the
     # terminal in the panel, and the phone lifts it into the workspace.
     page.evaluate("""() => {

@@ -7795,7 +7795,8 @@ let backendV = 0;
 let whoamiUser = "";
 
 function wireTerminal() {
-  $("#toggleterm").addEventListener("click", toggleTerminalPanel);
+  // the menu's Terminal item always opens a NEW shell; Ctrl+` is the toggle
+  $("#toggleterm").addEventListener("click", () => openTermWith());
   wireTouchTabDrag();
   for (const b of document.querySelectorAll(".chat-btn, #chats-new")) b.addEventListener("click", () => { closeNav(); openChat(); });
 
@@ -8376,7 +8377,7 @@ function preferredTermMax() {
   catch (e) { return true; }
 }
 
-// Ctrl+` and the Terminal button. The dock has tabs: show it (and put the
+// Ctrl+` (the menu's Terminal item opens a new one instead). The dock has tabs: show it (and put the
 // keyboard in its terminal) or hide it. The dock is empty but a terminal
 // lives in some other group: go to that terminal — never spawn a second one
 // under a user who dragged their only shell to the right and now wants it
