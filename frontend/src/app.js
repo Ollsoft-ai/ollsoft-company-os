@@ -6539,7 +6539,7 @@ async function createAndOpen(rawPath) {
     body: JSON.stringify({ path }),
   });
   const j = await r.json();
-  if (r.ok) { await loadTree(); openPath(path, path.endsWith(".html") ? "artifact" : "doc"); }
+  if (r.ok) { await loadTree(); openPath(path, kindForPath(path)); }   // _secrets/ → the secret view, never the live editor
   else kbToast(j.error || "could not create file", "err");
 }
 async function newFileIn(folder) {

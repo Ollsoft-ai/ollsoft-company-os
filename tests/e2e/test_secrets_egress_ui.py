@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
-from conftest import BASE, CREDS, expand_folder, login
+from conftest import BASE, CREDS, dlg_fill, expand_folder, login
 from kbenv import U, doc as kbdoc
 
 TAG = str(int(time.time()))
@@ -94,6 +94,27 @@ def test_secret_viewer_masked_and_reveal(browser, setup):
     page.click('[data-testid="secret-reveal"]')       # Hide again
     assert KEY not in body.inner_text()
     ctx.close()
+
+
+def test_a_new_file_in_secrets_opens_as_a_secret(browser, setup):
+    """"New file here" on _secrets/ opens the fresh file in the secret viewer.
+    It used to open as a collaborative document, which the live-doc relay
+    refuses for a secret: an empty note loading forever, until a reopen."""
+    name = f"uinew_{TAG}.env"
+    path = kbdoc(f"_secrets/{name}")
+    ctx = browser.new_context()
+    page = login(ctx, "alice")
+    try:
+        page.wait_for_selector(f'.tree-item[data-path="{kbdoc("_secrets")}"]', timeout=8000)
+        page.hover(f'.tree-item[data-path="{kbdoc("_secrets")}"]')
+        page.click(f'.tree-item[data-path="{kbdoc("_secrets")}"] .tbtn[title="New file here"]')
+        dlg_fill(page, name)
+        page.wait_for_selector(".secret-view [data-testid='secret-body']", timeout=8000)
+        assert page.locator(".tab-content.secret-view .cm-editor").count() == 0
+        assert page.locator(".tab-content.secret-view [data-testid='tab-loading']").count() == 0
+    finally:
+        api("alice").post("/api/fs/delete", json={"path": path})
+        ctx.close()
 
 
 def test_secret_hidden_from_tree_and_denied_via_link(browser, setup):
