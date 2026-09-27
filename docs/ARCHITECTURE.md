@@ -572,7 +572,8 @@ about the app — see §8.1):
 - **The person, bottom left.** The sidebar ends in the signed-in user; one
   click opens the user menu with everything that is not a file or the search:
   Settings, Pinned items, Admin (admins and network delegates), Cron,
-  Terminal, Dictation history, Keyboard shortcuts, Sign out. The top bar keeps
+  New terminal (always a fresh shell — Ctrl+` is the way back to one you
+  have), Dictation history, Keyboard shortcuts, Sign out. The top bar keeps
   only the brand, the search and the mic. On a phone the same menu sits at the bottom of the drawer,
   under the same Pinned / Chats / Files list a desktop shows. New documents
   come from the tree's "New file here", Alt+N, or the palette — there is no
