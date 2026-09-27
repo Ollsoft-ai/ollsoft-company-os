@@ -437,6 +437,30 @@ about the app — see §8.1):
   plain mtime-checked save instead of the CRDT. Both entry points are built
   by the same esbuild run and share the module through a split chunk, so a
   fix to the surface lands in both.
+- **A touch screen draws the whole note while you read it** (`drawWhole` in
+  `richview.js`, `syncWhole` in `app.js`). CodeMirror draws the lines on
+  screen plus ~1000px either side and *guesses* the height of the rest, and
+  on a phone both halves showed: a fling moves the page on the compositor
+  faster than a phone's main thread draws the next lines, so blank patches
+  (the whole screen at worst) slid into view, and the guess — its yardstick
+  is whichever short line it meets first, often a heading — made a note up
+  to 50% too long and corrected it under the thumb. Measured on a phone
+  emulation with a 4–6× slowed CPU and a bad cellular link: 43 frames with a
+  blank band over 180px in four flings down a 13 KB note before, none after,
+  and one page height from the first frame. The switch is CodeMirror's own
+  print mode (`viewState.printing`, internal — `tests/e2e/test_scroll_whole.py`
+  fails if an upgrade moves it), with the parse forced to the end first so
+  the lines below the fold are drawn rich the first time. It is off while the
+  keyboard is up — a note drawn whole is re-laid-out on every keystroke
+  (33→53 ms a key at 13 KB, 46→145 ms at 38 KB on the same slowed CPU) —
+  and for notes past 64K characters (2.4% of a real knowledgebase), where the
+  one-off drawing costs ~0.7 s. Desktops keep the window. The live-preview
+  layer recomputes when the parse advances, not only when the viewport
+  moves, or a note drawn whole would keep raw `##` at its tail; a table
+  tells CodeMirror its height before it is drawn (34px a row + the bar); and
+  the touch listener that stops a held tab from scrolling the page sits on
+  the tab strips, not the document — a page-wide cancelable `touchmove`
+  makes every scroll of every note wait for the main thread.
 - **Reading affordances in the rendered view**: a `code span` carries the same
   one-click copy a fenced block has (`InlineCopyWidget`, faint until hovered —
   inline code is everywhere in these documents), and an **@mention of a real

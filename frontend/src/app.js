@@ -15,7 +15,7 @@ import { yCollab } from "y-codemirror.next";
 import { init as initRichView, mdHighlight, calibrateListMetrics, tableField,
          livePreview, spacedLinks,
          listIndent, todoInputRule, mentionHighlight, mentionSource, repaintMentions,
-         inCodeOrUrl, resolveMediaUrl, resolveDocPath, mediaKind, nodeRangeAt,
+         inCodeOrUrl, resolveMediaUrl, resolveDocPath, mediaKind, nodeRangeAt, drawWhole,
          VIDEO_EXT, AUDIO_EXT } from "./richview.js";
 // xterm is NOT imported here: it is a quarter of the bundle and lives in its
 // own chunk, loaded by warmTerminal() the first time a terminal is wanted.
@@ -739,8 +739,10 @@ function wireMdBar() {
   }
   function syncKb() {
     const up = inDoc(document.activeElement) && keyboardGap() > 0;
+    const was = document.body.classList.contains("kb-up");
     bar.classList.toggle("kb", up);
     document.body.classList.toggle("kb-up", up);
+    if (up !== was) for (const t of tabs) syncWhole(t);   // typing draws a window, reading the whole
     const lift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
     bar.style.setProperty("--kb-lift", up ? lift + "px" : "0px");
   }
@@ -2623,6 +2625,14 @@ function finishPane(p) {
   p.barEl.addEventListener("pointerleave", (e) => {
     if (e.pointerType === "mouse") unlockTabStrip(p.barEl);
   });
+  // A tab lifted by a hold (wireTouchTabDrag) must not scroll the page under
+  // itself. Only a strip listens: a touch's moves go to where it STARTED, and
+  // the browser makes every touch that starts under a cancelable touchmove
+  // listener wait for the main thread before it may scroll. On the document,
+  // that was every scroll of every note, behind whatever the page was busy with.
+  p.barEl.addEventListener("touchmove", (e) => {
+    if (document.body.classList.contains("touch-drag")) e.preventDefault();
+  }, { passive: false });
   // A group that changes size refits the terminal it shows (a document
   // reflows by itself). One observer, many hosts.
   _fitObserver.observe(p.hostEl);
@@ -3212,9 +3222,9 @@ function wireTouchTabDrag() {
   };
   document.addEventListener("pointerup", end);
   document.addEventListener("pointercancel", end);
-  // A lifted tab must not scroll the page under itself, and the hold must
-  // not pop the context menu or select text (the stylesheet handles the rest).
-  document.addEventListener("touchmove", (e) => { if (drag) e.preventDefault(); }, { passive: false });
+  // A lifted tab must not scroll the page under itself — that is the strips'
+  // own touchmove listener (finishPane) — and the hold must not pop the
+  // context menu or select text (the stylesheet handles the rest).
   document.addEventListener("contextmenu", (e) => { if (press || drag) e.preventDefault(); });
 }
 
@@ -4558,6 +4568,20 @@ async function mountSecret(t) {
   });
 }
 
+// A touch screen draws the whole note while you read it (drawWhole): a fling
+// cannot outrun lines that are already there, and nothing is left whose
+// height has to be guessed. While the keyboard is up it goes back to
+// CodeMirror's window, because a note drawn whole is re-laid-out on every
+// keystroke — measured on a 4× slowed CPU, 33→53 ms a key at 13 KB and
+// 46→145 ms at 38 KB. Past 64K characters even the one-off drawing is too
+// slow (~0.7 s there on the same CPU), and such a note stays windowed.
+const WHOLE_MAX = 64 * 1024;
+function syncWhole(t) {
+  if (!t.view) return;
+  drawWhole(t.view, COARSE_PRIMARY && !document.body.classList.contains("kb-up") &&
+                    t.view.state.doc.length <= WHOLE_MAX);
+}
+
 async function mountDoc(t) {
   // Until the CRDT session syncs there is nothing in the pane — not an empty
   // document, just nothing yet. Say so, or a slow open is indistinguishable
@@ -4631,6 +4655,13 @@ async function mountDoc(t) {
     dropCursor(),
     mediaExtension(t),
     t.modeComp.of(modeExts(t)),
+    // a note that grows past WHOLE_MAX (or shrinks back under it) changes
+    // how it is drawn; after the update, since drawWhole may dispatch
+    EditorView.updateListener.of((u) => {
+      if (u.docChanged && (u.state.doc.length > WHOLE_MAX) !== (u.startState.doc.length > WHOLE_MAX)) {
+        setTimeout(() => syncWhole(t), 0);
+      }
+    }),
   ];
   if (readOnly) {
     extensions.push(EditorState.readOnly.of(true), EditorView.editable.of(false));
@@ -4683,7 +4714,7 @@ async function mountDoc(t) {
   });
   provider.on("sync", (isSynced) => {
     t.synced = isSynced;
-    if (isSynced) clearTabLoading(t);   // the text is really here now
+    if (isSynced) { clearTabLoading(t); syncWhole(t); }   // the text is really here now
     if (active === t) { window.__kbsynced = isSynced; renderSyncBadge(); }
   });
   // Never spin forever. If the relay is unreachable the doc genuinely has no

@@ -18,7 +18,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { Strikethrough, TaskList, Table } from "@lezer/markdown";
 import { syntaxHighlighting } from "@codemirror/language";
 import { init as initRichView, mdHighlight, calibrateListMetrics, tableField,
-         livePreview, spacedLinks, listIndent, todoInputRule } from "./richview.js";
+         livePreview, spacedLinks, listIndent, todoInputRule, drawWhole } from "./richview.js";
 
 const conf = JSON.parse(document.getElementById("kb-conf").textContent);
 const BASE = conf.base;                    // /s/<id>/<token>
@@ -92,6 +92,10 @@ const view = new EditorView({
 });
 calibrateListMetrics(view.contentDOM);
 if (!editable) document.body.classList.add("readonly");
+// A reader on a touch screen gets the whole document drawn, as in the app
+// (see drawWhole): nothing to type here, so no keyboard to make way for.
+if (!editable && window.matchMedia("(pointer: coarse)").matches &&
+    view.state.doc.length <= 64 * 1024) drawWhole(view, true);
 
 async function save() {
   if (!editable || saving) return;

@@ -16,7 +16,7 @@
 import { StateField, StateEffect } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, ViewPlugin } from "@codemirror/view";
 import { undo, redo } from "@codemirror/commands";
-import { HighlightStyle, syntaxTree } from "@codemirror/language";
+import { HighlightStyle, syntaxTree, forceParsing } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
 const svgIcon = (paths) =>
@@ -462,6 +462,11 @@ function renderInlineMd(text, dir) {
 class TableWidget extends WidgetType {
   constructor(md, readOnly, dir) { super(); this.md = md; this.readOnly = readOnly; this.dir = dir; }
   eq(o) { return o.md === this.md && o.readOnly === this.readOnly && o.dir === this.dir; }
+  // What CodeMirror assumes for a table it has not drawn yet. Without it a
+  // ten-row table counted as one line below the fold, and the page grew under
+  // the reader as each one scrolled in. Measured on a desktop: 34px a row
+  // (header included, the delimiter row draws nothing) plus the button bar.
+  get estimatedHeight() { return 34 * (this.md.split("\n").length - 1) + 38; }
   toDOM(view) {
     const dom = document.createElement("div");
     dom.className = "cm-table-wrap";
@@ -899,7 +904,12 @@ function livePreview(dir) {
   const plugin = ViewPlugin.fromClass(class {
     constructor(view) { this.compute(view); }
     update(u) {
-      if (u.docChanged || u.selectionSet || u.viewportChanged) this.compute(u.view);
+      // The parse runs ahead in the background, and the lines it reaches only
+      // become headings, lists and code once it has: without the tree check
+      // they stayed raw `##` text until something else moved — forever, in a
+      // document drawn whole (drawWhole), where the viewport never changes.
+      if (u.docChanged || u.selectionSet || u.viewportChanged ||
+          syntaxTree(u.state) !== syntaxTree(u.startState)) this.compute(u.view);
     }
     compute(view) {
       const decos = [], atomics = [];
@@ -1351,6 +1361,32 @@ function mentionHighlight() {
 }
 
 
+// CodeMirror draws the lines on screen and ~1000px either side of them; the
+// rest of the document is an empty spacer whose height it GUESSES. On a phone
+// both halves of that show. A fling moves the page on the compositor faster
+// than a phone's main thread draws the next lines, so what slides into view is
+// the spacer — a blank patch, the whole screen at worst. And the guess is poor
+// (its yardstick is whichever short line it met first, often a heading), so
+// the page is the wrong length and keeps being corrected under your thumb.
+// Measured on a phone emulation with a 4–6× slowed CPU: 43 frames with a blank
+// band taller than 180px in four flings down a 13 KB note, a first guess 37%
+// too tall — and neither once the whole note is drawn.
+//
+// Drawing the whole document is what CodeMirror itself does to print, and the
+// flag it prints with is the only switch it has for it. It is internal, so
+// tests/e2e/test_scroll_whole.py fails if an upgrade moves it. The parse is
+// pushed to the end first, so the lines below the fold are drawn rich the
+// first time rather than as raw `##` that turns into a heading later and
+// changes height. Not from inside an update: forceParsing dispatches.
+function drawWhole(view, on) {
+  const vs = view.viewState;
+  if (!vs || vs.printing === on) return;
+  if (on) forceParsing(view, view.state.doc.length, 250);
+  vs.printing = on;
+  view.requestMeasure();
+}
+
+
 // A list's hanging indent is the width of what precedes its text: the
 // marker, the space after it, and the spaces of its nesting. Those widths
 // belong to the theme's fonts, so they are MEASURED once per font and
@@ -1382,7 +1418,7 @@ function calibrateListMetrics(el) {
 
 
 export { mdHighlight, calibrateListMetrics, tableField, livePreview, spacedLinks, listIndent, todoInputRule,
-         mentionHighlight, mentionSource, repaintMentions, inCodeOrUrl, renderInlineMd,
+         mentionHighlight, mentionSource, repaintMentions, inCodeOrUrl, renderInlineMd, drawWhole,
          resolveMediaUrl, resolveDocPath, linkTarget, isExternalUrl, mediaKind, nodeRangeAt,
          VIDEO_EXT, AUDIO_EXT, HIDE, MENTION_RE,
          CheckboxWidget, BulletWidget, HRWidget, CopyWidget, InlineCopyWidget,

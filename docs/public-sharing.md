@@ -121,7 +121,10 @@ leaked token reaches an empty directory a second later — no cache, no
   of `/srv/kb`.
 - **Read**: the editor, read-only (no cell inputs, disabled checkboxes, no
   media actions). A folder is still a plain listing; images and other files
-  are served as themselves.
+  are served as themselves. On a touch screen the whole document is drawn
+  (up to 64K characters), as in the app, so a fling never shows blank patches
+  — see "A touch screen draws the whole note" in
+  [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Edit** (only for an edit share): the same editor, writable, saving 1.2 s
   after you stop typing (and on Ctrl+S) through `__save`, which refuses a
   write whose `mtime` is not the one the page loaded — so two strangers
