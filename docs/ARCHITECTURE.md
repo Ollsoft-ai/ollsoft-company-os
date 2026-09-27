@@ -406,7 +406,12 @@ about the app — see §8.1):
   shows its markdown **rendered** (`renderInlineMd` — bold, italic, strike,
   code, links, images, `<br>`, built as DOM nodes out of escaped text, so a
   document can never inject markup and only http/mailto/tel ever becomes an
-  href) and hands back the raw text as an `<input>` while the cursor is in it.
+  href; a bare `https://…` is a link too, minus the punctuation that ends
+  its sentence, and a link's own label is never linked again — it once was,
+  recursed until the stack overflowed, and blanked every note below such a
+  table) and hands back the raw text as an `<input>` while the cursor is in it.
+  A table that still fails to build shows as its markdown rather than taking
+  the rest of the note with it (`TableWidget.draw`).
   Keys typed in a cell belong to the table, except Ctrl+Z/Ctrl+Shift+Z, which
   are the document's: they flush the pending cell write and run the editor's
   own undo. Shift+Enter writes `<br>`, the one line break GFM allows inside a

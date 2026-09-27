@@ -380,7 +380,12 @@ function safeHref(url) {
 function cellLink(label, url, dir) {
   const a = document.createElement("a");
   a.className = "cm-md-link";
-  a.appendChild(renderInlineMd(label || url, dir));
+  // inLink: the label is drawn without links of its own. A bare URL used to
+  // be its own label, so drawing it found the URL again, made another link,
+  // drew ITS label… until the stack overflowed inside TableWidget.toDOM, and
+  // CodeMirror stopped drawing the note at that table (2026-09-27: a server
+  // README went blank below any table with an https:// cell in it).
+  a.appendChild(renderInlineMd(label || url, dir, true));
   if (isExternalUrl(url)) {
     const h = safeHref(url);
     if (h) { a.href = h; a.target = "_blank"; a.rel = "noopener noreferrer"; }
@@ -406,14 +411,14 @@ function openCellLink(a) {
 // inline forms: a cell is one line, so headings, lists and fences have no
 // meaning in it. `<br>` is the one HTML form GFM leaves people no alternative
 // to, so it is understood literally and nothing else is.
-function renderInlineMd(text, dir) {
+function renderInlineMd(text, dir, inLink = false) {
   const frag = document.createDocumentFragment();
   let buf = "", i = 0;
   const flush = () => { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ""; } };
   const wrap = (tag, inner) => {
     flush();
     const e = document.createElement(tag);
-    e.appendChild(renderInlineMd(inner, dir));
+    e.appendChild(renderInlineMd(inner, dir, inLink));
     frag.appendChild(e);
   };
   while (i < text.length) {
@@ -434,7 +439,7 @@ function renderInlineMd(text, dir) {
       img.src = resolveMediaUrl(dir, m[2]);
       img.alt = m[1]; img.title = m[1] || m[2];
       frag.appendChild(img);
-    } else if ((m = /^\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/.exec(rest))) {
+    } else if (!inLink && (m = /^\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/.exec(rest))) {
       flush();
       frag.appendChild(cellLink(m[1], m[2], dir));
     } else if ((m = /^(\*\*|__)(?=\S)([\s\S]+?)\1/.exec(rest))) {
@@ -446,7 +451,10 @@ function renderInlineMd(text, dir) {
     } else if ((m = /^<br\s*\/?>/i.exec(rest))) {
       flush();
       frag.appendChild(document.createElement("br"));
-    } else if ((m = /^https?:\/\/[^\s<>()]+/.exec(rest))) {
+    } else if (!inLink && (m = /^https?:\/\/[^\s<>()]+/.exec(rest))) {
+      // GFM's rule: punctuation at the end closes the sentence, not the URL
+      // ("https://example.com, and…" must not link to "example.com,")
+      m = [m[0].replace(/[.,:;!?'"]+$/, "")];
       flush();
       frag.appendChild(cellLink(m[0], m[0], dir));
     } else {
@@ -471,17 +479,31 @@ class TableWidget extends WidgetType {
     const dom = document.createElement("div");
     dom.className = "cm-table-wrap";
     dom.contentEditable = "false";
-    this.build(dom, view);
+    this.draw(dom, view);
     return dom;
   }
   updateDOM(dom, view) {
     // a structural edit (add/remove row or column) must always redraw, even
     // though the button press left the caret inside a cell
-    if (dom.__force) { dom.__force = false; this.build(dom, view); return true; }
+    if (dom.__force) { dom.__force = false; this.draw(dom, view); return true; }
     if (dom.__md === this.md) return true;                    // our own cell writeback
     if (dom.contains(document.activeElement)) return true;    // don't yank a cell mid-typing
-    this.build(dom, view);
+    this.draw(dom, view);
     return true;
+  }
+  // A widget that throws while CodeMirror draws stops the drawing there, and
+  // everything below it stays blank. One table must never cost the note: if
+  // the grid cannot be built, the table shows as the markdown it is.
+  draw(dom, view) {
+    try { this.build(dom, view); }
+    catch (e) {
+      console.error("table could not be drawn; showing its markdown", e);
+      dom.__md = this.md;
+      const pre = document.createElement("pre");
+      pre.className = "cm-table-raw";
+      pre.textContent = this.md;
+      dom.replaceChildren(pre);
+    }
   }
   ignoreEvent() { return true; }
 

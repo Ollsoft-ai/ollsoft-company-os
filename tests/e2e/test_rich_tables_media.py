@@ -305,6 +305,50 @@ def test_a_cell_renders_its_markdown_until_you_edit_it(browser, md_doc):
     ctx.close()
 
 
+URL_TABLE_DOC = """# Servers
+
+| | |
+|---|---|
+| Runs | Dead Miles — https://example.com/game, and nothing else |
+| Docs | [https://example.com/docs](https://example.com/docs) |
+
+the line after the table
+"""
+
+
+def test_a_bare_url_in_a_cell_is_a_link_and_the_note_still_draws(browser):
+    """A bare URL was its own link's label, and the label was drawn as inline
+    markdown — which found the URL again, made another link, drew ITS label…
+    until the stack overflowed inside the table widget, and CodeMirror stopped
+    drawing the note at that table: blank below it, and blank again after
+    every tap (a real server README, 2026-09-27)."""
+    c = api()
+    rel = kbdoc(f"tblurl_{int(time.time())}.md")
+    assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)
+    assert c.post("/api/artifact/write",
+                  json={"path": rel, "content": URL_TABLE_DOC}).status_code == 200
+    try:
+        ctx, page = open_doc(browser, rel)
+        errors = []
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.wait_for_selector("table.cm-table", timeout=10000)
+        bare = page.locator('[data-cell="1,1"] .cm-cell-md a')
+        assert bare.count() == 1 and bare.get_attribute("href") == "https://example.com/game"
+        named = page.locator('[data-cell="2,1"] .cm-cell-md a')
+        assert named.count() == 1 and named.inner_text() == "https://example.com/docs"
+        # the note goes on past the table, and a tap elsewhere redraws it whole
+        page.wait_for_function("() => __kbview.contentDOM.textContent.includes('the line after the table')",
+                               timeout=5000)
+        page.locator(".cm-line", has_text="the line after the table").click()
+        page.wait_for_timeout(300)
+        assert page.locator("table.cm-table").count() == 1
+        assert not [e for e in errors if "call stack" in e or "could not be drawn" in e], errors
+        ctx.close()
+    finally:
+        c.post("/api/fs/delete", json={"path": rel})
+
+
 def test_ctrl_z_inside_a_cell_undoes_the_document(browser, fresh):
     """A cell is an <input> the editor cannot see, so Ctrl+Z used to do
     nothing at all there."""
