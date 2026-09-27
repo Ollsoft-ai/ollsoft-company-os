@@ -96,7 +96,7 @@ def test_drawer_boots_open_and_closes_on_file_open(browser):
     assert nav_open(page)
     assert page.locator("#nav-btn").is_visible()
     assert not page.locator("#whoami").is_visible()      # desktop chrome is gone
-    assert page.locator(".brand-word").is_visible()             # the name stays on phones
+    assert not page.locator(".brand-word").is_visible()         # no brand row: the tabs are the top
     # opening a document dismisses the drawer and shows the editor
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
     wait_path(page, doc("overview.md"))
@@ -725,6 +725,41 @@ def test_the_strip_reveals_the_tab_you_just_opened(browser):
     assert m["cur"]["right"] <= m["acts"]["left"] + 1, m
     # a document is showing now, so the keybar is not
     assert not page.locator('[data-testid="term-keys"]').is_visible()
+    ctx.close()
+
+
+def _open_three(page):
+    # the one left after two closes is a document: a touch inside an
+    # artifact's iframe never reaches the page, so it could not end a streak
+    for f in ("todos.html", "onboarding.md", "overview.md"):
+        if not nav_open(page):
+            page.click("#nav-btn")
+            page.wait_for_function("() => document.body.classList.contains('nav-open')")
+        page.wait_for_timeout(400)
+        page.click(f'.tree-item[data-path="{doc(f)}"]')
+        page.wait_for_selector(f'.tab.active[data-path="{doc(f)}"]')
+    page.wait_for_timeout(300)
+
+
+def test_the_tabs_are_the_top_of_a_phone_screen(browser):
+    """No brand row on a phone: the first strip is at the very top, and the ☰
+    is a small square in its corner with the first tab right beside it."""
+    ctx, page = m_login(browser)
+    _open_three(page)
+    page.evaluate("() => { document.querySelector('#panes .tabbar').scrollLeft = 0; }")
+    m = page.evaluate("""() => { const r = (e) => e.getBoundingClientRect().toJSON();
+      return { bar: r(document.querySelector('#panes .tabbar')), nav: r(document.querySelector('#nav-btn')),
+               tab: r(document.querySelector('#panes .tab')) }; }""")
+    assert m["bar"]["top"] == 0, m
+    assert m["nav"]["width"] <= 44, "a small ☰"
+    assert abs((m["nav"]["top"] + m["nav"]["height"] / 2) - (m["bar"]["top"] + m["bar"]["height"] / 2)) <= 1, m
+    assert abs(m["tab"]["left"] - m["nav"]["right"]) <= 1, "the first tab starts right beside the ☰"
+    # the ☰ still opens the drawer, and closes it again over the scrim
+    page.click("#nav-btn")
+    page.wait_for_function("() => document.body.classList.contains('nav-open')")
+    page.wait_for_timeout(400)
+    page.click("#nav-btn")
+    page.wait_for_function("() => !document.body.classList.contains('nav-open')")
     ctx.close()
 
 

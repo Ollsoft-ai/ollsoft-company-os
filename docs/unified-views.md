@@ -623,7 +623,9 @@ file panel's head (☰ · logo · chat) and the editor column starts at the top 
 the window, so the first strips are the top of the screen; the Pinned rows sit
 under the search, above the chats and the files; ☰ collapses the panel
 (remembered) and a corner control keeps ☰ and the chat reachable. A phone
-shows the same three sections in the drawer.
+shows the same three sections in the drawer. Since 2026-09-27 a phone drops
+its brand row too: the first strip is the top of the screen, with a small ☰
+fixed in its corner (ARCHITECTURE.md, "The chrome").
 
 ### Desktop
 

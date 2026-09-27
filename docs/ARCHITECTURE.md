@@ -826,10 +826,10 @@ about the app — see §8.1):
   and terminals register from `app.js`; the agent chat from its own lazily
   loaded chunk. The shell knows no kind by name. Modules add palette commands
   with `registerCommand` and chrome buttons through a named slot.
-- **The chrome**: on every screen the brand row is ☰ · logo · the product's
+- **The chrome**: on a desktop the brand row is ☰ · logo · the product's
   name (which gives way only under ~190px of panel); the ☰ is a borderless
   icon that takes a background on hover, while the corner's floating one
-  keeps its edge because it sits over the document, and on a desktop it is the head of
+  keeps its edge because it sits over the document, and it is the head of
   the file panel and the editor column starts at the top of the window, so
   every top group's tab strip is the top of the screen; under the search sits
   **Pinned**, then **Chats** (a compose button, the five most recent
@@ -838,12 +838,18 @@ about the app — see §8.1):
   scrolling tree. ☰ (or Alt+B) collapses the panel to nothing, remembered
   per browser (`kbNavHidden`), and a corner control keeps ☰ and a compose
   button reachable. A tab strip is 38px in deep blue and 44px in the
-  Notion-style themes, and 44px on any touch screen. The divider between two
+  Notion-style themes, 44px on any touch screen, and 48px on a phone, where
+  the tabs fill it exactly so the ☰ beside the first one lines up. The divider between two
   groups is a hairline with a 5px invisible grab zone around it (a painted
   5px handle read as a trough of page background between the panes), and it
-  is the only line there — the panes draw no border of their own against it. On a phone the brand row is a full-width top bar
-  with the strip directly beneath it, holding ☰ and the brand only — a new
-  chat comes from the drawer's Chats section. The document bar (path, history,
+  is the only line there — the panes draw no border of their own against it. On a phone there is no brand row
+  at all: the first group's strip is the top of the screen, and the topbar
+  shrinks to its ☰ — a small square fixed in the strip's corner (the strip
+  leaves it `--nav-w` of padding; it is `--strip-h` tall and on the strip's
+  background, so tabs scrolled left pass under it). The drawer opens beneath
+  the strip with the ☰ above its scrim, so ☰ closes it again; a maximized
+  group covers the ☰ like everything else. A new chat comes from the drawer's
+  Chats section. The document bar (path, history,
   presence, Rich | Source, the pencil, the access badge — the pen / eye is a button that opens "who can open this") is one element that
   lives inside the active document's group — under its strip on a desktop, at
   the group's bottom on a phone, where it steps aside for the keyboard row.

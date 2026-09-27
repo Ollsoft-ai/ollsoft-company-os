@@ -1692,7 +1692,9 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 
 /* ── Mobile layout (phones, small tablets) ────────────────────────────────── */
 @media (max-width: 880px) {
-  :root { --tbh: 54px; }
+  /* no brand row: the ☰ sits small in the top-left corner of the first strip
+     (below), so the topbar takes no height of its own */
+  :root { --tbh: 0px; --strip-h: 48px; --nav-w: 40px; }
   input, select, textarea { font-size: 16px !important; }   /* no iOS focus-zoom */
   .cm-editor { font-size: 16px; }
   .cm-line { padding: 0 var(--content-x-narrow); }
@@ -1705,10 +1707,21 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
      and its padding alone keeps the code under the prose */
   .cm-editor, :root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor { --block-inset: 0px; }
 
-  /* the name stays on phones: the bar has room now that search and the
-     actions live in the drawer */
-  .topbar { gap: .45rem; }
-  .navbtn { padding: .45rem .6rem; }
+  /* The tabs are the top of the screen on a phone too. The topbar shrinks to
+     its ☰, fixed in the corner the first strip leaves free for it, the same
+     height as the strip and on its background, so tabs scrolled to the left
+     pass under it. Above the drawer's scrim (55) so it still closes the
+     drawer; under a maximized group (57), which is the whole screen. */
+  .topbar { position: fixed; top: 0; left: 0; z-index: 56; box-sizing: border-box;
+    width: calc(var(--nav-w) + env(safe-area-inset-left)); height: var(--strip-h);
+    padding: 0 0 0 env(safe-area-inset-left); gap: 0; border-bottom: 1px solid var(--border); }
+  .topbar .brand, .topbar .spacer, .topbar .topbar-actions { display: none; }
+  .topbar .navbtn { width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; font-size: 1.05rem; }
+  body:not(.maximized) #panes > .col:first-child > .pane:first-of-type > .tabbar,
+  body:not(.maximized) #panes > .col:first-child > .pane-handle:first-child {
+    padding-left: calc(var(--nav-w) + env(safe-area-inset-left)); }
+  /* the strip is exactly --strip-h, so the ☰ beside it lines up */
+  .tab { padding-top: 0; padding-bottom: 0; }
 
   /* the pinned rows live in the drawer with the tree, at thumb size */
   .pin-row { min-height: 44px; }
@@ -1731,14 +1744,14 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   /* file tree becomes an over-content drawer */
   .layout { grid-template-columns: 1fr; }
   .sb-resizer { display: none; }
-  .sidebar { position: fixed; top: var(--tbh); bottom: 0; left: 0;
+  .sidebar { position: fixed; top: var(--strip-h); bottom: 0; left: 0;
     width: min(84vw, 330px); z-index: 60; transform: translateX(-103%);
     transition: transform .22s ease; border-right: 1px solid var(--border);
     box-shadow: 0 0 48px color-mix(in srgb, var(--shadow) 65%, transparent);
     padding-left: max(.45rem, env(safe-area-inset-left));
     padding-bottom: max(.45rem, env(safe-area-inset-bottom)); }
   body.nav-open .sidebar { transform: none; }
-  .scrim { display: block; position: fixed; inset: var(--tbh) 0 0 0; z-index: 55;
+  .scrim { display: block; position: fixed; inset: 0; z-index: 55;
     background: color-mix(in srgb, var(--overlay) 55%, transparent); opacity: 0; pointer-events: none;
     transition: opacity .2s ease; }
   body.nav-open .scrim { opacity: 1; pointer-events: auto; }

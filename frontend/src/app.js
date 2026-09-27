@@ -3565,8 +3565,11 @@ function revealCurrentTab(p) {
   // not in view
   const acts = p.barEl.querySelector(".grp-actions");
   const right = bar.right - (acts ? acts.getBoundingClientRect().width : 0);
+  // …and the ☰ sits over its left end when the strip leaves room for one
+  // (a phone's first strip, a desktop's with the file panel collapsed)
+  const left = bar.left + (parseFloat(getComputedStyle(p.barEl).paddingLeft) || 0);
   const r = cur.getBoundingClientRect();
-  if (r.left < bar.left) p.barEl.scrollLeft -= bar.left - r.left;
+  if (r.left < left) p.barEl.scrollLeft -= left - r.left;
   else if (r.right > right) p.barEl.scrollLeft += r.right - right;
 }
 
