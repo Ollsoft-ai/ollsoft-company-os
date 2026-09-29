@@ -615,32 +615,6 @@ class TableWidget extends WidgetType {
       return items;
     };
 
-    // The grid is frozen while a cell is open. The raw markdown of a cell is
-    // longer than what it renders as ("**ship**" vs "ship"), so opening one
-    // used to widen its column and shove the whole table sideways under the
-    // pointer. Measured once, put back when the last cell closes.
-    const freeze = () => {
-      const head = table.rows[0];
-      if (!head || table.style.tableLayout === "fixed") return;
-      const widths = [...head.cells].map((c) => c.getBoundingClientRect().width);
-      const total = table.getBoundingClientRect().width;
-      if (!total) return;
-      // Proportions, not pixels: the column keeps its share of the table even
-      // if the page narrows while a cell is open (a scrollbar appearing is
-      // enough), where frozen pixels would push the table off the side and
-      // drag the whole editor sideways with it.
-      table.style.width = Math.round(total) + "px";
-      [...head.cells].forEach((c, i) => {
-        c.style.width = ((widths[i] / total) * 100).toFixed(3) + "%";
-      });
-      table.style.tableLayout = "fixed";
-    };
-    const thaw = () => {
-      if (dom.querySelector(".cm-td.editing")) return;
-      table.style.tableLayout = "";
-      table.style.width = "";
-      for (const c of (table.rows[0] || { cells: [] }).cells) c.style.width = "";
-    };
     // CodeMirror measures this widget's box to know where every line below it
     // paints. A cell that grew and a height map that did not is how a click
     // lands on the wrong line, so every size change says so.
@@ -678,7 +652,6 @@ class TableWidget extends WidgetType {
           el.remove();
           td.classList.remove("editing");
           paint();
-          thaw();
         };
         // Where a click means, in the RAW text. When the cell is plain the two
         // agree character for character, so the caret lands under the finger;
@@ -702,7 +675,6 @@ class TableWidget extends WidgetType {
         const edit = (caret) => {
           focus = { r, c };
           if (box) { box.focus(); return; }
-          freeze();
           box = document.createElement("textarea");
           box.className = "cm-cell-edit";
           box.rows = 1;

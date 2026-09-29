@@ -541,3 +541,52 @@ def test_a_cell_grows_as_you_type_and_shift_enter_breaks_the_line(sized):
     box = page.locator('table.cm-table textarea[data-cell="1,0"]')
     box.wait_for(state="visible")
     assert "<br>" not in box.input_value() and box.input_value().count("\n") == 2
+
+
+# "why is the table jumping this way when I click into it" — krystof,
+# 2026-09-29. A table whose columns sit exactly at their text's width: opening
+# a cell froze the grid as `table-layout: fixed`, where a cell's width excludes
+# its padding, so every column lost that much room and every tight cell
+# wrapped. The widths stayed put, which is why the test above never saw it —
+# the HEIGHTS jumped. Zoomed, because a zoomed page is where measured and
+# re-applied widths disagree by the fraction of a pixel a tight cell cannot
+# spare (krystof's browser runs at ~136%).
+TIGHT = ("| Semester | Module | Counts as | ECTS | Graded by |\n"
+         "| --- | --- | --- | --- | --- |\n"
+         "| **WS 26/27** | IN2015 Image Synthesis - signed up | Mandatory | 5 | Exam |\n"
+         "|  | IN5701 Virtual Reality | Line: Interaction | 6 | Check format |\n"
+         "|  | IN2361 Natural Language Processing - signed up | Line: Interaction | 6 | Exam |\n"
+         "| **WS 27/28** | Additional Games Lab (same project) | Weitere Praktika | 10 | Project |\n")
+
+
+def test_opening_a_tight_cell_wraps_nothing(browser):
+    c = api()
+    rel = kbdoc(f"tbltight_{int(time.time() * 1000)}.md")
+    assert c.post("/api/file", json={"path": rel}).status_code in (200, 409)
+    assert c.post("/api/artifact/write",
+                  json={"path": rel, "content": f"# Tight\n\n{TIGHT}\nafter\n"}).status_code == 200
+    ctx, page = open_doc(browser, rel)
+    try:
+        page.wait_for_selector("table.cm-table", timeout=10000)
+        page.evaluate("document.documentElement.style.zoom = '1.25'")
+        page.wait_for_timeout(500)
+        before = _geom(page)
+        for key in ("3,1", "2,4", "1,0"):
+            page.locator(f'table.cm-table [data-cell="{key}"]').first.click()
+            page.locator(f'table.cm-table textarea[data-cell="{key}"]').wait_for(state="visible")
+            page.wait_for_timeout(300)
+            after = _geom(page)
+            assert abs(before["table"] - after["table"]) <= 1, (key, before["table"], after["table"])
+            for b, a in zip(before["cells"], after["cells"]):
+                # the open cell holds raw markdown ("**WS 26/27**"), which may
+                # wrap inside it; every other cell must not move at all
+                if a["k"] == key and b["k"] == key:
+                    continue
+                assert abs(b["w"] - a["w"]) <= 1, f"opening {key}: column {b['k']} moved: {b} -> {a}"
+                if a["k"].split(",")[0] != key.split(",")[0]:
+                    assert abs(b["h"] - a["h"]) <= 1, f"opening {key}: cell {b['k']} wrapped: {b} -> {a}"
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+    finally:
+        ctx.close()
+        c.post("/api/fs/delete", json={"path": rel, "permanent": True})

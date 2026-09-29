@@ -426,11 +426,15 @@ about the app — see §8.1):
   heavy one fills the page, eight columns wrap rather than scroll. `width:
   max-content` looks equivalent and is not — CodeMirror's content element is a
   flex item that shrinks only to its min-content size, so a pinned max-content
-  table drags the whole document sideways under one long sentence. While a
-  cell is open the columns are frozen **as proportions** (the raw `**ship**`
-  is wider than the `ship` it renders as, and a column that widens under the
-  pointer is the jump krystof kept hitting), and every size change calls
-  `view.requestMeasure()` so the editor's height map keeps up with the box.
+  table drags the whole document sideways under one long sentence. **Opening
+  a cell never reflows the table:** the rendered text stays in the layout,
+  invisible and zero-high, so the columns size by exactly what they sized by
+  before the click, and the textarea is `width: 0; min-width: 100%` — it fills
+  the cell but adds nothing to the column (the raw `**ship**` is wider than
+  the `ship` it renders as). An earlier `table-layout: fixed` freeze lost each
+  cell's padding from its content width and wrapped every tight cell. Every
+  size change calls `view.requestMeasure()` so the editor's height map keeps
+  up with the box.
 - **The writing surface is a module of its own** (`richview.js`): widgets,
   live-preview decorations, tables, list metrics, @mentions, the markdown
   highlight style. It imports nothing from `app.js` — how to toast, ask, draw
