@@ -223,12 +223,6 @@ PY
       done
   echo '```'
   echo
-  echo "## Backups"
-  echo '```'
-  find /home/*/backups -maxdepth 2 -name SHA256SUMS -printf '%TY-%Tm-%Td %TH:%TM  %h\n' \
-    2>/dev/null | sort -r | head -5 || echo "(none found)"
-  echo '```'
-  echo
   echo "## Search index freshness"
   echo '```'
   newest=$(find "$REPO/company" "$REPO/projects" -name '*.md' -not -path '*/.git/*' \
