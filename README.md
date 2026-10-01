@@ -3,6 +3,33 @@
 An **OS-native, AI-agent-native company knowledgebase**. Think "Obsidian, but
 multiplayer, permissioned, and built for agents" — running on a single Linux box.
 
+## Install it with your AI agent
+
+An AI agent on your own computer walks you through the whole thing: renting a
+server (Hetzner or Contabo), hardening it, installing, putting it on your domain
+behind Cloudflare, and then — one question at a time — branding, voice
+dictation, semantic search, AI agents, accounts, starter content, monitoring and
+backups. You answer questions and click through two dashboards; it does the rest
+over SSH and checks every step.
+
+```bash
+git clone https://github.com/Ollsoft-ai/ollsoft-company-os.git
+cd ollsoft-company-os
+claude        # then type: /install-company-os
+```
+
+- **Claude Code** picks the skill up from this repo
+  (`.claude/skills/install-company-os/`).
+- **Codex, Hermes Agent or any other agent:** start it in the cloned folder and
+  say *"Read `.claude/skills/install-company-os/SKILL.md` and follow it."*
+- You need `ssh` (built into macOS, Linux and Windows 10+), about an hour, a card
+  for the server and, optionally, a domain.
+- Interrupted? Run it again — it keeps a state file and resumes.
+
+Prefer to run the commands yourself? See **[Install by hand](#install-by-hand)**.
+
+## Design
+
 The design rests on three ideas:
 
 1. **Markdown files are the source of truth.** Everything lives as plain `.md`
@@ -35,7 +62,7 @@ Budget a small VM: 2 vCPU / 4 GB RAM / 20 GB disk is comfortable for a team.
 
 ---
 
-## Install
+## Install by hand
 
 ```bash
 git clone https://github.com/<you>/ollsoft-company-os.git
@@ -216,12 +243,13 @@ ollsoft-company-os/
 ├── scripts/
 │   ├── install.sh          one-command install / upgrade  ← start here
 │   ├── seed-demo.sh        sample company, and the test suite's fixtures
-│   ├── deploy.sh           redeploy code after editing it (development)
+│   ├── deploy.sh           code, CLIs, skills, schema, units, timers → live (install.sh ends with it)
 │   ├── kb-heartbeat.sh     functional health check (kb-heartbeat.timer, 5 min)
 │   ├── kb-alert.sh         append an alert to /var/log/kb/alerts.log (push is opt-in)
 │   ├── kb-maintenance.sh   daily triage: bundle -> headless agent -> notify only if real
 │   ├── kb-maintenance-policy.md  what counts as noise vs a real problem, and what the agent may do
 │   ├── install-dictation-key.sh  validate + install the ElevenLabs key (root 0600)
+│   ├── install-audit.sh    auditd + kb-audit.rules (no usernames) + kb-audit-digest (daily summary)
 │   ├── bounce_backends.py  restart per-user backends after a deploy
 │   ├── schema.sql          Postgres schema, RLS functions, grants
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
@@ -229,6 +257,7 @@ ollsoft-company-os/
 │                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
 ├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
 ├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
+├── .claude/skills/install-company-os/  the agent-guided installer (run from your own computer)
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
 └── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · unified-views · agent-chat · public-sharing · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
 ```
