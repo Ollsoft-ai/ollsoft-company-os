@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Bounded, privacy-preserving auditd findings as JSON, for a daily security
+brief (a Hermes job, the maintenance agent, a person).
+
+    sudo kb-audit-digest --since 2026-09-30T00:00:00+02:00 --until 2026-10-01T00:00:00+02:00
+
+Reads only the keys in scripts/kb-audit.rules. Emits who, which rule, when and
+which path or program — never command arguments, never file contents.
+
+Who: the login uid when there is one (SSH), otherwise the uid the process ran
+as (everything the web app starts). Dropped: services and root, and the
+members of the platform's admin group as it is NOW — no names are baked in,
+so a new hire is covered and a new admin is not reported. The full record
+stays in /var/log/audit for a deliberate look (`ausearch -k <key> -i`).
+
+Refused opens and tool runs (sudo, passwd, chmod…) are summarised per person
+and rule — count, first/last, top paths and programs: once web sessions are
+audited, browsing, agent searches and everyday chmods happen all day, and one
+line each would bury the findings that matter. Those come first, one per
+event: someone else's private folder, a sensitive folder, platform config,
+identity / sudo / SSH / audit configuration.
+
+Installed root-owned as /usr/local/sbin/kb-audit-digest. install-audit.sh
+--reader <user> lets one person run exactly this with sudo, which is why it
+must never live anywhere that person can write.
+"""
+from __future__ import annotations
+
+import argparse
+import grp
+import json
+import os
+import pwd
+import re
+import subprocess
+from collections import Counter
+from datetime import datetime
+
+KEYS = {
+    "denied_file_access", "kb_cross_user_access", "kb_sensitive_access",
+    "kb_hr_access",  # name used by hand-written rule files before kb-audit.rules
+    "kb_os_config_change", "privilege_tool", "account_tool", "permission_tool",
+    "identity_config", "privilege_config", "ssh_config", "audit_config",
+}
+SUMMARISED = {"denied_file_access", "privilege_tool", "account_tool", "permission_tool"}
+MAX_FINDINGS = 300
+
+
+def kb_env(name: str, default: str) -> str:
+    try:
+        with open("/etc/kb/kb.env") as f:
+            for line in f:
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip().strip("'\"") or default
+    except OSError:
+        pass
+    return default
+
+
+def admins() -> set[str]:
+    try:
+        return set(grp.getgrnam(kb_env("KB_ADMIN_GROUP", "sudo")).gr_mem)
+    except KeyError:
+        return set()
+
+
+def is_person(name: str) -> bool:
+    try:
+        uid = pwd.getpwnam(name).pw_uid
+    except KeyError:
+        return name.isdigit() and 1000 <= int(name) < 65534
+    return 1000 <= uid < 65534
+
+
+def field(text: str, name: str) -> str | None:
+    m = re.search(rf"(?:^|\s){re.escape(name)}=(?:'([^']*)'|\"([^\"]*)\"|([^\s]+))", text)
+    return next((x for x in m.groups() if x is not None), None) if m else None
+
+
+def parse(record: str, skip: set[str], repo: str) -> dict | None:
+    key = next((k for k in KEYS
+                if re.search(rf"(?:^|\s)key=(?:'|\")?{re.escape(k)}(?:'|\")?(?:\s|$)", record)), None)
+    if not key:
+        return None
+    auid, uid = field(record, "auid"), field(record, "uid")
+    actor = auid if auid and auid not in {"unset", "4294967295", "-1"} else (uid or "unknown")
+    if actor in skip or not is_person(actor):
+        return None
+    paths = []
+    # Interpreted PATH records print the name unquoted, spaces and all, so read
+    # up to the field that follows it rather than up to the first space.
+    for p in re.findall(r"\bname=(.+?) (?=(?:inode|nametype|dev|mode)=)", record):
+        p = p.strip("'\"")
+        if p and p != "(null)" and p not in paths:
+            paths.append(p)
+    if key == "kb_cross_user_access" and any(p.startswith(f"{repo}/users/{actor}/") for p in paths):
+        return None  # their own folder (defensive: the rule already compares owners)
+    when = None
+    m = re.search(r"audit\((\d{2})/(\d{2})/(\d{2,4}) (\d{2}):(\d{2}):(\d{2})", record)
+    if m:
+        mo, d, y, h, mi, s = map(int, m.groups())
+        when = datetime(y + 2000 if y < 100 else y, mo, d, h, mi, s).astimezone().isoformat(timespec="seconds")
+    return {"time": when, "actor": actor, "key": key, "success": field(record, "success"),
+            "executable": field(record, "exe"), "paths": paths[:5]}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--since", required=True, help="ISO datetime, e.g. 2026-09-30T00:00:00+02:00")
+    ap.add_argument("--until", required=True, help="ISO datetime")
+    args = ap.parse_args()
+
+    def stamp(v: str) -> list[str]:
+        dt = datetime.fromisoformat(v).astimezone()
+        return [dt.strftime("%m/%d/%y"), dt.strftime("%H:%M:%S")]
+
+    # C locale: ausearch parses --start/--end and prints audit(...) by locale.
+    env = dict(os.environ, LC_ALL="C", LANG="C")
+    proc = subprocess.run(["/usr/sbin/ausearch", "--start", *stamp(args.since),
+                           "--end", *stamp(args.until), "--interpret"],
+                          text=True, capture_output=True, env=env)
+    if proc.returncode not in {0, 1}:  # 1 = nothing matched
+        print(json.dumps({"ok": False, "error": proc.stderr.strip() or "ausearch failed"}))
+        return 2
+
+    repo = kb_env("KB_REPO", "/srv/kb")
+    skip = admins() | {"root"}
+    findings, seen, summary = [], set(), {}
+    for chunk in re.split(r"^----\s*$", proc.stdout, flags=re.MULTILINE):
+        item = parse(chunk.strip(), skip, repo) if chunk.strip() else None
+        if not item:
+            continue
+        if item["key"] in SUMMARISED:
+            d = summary.setdefault((item["actor"], item["key"]), {
+                "count": 0, "first": item["time"], "last": item["time"],
+                "paths": Counter(), "executables": Counter(), "failed": 0})
+            d["count"] += 1
+            d["last"] = item["time"] or d["last"]
+            d["paths"].update(item["paths"][:1])
+            d["executables"][item["executable"]] += 1
+            d["failed"] += item["success"] == "no"
+            continue
+        sig = (item["time"], item["actor"], item["key"], item["executable"], tuple(item["paths"]))
+        if sig not in seen:
+            seen.add(sig)
+            findings.append(item)
+    for (actor, key), d in sorted(summary.items(), key=lambda kv: -kv[1]["count"]):
+        findings.append({"time": d["first"], "last": d["last"], "actor": actor, "key": key,
+                         "count": d["count"], "failed": d["failed"],
+                         "paths": [p for p, _ in d["paths"].most_common(10)],
+                         "executables": [e for e, _ in d["executables"].most_common(3)]})
+    print(json.dumps({"ok": True, "since": args.since, "until": args.until,
+                      "admins_excluded": sorted(skip - {"root"}),
+                      "truncated": len(findings) > MAX_FINDINGS,
+                      "findings": findings[:MAX_FINDINGS]}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

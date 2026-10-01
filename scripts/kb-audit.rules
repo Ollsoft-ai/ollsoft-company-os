@@ -1,0 +1,72 @@
+## Company OS host audit rules. Installed by scripts/install-audit.sh as
+## /etc/audit/rules.d/50-kb-security.rules with @REPO@ filled in. Summarised
+## daily by kb-audit-digest; the full record stays in /var/log/audit.
+##
+## No usernames, on purpose: every rule applies to every person, including
+## anyone created after install. Admins are not exempted here — the digest
+## drops them when it reads the log, using the admin group as it is that day.
+##
+## People are matched by the uid their process RUNS AS (uid>=1000), not by
+## the login uid: the web app starts each person's backend, terminal and
+## agents with runuser, which sets no login uid, so auid-based rules see
+## SSH sessions only. Services run below 1000 (kbindexer, kbshare) and the
+## hub and syncd as root, so none of them land here. 65534 is nobody.
+
+# Path-only handles (O_PATH) read and change nothing. The web backend opens
+# one for every folder each time it draws a file tree — other people's
+# folders included — so these would drown the rules below. First matching
+# rule wins: they must stay first.
+-a never,exit -F arch=b64 -S openat -F a2&0x200000
+-a never,exit -F arch=b64 -S open -F a1&0x200000
+-a never,exit -F arch=b32 -S openat -F a2&0x200000
+-a never,exit -F arch=b32 -S open -F a1&0x200000
+
+# A person refused a file.
+-a always,exit -F arch=b64 -S open,openat,openat2,creat,truncate -F exit=-EACCES -F uid>=1000 -F uid!=65534 -k denied_file_access
+-a always,exit -F arch=b64 -S open,openat,openat2,creat,truncate -F exit=-EPERM -F uid>=1000 -F uid!=65534 -k denied_file_access
+-a always,exit -F arch=b32 -S open,openat,openat2,creat,truncate -F exit=-EACCES -F uid>=1000 -F uid!=65534 -k denied_file_access
+-a always,exit -F arch=b32 -S open,openat,openat2,creat,truncate -F exit=-EPERM -F uid>=1000 -F uid!=65534 -k denied_file_access
+
+# A person touching a file in someone else's private folder: the file belongs
+# to a person (obj_uid>=1000, so service-owned sidecars do not count) and that
+# person is not the one acting. Succeeds only through a share or a mistake.
+-a always,exit -F arch=b64 -S open,openat,openat2,creat,truncate,unlink,unlinkat,rename,renameat,renameat2 -F dir=@REPO@/users -F perm=rwa -F success=1 -F uid>=1000 -F uid!=65534 -F obj_uid>=1000 -C uid!=obj_uid -k kb_cross_user_access
+
+# A person writing platform config directly (the API writes it as root).
+-a always,exit -F arch=b64 -S open,openat,openat2,creat,truncate,unlink,unlinkat,rename,renameat,renameat2 -F dir=@REPO@/.os -F perm=wa -F success=1 -F uid>=1000 -F uid!=65534 -k kb_os_config_change
+
+# Privilege, account and permission tools — anyone, root included.
+-w /usr/bin/sudo -p x -k privilege_tool
+-w /usr/bin/su -p x -k privilege_tool
+-w /usr/bin/newgrp -p x -k privilege_tool
+-w /usr/sbin/visudo -p x -k privilege_tool
+-w /usr/bin/passwd -p x -k account_tool
+-w /usr/bin/chsh -p x -k account_tool
+-w /usr/bin/chfn -p x -k account_tool
+-w /usr/bin/gpasswd -p x -k account_tool
+-w /usr/sbin/useradd -p x -k account_tool
+-w /usr/sbin/usermod -p x -k account_tool
+-w /usr/sbin/userdel -p x -k account_tool
+-w /usr/sbin/groupadd -p x -k account_tool
+-w /usr/sbin/groupmod -p x -k account_tool
+-w /usr/sbin/groupdel -p x -k account_tool
+-w /usr/bin/setfacl -p x -k permission_tool
+-w /usr/bin/chmod -p x -k permission_tool
+-w /usr/bin/chown -p x -k permission_tool
+
+# Security configuration.
+-w /etc/passwd -p wa -k identity_config
+-w /etc/shadow -p wa -k identity_config
+-w /etc/group -p wa -k identity_config
+-w /etc/gshadow -p wa -k identity_config
+-w /etc/sudoers -p wa -k privilege_config
+-w /etc/sudoers.d -p wa -k privilege_config
+-w /etc/ssh -p wa -k ssh_config
+-w /etc/audit -p wa -k audit_config
+
+# Sensitive folders (HR, finance…) are appended below by install-audit.sh
+# from /etc/kb/audit-watch.list — paths, never people. Changes only (-p wa):
+# reads by the folder's own group are its purpose, a refused read by anyone
+# else is already denied_file_access, and who opened what in the web app is
+# the hub's own audit (document.open / file.download). Watching reads logged
+# the web backend's every file-tree refresh: ~50,000 lines a day per viewer.

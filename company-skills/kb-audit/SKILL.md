@@ -22,6 +22,7 @@ A false alarm costs trust; the next real one gets ignored.
 | Sync daemon | `journalctl -u kb-syncd --since yesterday` | live editing, revocations, room retires |
 | Shell access | `journalctl -u ssh --since yesterday` | SSH logins (key-only since 2026-08-24) |
 | Root use | `journalctl --since yesterday | grep 'sudo:.*COMMAND'` | privilege escalation attempts |
+| **Host audit** | `sudo kb-audit-digest --since <ISO> --until <ISO>` · raw: `sudo ausearch -k <key> -i` | refused file opens, someone else's private folder, direct `.os` writes, sudo/account/permission tools, identity/sudoers/SSH/audit config, changes in sensitive folders — web sessions and SSH alike |
 
 Audit lines look like:
 
@@ -50,6 +51,15 @@ those). Read each for exactly what it says:
 One `document.open` per accepted session, not per keystroke — but a reconnect
 (dropped wifi, reopened tab, a lineage refresh) is a new join and a new line, so
 count *people and documents*, never lines.
+
+## Reading the host audit (auditd)
+
+- **Who** is the login uid for SSH, otherwise the uid the process ran as — the web app starts terminals, agents and backends with `runuser`, which sets no login uid.
+- **The digest drops admins** (the admin group as it is today) and services; `ausearch` still has them.
+- **Refused opens and tool runs come summarised per person.** Browsing and agent searches bump into restricted folders all day. The pattern is the finding: repeated attempts at one person's `users/` folder or a sensitive folder, failed `sudo`.
+- **Sensitive folders log changes, not reads.** Who opened an HR document in the browser is the hub's `document.open` above.
+- **The rules name nobody** (`scripts/kb-audit.rules`), so new accounts are covered. Sensitive folders: `/etc/kb/audit-watch.list`, added with `install-audit.sh --watch`.
+- **Before `install-audit.sh` (2026-10-01) the rules only saw SSH sessions** — an empty digest from before then proves nothing.
 
 ## What the AI costs (semantic search)
 
