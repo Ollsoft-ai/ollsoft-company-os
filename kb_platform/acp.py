@@ -34,7 +34,7 @@ The WebSocket (/acp?agent=<id>) carries two kinds of text frames:
     {"kb":"u","sessionId":S,"seq":N,"m":{…}}   a relayed session/update
                         (or any other agent notification) — logged per
                         session so a reconnecting tab can catch up
-    {"kb":"turn","sessionId":S,"seq":N,"stopReason":"…"}   a prompt ended
+    {"kb":"turn","sessionId":S,"seq":N,"stopReason":"…","running":B}   a prompt ended (B: another is still in flight)
     {"kb":"req","m":{…}}   an agent→client request for the owning tab
     {"kb":"reset","sessionId":S,"base":N}   the log no longer reaches back
                         to what you had — use session/load
@@ -355,7 +355,16 @@ class SessionLog:
         self.base = 0
         self.entries: list[tuple[int, dict]] = []
         self.bytes = 0
-        self.turn_running = False
+        # Prompts forwarded and not answered yet. Usually 0 or 1, but "Send now"
+        # can put the next prompt in before the agent has confirmed the stop of
+        # the one in front of it: a plain flag then went False on the first
+        # answer while the second prompt was still running, and every tab that
+        # re-attached was told the chat was idle.
+        self.turns_open = 0
+
+    @property
+    def turn_running(self) -> bool:
+        return self.turns_open > 0
 
     def add(self, obj: dict) -> int:
         n = self.seq
@@ -589,7 +598,7 @@ class AgentProc:
         self.pending_out[rid] = (conn, msg.get("id"), method, params)
         sid = params.get("sessionId") if isinstance(params, dict) else None
         if method == "session/prompt" and isinstance(sid, str):
-            self.log_for(sid).turn_running = True
+            self.log_for(sid).turns_open += 1
         if method == "session/load" and isinstance(sid, str):
             self.log_for(sid).clear()      # the replay IS the history
             self.owner[sid] = conn
@@ -599,6 +608,9 @@ class AgentProc:
             await self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         except RpcError as e:
             self.pending_out.pop(rid, None)
+            if method == "session/prompt" and isinstance(sid, str):   # it never reached the agent
+                lg = self.log_for(sid)
+                lg.turns_open = max(0, lg.turns_open - 1)
             await conn.send({"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": e.code, "message": e.message}})
 
     def _fix_params(self, method: str, params):
@@ -684,6 +696,10 @@ class AgentProc:
                 if not fut.done():
                     fut.cancel()
             self.pending_in.clear()
+            # nothing is running in a process that is gone: left set, every tab
+            # attaching afterwards was told a turn was running — "Working…" for ever
+            for lg in self.logs.values():
+                lg.turns_open = 0
             for c in list(self.conns):
                 await c.send({"kb": "exit", "code": self.exit_code})
             self.init = None
@@ -758,12 +774,16 @@ class AgentProc:
                 self.warm_later(params.get("cwd"))
         if method == "session/prompt" and isinstance(sid, str):
             lg = self.log_for(sid)
-            lg.turn_running = False
+            lg.turns_open = max(0, lg.turns_open - 1)
             stop = result.get("stopReason") if isinstance(result, dict) else None
+            # `running`: is another prompt still in flight in this session — the
+            # one a "Send now" put behind this turn? A tab must not stop showing
+            # it as working just because the turn in front of it ended.
             n = lg.add({"kb": "turn", "sessionId": sid, "stopReason": stop or ("error" if "error" in msg else None),
-                        "error": msg.get("error")})
+                        "error": msg.get("error"), "running": lg.turn_running})
             for c in list(self.conns):
-                await c.send({"kb": "turn", "sessionId": sid, "seq": n, "stopReason": stop, "error": msg.get("error")})
+                await c.send({"kb": "turn", "sessionId": sid, "seq": n, "stopReason": stop, "error": msg.get("error"),
+                              "running": lg.turn_running})
             try:
                 remember_chat(sid, self.agent["id"], self.cwd)
             except OSError:

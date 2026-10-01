@@ -54,12 +54,21 @@ FAKE_AGENT = textwrap.dedent(r'''
                 send({"jsonrpc": "2.0", "id": req_id, "method": "fs/read_text_file", "params": {"sessionId": sid, "path": "/etc/passwd"}})
                 ans = json.loads(sys.stdin.readline())
                 send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "fs said " + str(ans.get("error", {}).get("code"))}}}})
+            if "slow" in text:
+                time.sleep(0.6)          # long enough for the next prompt to go in behind it
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
         elif method == "session/cancel":
             pass
         else:
             send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found"}})
 ''')
+
+
+def upd(frame):
+    """The session update a "u" frame carries — {} for the loose ones (the agent's
+    _auth/status_update at start-up arrives as a "u" too, with no update in it;
+    reading ["update"] made every test that scans the frames flaky)."""
+    return ((frame.get("m") or {}).get("params") or {}).get("update") or {}
 
 
 class FakeWS:
@@ -185,8 +194,64 @@ def test_permission_requests_reach_the_owner_and_the_answer_goes_back(fake_agent
         assert done and done[0]["id"] == req["m"]["id"]
         assert done[0]["optionId"] == "allow-once" and done[0]["label"] == "Allow" and done[0]["kind"] == "allow_once"
         assert proc.meta["sess-1"]["modes"]["currentModeId"] == "ask", "a reattaching tab gets the session's modes"
-        tool = [u for u in ws.by("u") if u["m"]["params"]["update"].get("sessionUpdate") == "tool_call"]
-        assert tool[-1]["m"]["params"]["update"]["status"] == "completed"
+        tool = [u for u in ws.by("u") if upd(u).get("sessionUpdate") == "tool_call"]
+        assert upd(tool[-1])["status"] == "completed"
+        await proc.stop()
+    asyncio.run(run())
+
+
+def _prompt(proc, conn, rid, text):
+    return proc.forward_request(conn, {"jsonrpc": "2.0", "id": rid, "method": "session/prompt",
+                                       "params": {"sessionId": "sess-1", "prompt": [{"type": "text", "text": text}]}})
+
+
+def test_a_turn_ending_with_the_next_prompt_in_flight_leaves_the_chat_running(fake_agent):
+    """"Send now" can put the next prompt in before the agent has confirmed
+    the stop of the one in front of it. The first answer must not mark the
+    chat idle: with a single flag it did, and a tab re-attaching then was told
+    nothing ran while the second prompt was still being worked on."""
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        ws = FakeWS(); conn = acp.Conn(ws)
+        proc.conns.add(conn)
+        await proc.forward_request(conn, {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {}})
+        await ws.wait_for(lambda m: m.get("id") == 1)
+        await _prompt(proc, conn, 2, "a slow one")
+        await _prompt(proc, conn, 3, "the next slow one")  # in before the first is answered
+        assert proc.log_for("sess-1").turns_open == 2
+        first = await ws.wait_for(lambda m: m.get("kb") == "turn")
+        assert first["running"] is True, "the turn frame says the next prompt is still in flight"
+        ws2 = FakeWS(); conn2 = acp.Conn(ws2)
+        proc.conns.add(conn2)
+        await proc.attach(conn2, "sess-1", 0)
+        assert ws2.by("attached")[0]["running"] is True, "a re-attaching tab is told the chat still works"
+        await ws.wait_for(lambda m: m.get("id") == 3)
+        last = ws.by("turn")[-1]
+        assert last["running"] is False and proc.log_for("sess-1").turn_running is False
+        await proc.stop()
+    asyncio.run(run())
+
+
+def test_an_agent_that_dies_mid_turn_leaves_nothing_running(fake_agent):
+    """The exit path errors the open prompts; it used to leave the running
+    flag set, and every tab attaching afterwards showed "Working…" for ever."""
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        ws = FakeWS(); conn = acp.Conn(ws)
+        proc.conns.add(conn)
+        await proc.forward_request(conn, {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {}})
+        await ws.wait_for(lambda m: m.get("id") == 1)
+        await _prompt(proc, conn, 2, "a slow one")
+        assert proc.log_for("sess-1").turn_running is True
+        proc.proc.kill()
+        await ws.wait_for(lambda m: m.get("kb") == "exit")
+        assert proc.log_for("sess-1").turn_running is False
+        ws2 = FakeWS(); conn2 = acp.Conn(ws2)
+        proc.conns.add(conn2)
+        await proc.attach(conn2, "sess-1", 0)
+        assert ws2.by("attached")[0]["running"] is False
         await proc.stop()
     asyncio.run(run())
 
@@ -202,8 +267,8 @@ def test_fs_requests_are_refused_because_the_agent_does_its_own_io(fake_agent):
         await proc.forward_request(conn, {"jsonrpc": "2.0", "id": 2, "method": "session/prompt",
                                           "params": {"sessionId": "sess-1", "prompt": [{"type": "text", "text": "unknown method"}]}})
         await ws.wait_for(lambda m: m.get("kb") == "turn")
-        texts = [u["m"]["params"]["update"]["content"]["text"] for u in ws.by("u")
-                 if u["m"]["params"]["update"].get("sessionUpdate") == "agent_message_chunk"]
+        texts = [upd(u)["content"]["text"] for u in ws.by("u")
+                 if upd(u).get("sessionUpdate") == "agent_message_chunk"]
         assert "fs said -32601" in texts
         await proc.stop()
     asyncio.run(run())

@@ -681,6 +681,86 @@ def test_send_now_pushes_a_queued_message_past_the_running_turn(browser):
     ctx.close()
 
 
+def test_the_turn_send_now_starts_keeps_showing_as_working(browser):
+    """The turn in front ends twice on the wire: its "turn" frame, then the
+    answer to its prompt. The frame ends it and sends the queued message; the
+    answer, arriving a moment later, used to end the NEW turn on screen —
+    "Working…" gone while the agent worked on the message just sent."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    page.fill('[data-testid="chat-input"]', "tell me a slow story")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-send.stop", timeout=10000)
+    page.fill('[data-testid="chat-input"]', "then this slow one")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-msg.user.queued", timeout=5000)
+    page.click(".chat-queued-go")
+    page.wait_for_function("() => !document.querySelector('.chat-msg.user.queued')", timeout=15000)
+    page.wait_for_timeout(1200)       # well inside the second turn (2.5 s), well after the first one's answer
+    assert page.evaluate("() => " + CHATVIEW + ".running") is True, "the turn just sent shows as working"
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.chat-msg.agent')].some(e => e.textContent.includes('then this slow one'))",
+        timeout=20000)
+    page.wait_for_function("() => !" + CHATVIEW + ".running", timeout=20000)
+    ctx.close()
+
+
+def test_a_stop_given_up_on_does_not_end_the_turn_sent_after_it(browser):
+    """An agent slower to stop than the 5 s fallback: the fallback ends the
+    turn on screen and sends the queued message, and the stopped turn's own
+    end arrives later still. That late end must not switch off the turn that
+    is running now — nor add another "Interrupted"."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    page.fill('[data-testid="chat-input"]', "tell me a glacial story")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-send.stop", timeout=10000)
+    page.fill('[data-testid="chat-input"]', "then this slow one")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-msg.user.queued", timeout=5000)
+    page.click(".chat-queued-go")                      # the echo ignores the stop: the fallback fires
+    page.wait_for_function("() => !document.querySelector('.chat-msg.user.queued')", timeout=15000)
+    # the glacial turn ends at ~7 s, the next one runs ~2.5 s after that
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.chat-msg.agent')].some(e => e.textContent.includes('glacial story'))",
+        timeout=20000)
+    page.wait_for_timeout(800)
+    assert page.evaluate("() => " + CHATVIEW + ".running") is True, "the late end of the stopped turn ended nothing"
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.chat-msg.agent')].some(e => e.textContent.includes('then this slow one'))",
+        timeout=20000)
+    page.wait_for_function("() => !" + CHATVIEW + ".running", timeout=20000)
+    notes = page.evaluate("() => [...document.querySelectorAll('.chat-note')].filter(n => n.textContent.includes('Interrupted')).length")
+    assert notes == 1, notes
+    ctx.close()
+
+
+def test_a_dead_socket_is_noticed_on_coming_back_and_the_turn_settles(browser):
+    """What a phone gets back after sleeping: a socket that still says OPEN
+    but delivers nothing. No close event, so nothing reconnected, and a turn
+    that ended meanwhile kept "Working…" for ever. Coming back to the page
+    probes the socket, gives up on the silent one, re-attaches — and the
+    backend's word ends the turn, with the reply and no "connection dropped"."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    page.fill('[data-testid="chat-input"]', "tell me a slow story")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-send.stop", timeout=10000)
+    page.evaluate("() => { " + CHATVIEW + ".conn.ws.onmessage = () => {}; }")   # deaf from here on
+    page.wait_for_timeout(4500)                                                   # the turn ends unseen
+    assert page.evaluate("() => " + CHATVIEW + ".running") is True                # the bug's starting point
+    page.evaluate("() => document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_function("() => !" + CHATVIEW + ".running", timeout=15000)
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.chat-msg.agent')].some(e => e.textContent.includes('slow story'))",
+        timeout=10000)
+    assert page.locator(".chat-unsent").count() == 0, "the prompt did arrive: nothing to retry"
+    ctx.close()
+
+
 def test_a_replay_does_not_start_the_clock_and_the_backend_can_stop_it(browser):
     """The reattach rule, both halves, driven directly: a chunk arriving as
     part of a replay is the past and must not start the clock, and "attached"

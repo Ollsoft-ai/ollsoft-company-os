@@ -95,7 +95,9 @@ def main():
             hist = SESSIONS.setdefault(sid, [])
             def emit(upd):
                 hist.append(upd); update(sid, upd)
-            if "slow" in text:
+            if "glacial" in text:
+                time.sleep(7)            # longer than the client's 5 s stop fallback
+            elif "slow" in text:
                 time.sleep(2.5)          # a turn long enough to type into (queueing)
             emit({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}})
             emit({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "The person said: " + text[:60]}})

@@ -204,6 +204,8 @@ class AgentConn {
     this.error = null;
     this.stderr = [];
     this.timer = null;
+    this.lastMsg = Date.now();  // when the socket last proved it leads somewhere
+    this.probeTimer = null;
     this.connect();
   }
   connect() {
@@ -212,22 +214,52 @@ class AgentConn {
     const ws = new WebSocket(shell.wsBase() + "/acp?agent=" + encodeURIComponent(this.agentId));
     this.ws = ws;
     ws.onopen = () => { this.retries = 0; };
-    ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } this.onMessage(m); };
-    ws.onclose = () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      for (const [, p] of this.pending) p.reject(new Error("connection lost"));
-      this.pending.clear();
-      for (const v of this.tabs) v.onDisconnected();
-      if (this.closedByUs) return;
-      // nobody is looking at this one (it was opened ahead of a chat, to warm
-      // the agent up): it is not worth reconnecting to, and a silent retry
-      // loop against an agent that refuses is worth even less
-      if (!this.tabs.size) { conns.delete(this.agentId); return; }
-      const wait = Math.min(15000, 1000 * Math.pow(2, this.retries++));
-      this.timer = setTimeout(() => this.connect(), wait);
+    ws.onmessage = (ev) => {
+      this.lastMsg = Date.now();
+      if (this.probeTimer) { clearTimeout(this.probeTimer); this.probeTimer = null; }
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; } this.onMessage(m);
     };
+    ws.onclose = () => { if (this.ws === ws) this.dropped(); };
     ws.onerror = () => { /* onclose follows */ };
+  }
+  // The socket is gone (closed, or given up on by restart): fail what waited
+  // on it, tell the tabs, and come back after a backoff.
+  dropped() {
+    this.ws = null;
+    clearTimeout(this.probeTimer); this.probeTimer = null;
+    for (const [, p] of this.pending) p.reject(new Error("connection lost"));
+    this.pending.clear();
+    for (const v of this.tabs) v.onDisconnected();
+    if (this.closedByUs) return;
+    // nobody is looking at this one (it was opened ahead of a chat, to warm
+    // the agent up): it is not worth reconnecting to, and a silent retry
+    // loop against an agent that refuses is worth even less
+    if (!this.tabs.size) { conns.delete(this.agentId); return; }
+    const wait = Math.min(15000, 1000 * Math.pow(2, this.retries++));
+    this.timer = setTimeout(() => this.connect(), wait);
+  }
+  // A phone that sleeps comes back holding a socket that still says OPEN but
+  // leads nowhere: no close event ever fires, nothing reconnects, and a turn
+  // that ended meanwhile stays "Working…" for ever. So on the way back, ask:
+  // every tab re-attaches, and the backend answers with what was missed and
+  // whether the turn still runs. Silence for a few seconds means the socket
+  // is dead — drop it and connect afresh, which re-attaches the same way.
+  probe() {
+    if (this.closedByUs || !this.tabs.size) return;
+    if (!this.ws) { clearTimeout(this.timer); this.retries = 0; this.connect(); return; }   // in a backoff: go now
+    if (this.ws.readyState !== 1 || this.probeTimer) return;                                  // connecting, or already asking
+    const views = [...this.tabs].filter((v) => v.sessionId && !v.attaching);
+    if (!views.length) return;
+    this.probeTimer = setTimeout(() => this.restart(), PROBE_MS);
+    for (const v of views) v.attach(v.seq);
+  }
+  restart() {
+    const ws = this.ws;
+    this.probeTimer = null;
+    if (!ws) return;
+    this.retries = 0;
+    this.dropped();
+    try { ws.close(); } catch (e) { /* already gone */ }
   }
   close() { this.closedByUs = true; clearTimeout(this.timer); if (this.ws) this.ws.close(); conns.delete(this.agentId); }
   send(obj) {
@@ -269,6 +301,24 @@ class AgentConn {
     }
   }
 }
+// When to ask whether a socket is still there (see AgentConn.probe): coming
+// back to the page, the page restored from the back/forward cache, the network
+// returning — and a turn that has shown nothing for a while, since a proxy's
+// idle timeout or a network change can kill a socket with the page in view.
+const PROBE_MS = 4000;
+let hiddenAt = 0;
+function probeAll() { for (const c of conns.values()) c.probe(); }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+  if (Date.now() - hiddenAt > 1000) probeAll();
+});
+window.addEventListener("pageshow", (e) => { if (e.persisted) probeAll(); });
+window.addEventListener("online", probeAll);
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  for (const c of conns.values())
+    if (Date.now() - c.lastMsg > 45000 && [...c.tabs].some((v) => v.running)) c.probe();
+}, 15000);
 function agentConn(agentId) {
   let c = conns.get(agentId);
   if (!c) { c = new AgentConn(agentId); conns.set(agentId, c); }
@@ -345,6 +395,9 @@ class ChatView {
     this.attaching = false;       // between our attach and the backend's "attached": frames wait in order
     this.buffer = [];
     this.outbox = [];             // prompts that could not go: sent when the connection is back
+    this.inDoubt = [];            // prompts whose answer a dropped socket swallowed: did they arrive?
+    this.turnNo = 0;              // which prompt this tab sent last: an answer to an older one ends nothing
+    this.unconfirmed = 0;         // turns let go by the stop fallback whose "turn" frame is still to come
     this.cancelTimer = null;
     this.statusText = ""; this.statusKind = "";
     this.turnStart = 0; this.ticker = null; this.frame = 0;
@@ -1336,14 +1389,28 @@ class ChatView {
     this.sentEcho = item.text;
     this.setRunning(true);
     this.current = null; this.thought = null;
+    const turn = ++this.turnNo;
+    item.sentAt = this.seq;       // where the log stood when it left: the evidence after a reconnect
     try {
       const res = await this.conn.request("session/prompt", { sessionId: this.sessionId, prompt: item.prompt });
-      this.endTurn(res.stopReason);
+      // The backend sends the turn's "turn" frame before this answer, so the
+      // turn has normally ended already. And once "Send now" has put the next
+      // prompt in, this is the answer to a turn that is over: ending the turn
+      // on screen now would end the one that is running.
+      if (turn === this.turnNo && this.running) this.endTurn(res.stopReason);
     } catch (e) {
+      if (turn !== this.turnNo) return;          // about a turn this tab already let go
+      if (e.message === "connection lost") {
+        if (!this.running) return;               // its turn had ended: the answer that got lost said nothing new
+        // the socket died while the agent worked. Whether the prompt got there
+        // is for the re-attach to say — the backend knows; until then the
+        // turn shows as it was, beside "Reconnecting…"
+        this.inDoubt.push(item);
+        return;
+      }
       this.setRunning(false);
       if (e.code === -32000) { this.showPicker({ error: this.agentName() + " needs you to sign in first." }); return; }
       if (e.message === "not connected") { this.holdUnsent(item, false); return; }
-      if (e.message === "connection lost") { this.holdUnsent(item, true); return; }
       this.setStatus(e.message, "err");
     }
   }
@@ -1443,7 +1510,7 @@ class ChatView {
     // an agent that never confirms the stop: the turn is over here anyway,
     // as Claude Code gives up on it — the composer comes back
     clearTimeout(this.cancelTimer);
-    this.cancelTimer = setTimeout(() => { if (this.running) this.endTurn("cancelled"); }, 5000);
+    this.cancelTimer = setTimeout(() => { if (this.running) { this.unconfirmed++; this.endTurn("cancelled"); } }, 5000);
   }
   endTurn(stopReason) {
     clearTimeout(this.cancelTimer); this.cancelTimer = null;
@@ -1697,6 +1764,17 @@ class ChatView {
       // conversation, as Recent chats does
       const caps = (this.conn && this.conn.hello && this.conn.hello.init && this.conn.hello.init.agentCapabilities) || {};
       if (this.restored && !this.loadedOnce && m.seq === 0 && !m.running && caps.loadSession) { this.loadedOnce = true; this.loadHistory(); return; }
+      // A prompt whose answer a dead socket swallowed got there if, since it
+      // left, the log shows a turn ending or the backend says one is running.
+      // Otherwise its fate is unknown, and it waits for a hand as before.
+      if (this.inDoubt.length) {
+        const doubt = this.inDoubt; this.inDoubt = [];
+        for (const item of doubt) {
+          const arrived = m.running || frames.some((f) => f.kb === "turn" && typeof f.seq === "number" && f.seq >= (item.sentAt || 0));
+          if (!arrived) { this.setRunning(false); this.holdUnsent(item, true); }
+        }
+      }
+      this.unconfirmed = 0;       // what follows is the backend's word, not a stop we gave up on
       // the backend is the truth about whether a turn is running — in both
       // directions. Only ever switching it on is what left a finished chat
       // spinning with a counting clock until you pressed stop.
@@ -1711,7 +1789,19 @@ class ChatView {
       if (m.seq < this.seq) return;   // seen already (a replay crossing the live stream)
       this.seq = m.seq + 1;
     }
-    if (m.kb === "turn") { if (this.running || m.stopReason) this.endTurn(m.stopReason || (m.error ? "error" : "end_turn")); if (m.error) this.setStatus(m.error.message || "error", "err"); return; }
+    if (m.kb === "turn") {
+      if (!this.replaying) {
+        // the late confirmation of a stop this tab already gave up waiting for
+        // (the 5 s fallback): the prompt sent after it is what runs now
+        if (this.unconfirmed > 0) { this.unconfirmed--; if (m.running !== false) return; }
+        // another prompt is still in flight — the one "Send now" put behind
+        // this turn: the chat is still working
+        else if (m.running === true) { if (!this.running) this.setRunning(true); return; }
+      }
+      if (this.running || m.stopReason) this.endTurn(m.stopReason || (m.error ? "error" : "end_turn"));
+      if (m.error) this.setStatus(m.error.message || "error", "err");
+      return;
+    }
     if (m.kb === "req") { this.onAgentRequest(m.m); return; }
     if (m.kb === "req-done") {
       const p = this.pendingPerms.get(m.id);
