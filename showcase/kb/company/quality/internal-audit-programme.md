@@ -11,6 +11,6 @@ occurred.
 | 2026-11-05 | Delivery acceptance and calibration evidence | QMS procedure | David | Planned |
 | 2026-12-08 | Corrective action effectiveness | ISO 9001 cl. 10.2 | Anna | Planned |
 
-- [ ] Prepare a five-record sample for the sales audit @krystof #audit
-- [ ] Confirm auditor independence for the ISMS audit @krystof #audit #security
-- [ ] Attach objective evidence to every finding @krystof #audit
+- [ ] Prepare a five-record sample for the sales audit @{{admin}} #audit
+- [ ] Confirm auditor independence for the ISMS audit @{{admin}} #audit #security
+- [ ] Attach objective evidence to every finding @{{admin}} #audit

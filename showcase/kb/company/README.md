@@ -50,7 +50,7 @@ The invoice is a **€7,840 net sample milestone**, not the whole contract.
 - **Explicit handovers:** winning a deal does not create a project, invoice or
   email automatically. This demo links prepared records; you can build those
   automations with scripts, agents and scheduled jobs.
-- **AI:** Claude is preinstalled for Peter and Krystof. Each user signs in with
+- **AI:** Claude is preinstalled for {{Member}} and {{Admin}}. Each user signs in with
   their own AI account. An agent can access the files its Linux user can access;
   self-hosting Company OS does not make a cloud AI provider run locally.
 
@@ -72,7 +72,7 @@ Git-versioned. Your workspace documents are ordinary files you can take with you
 
 **Can everyone edit everything?** Shared company content is collaborative.
 Projects can be restricted by group, and personal workspaces are private.
-The `demo` account is web-only, not read-only. Peter is a full non-admin user.
+The `demo` account is web-only, not read-only. {{Member}} is a full non-admin user.
 
 **What happens if two people edit?** Markdown has live collaborative editing.
 JSON tools detect stale saves and ask you to reload; simultaneous JSON writes

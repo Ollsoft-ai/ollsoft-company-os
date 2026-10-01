@@ -3,7 +3,7 @@
 **Customer:** Rheinwerk Maschinenbau GmbH (fictional)  
 **Goal:** instrument two production halls and surface avoidable standby load.  
 **Target acceptance:** 30 October 2026  
-**Business owner:** Jonas Becker · **Demo delivery delegate:** @peter
+**Business owner:** Jonas Becker · **Demo delivery delegate:** @{{member}}
 **Order:** OP-1042 / PO-RW-8841 · €148,000 net · won on 28 August 2026
 
 ## Acceptance outcomes

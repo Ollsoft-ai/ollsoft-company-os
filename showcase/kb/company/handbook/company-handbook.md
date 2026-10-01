@@ -25,11 +25,11 @@ nonconformity without hiding it.
 
 ## Demo users and responsibilities
 
-The people above are fictional process owners. Peter and Krystof are the real
+The people above are fictional process owners. {{Member}} and {{Admin}} are the real
 login accounts used to act on their behalf in this showcase. Tasks use
-`@peter` for coordination and delivery, and `@krystof` for technical review.
+`@{{member}}` for coordination and delivery, and `@{{admin}}` for technical review.
 The shared `demo` login is for exploring and editing the example; it is not a
-fictional employee. Peter belongs to the Polaris project group, but not the
+fictional employee. {{Member}} belongs to the Polaris project group, but not the
 restricted project or administrator groups.
 
 ## Cadence

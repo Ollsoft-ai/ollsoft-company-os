@@ -31,10 +31,10 @@ can reset this fictional workspace; use sample information when trying it.
 ## Your account changes what you can do
 
 `demo` can browse and edit shared demo files, including these artifacts. It has
-no terminal or scheduled jobs. `peter` has a personal workspace, Polaris access,
-and Claude Code; `krystof` also has administration access. **Claude** appears in
+no terminal or scheduled jobs. `{{member}}` has a personal workspace, Polaris access,
+and Claude Code; `{{admin}}` also has administration access. **Claude** appears in
 the top bar only for full accounts and requires the user's own Anthropic sign-in.
 
 Try the same Markdown document in two browser windows to see edits merge live.
-For permissions, compare Peter's project tree with the administrator's: the
-restricted example project is omitted from Peter's tree and search.
+For permissions, compare {{Member}}'s project tree with the administrator's: the
+restricted example project is omitted from {{Member}}'s tree and search.

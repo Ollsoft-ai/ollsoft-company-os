@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Seed the dedicated Company OS showcase with a fictional German company.
+#
+#   sudo bash scripts/seed-showcase.sh --admin <user> [--member <user>]... [--refresh]
+#   sudo bash scripts/seed-showcase.sh --undo
+#
+# The templates name people only by placeholder — {{admin}}/{{member}} for the
+# login, {{Admin}}/{{Member}} for the first name — and this fills in --admin and
+# the first --member (a non-admin, for the permission walkthrough). No --member:
+# the admin takes those tasks too.
 set -euo pipefail
 
 REPO=/srv/kb
@@ -131,6 +139,24 @@ copy_tree() {
     rsync -a --ignore-existing --chown="$owner:$group" --chmod="D$dmode,F$fmode" "$src/" "$dst/"
   fi
 }
+
+# Fill in the real people on a staging copy, so the repo's templates stay
+# generic and nothing in the knowledgebase is edited in place after copying.
+MEMBER=${MEMBERS[0]:-$ADMIN}
+[[ ${#MEMBERS[@]} -gt 0 ]] || echo "note: no --member, so $ADMIN also takes the member's tasks; the permission walkthrough needs a non-admin --member"
+first_name() {   # the hub stores "First Last" as the account's GECOS name
+  local n; n=$(getent passwd "$1" | cut -d: -f5 | cut -d, -f1); n=${n%% *}
+  [[ -n "$n" ]] && printf '%s' "$n" || printf '%s' "${1^}"
+}
+sed_safe() { printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'; }
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+cp -a "$TEMPLATES/." "$STAGE/"
+find "$STAGE" -type f \( -name '*.md' -o -name '*.html' -o -name '*.json' \) -exec sed -i \
+  -e "s|{{admin}}|$ADMIN|g" -e "s|{{member}}|$MEMBER|g" \
+  -e "s|{{Admin}}|$(sed_safe "$(first_name "$ADMIN")")|g" \
+  -e "s|{{Member}}|$(sed_safe "$(first_name "$MEMBER")")|g" {} +
+TEMPLATES=$STAGE
 
 copy_tree "$TEMPLATES/company" "$REPO/company" "$ADMIN" kb-users 2775 0664
 copy_tree "$TEMPLATES/projects/polaris-energy-gateway" "$REPO/projects/polaris-energy-gateway" "$ADMIN" "$PUBLIC_GROUP" 2770 0660

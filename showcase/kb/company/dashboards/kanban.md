@@ -16,21 +16,21 @@ evidence attached to the work rather than in a separate reporting silo.
 
 ## Ready
 
-- [ ] Prepare the Hall A installation kit @peter #polaris #delivery (due: 2026-09-24) (color: blue)
-- [ ] Run the customer acceptance rehearsal @krystof #polaris #customer (due: 2026-10-21) (color: teal)
-- [ ] Install and commission Hall A @peter #polaris #delivery (due: 2026-09-30) (color: blue)
-- [ ] Install and commission Hall B @peter #polaris #delivery (due: 2026-10-14) (color: blue)
-- [ ] Publish the operator quick guide @peter #polaris #customer (due: 2026-10-09) (color: teal)
+- [ ] Prepare the Hall A installation kit @{{member}} #polaris #delivery (due: 2026-09-24) (color: blue)
+- [ ] Run the customer acceptance rehearsal @{{admin}} #polaris #customer (due: 2026-10-21) (color: teal)
+- [ ] Install and commission Hall A @{{member}} #polaris #delivery (due: 2026-09-30) (color: blue)
+- [ ] Install and commission Hall B @{{member}} #polaris #delivery (due: 2026-10-14) (color: blue)
+- [ ] Publish the operator quick guide @{{member}} #polaris #customer (due: 2026-10-09) (color: teal)
 
 ## In progress
 
-- [ ] Approve the gateway enclosure sample @krystof #polaris #quality #blocked (due: 2026-09-18) (color: yellow)
-- [ ] Close coating supplier action CA-2026-014 @peter #qms #quality (due: 2026-09-18) (color: orange)
+- [ ] Approve the gateway enclosure sample @{{admin}} #polaris #quality #blocked (due: 2026-09-18) (color: yellow)
+- [ ] Close coating supplier action CA-2026-014 @{{member}} #qms #quality (due: 2026-09-18) (color: orange)
 
 ## Verification
 
-- [ ] Verify the telemetry-retention control @krystof #polaris #security (due: 2026-09-12) (color: red)
+- [ ] Verify the telemetry-retention control @{{admin}} #polaris #security (due: 2026-09-12) (color: red)
 
 ## Done
 
-- [x] Release gateway firmware 2.4 @peter #platform #product (color: green)
+- [x] Release gateway firmware 2.4 @{{member}} #platform #product (color: green)

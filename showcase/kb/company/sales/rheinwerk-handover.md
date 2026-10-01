@@ -3,7 +3,7 @@
 **Fictional approved record · 28 August 2026**  
 **Opportunity:** OP-1042 · **Order:** PO-RW-8841 · **Contract:** €148,000 net  
 **Commercial reviewer:** Mina Yilmaz · **Technical reviewer:** Sara Novak  
-**Delivery owner:** Jonas Becker · **Demo delegates:** @peter and @krystof
+**Delivery owner:** Jonas Becker · **Demo delegates:** @{{member}} and @{{admin}}
 
 ## Accepted scope
 

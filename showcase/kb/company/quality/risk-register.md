@@ -11,6 +11,6 @@ ISO 31000 pattern: identify, analyse, evaluate, treat, monitor and communicate.
 | R-031 | Risk | Telemetry service interruption | 2 | 5 | 10 | Sara | Quarterly restore and failover exercise | 2026-09-30 |
 | O-008 | Opportunity | Energy-report API as premium module | 4 | 3 | 12 | Lukas | Validate with three pipeline accounts | 2026-10-02 |
 
-- [ ] Obtain second-source enclosure sample @peter #risk #supplier #blocked
-- [ ] Add SSO discovery questions to pipeline checklist @krystof #risk #sales
-- [ ] Interview three customers about reporting API @peter #opportunity #product
+- [ ] Obtain second-source enclosure sample @{{member}} #risk #supplier #blocked
+- [ ] Add SSO discovery questions to pipeline checklist @{{admin}} #risk #sales
+- [ ] Interview three customers about reporting API @{{member}} #opportunity #product

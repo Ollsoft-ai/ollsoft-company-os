@@ -22,14 +22,16 @@ invoice. The scenario date is 6 September 2026; final acceptance is 30 October.
 
 Pipeline and invoice check for stale content before saving, but their read and
 write are not an atomic transaction. Do not promise concurrent CRM editing.
-The fixture personas are fictional; actionable assignments use actual accounts
-`peter` and `krystof`. The `demo` account can edit shared files but has no terminal.
-Peter should have Polaris access but not Helios or other users' private folders.
+The fixture personas are fictional; actionable assignments go to real accounts,
+written in the templates as `{{admin}}` and `{{member}}` (`{{Admin}}`/`{{Member}}`
+for first names). `seed-showcase.sh` fills in `--admin` and the first `--member`.
+The `demo` account can edit shared files but has no terminal. The member should
+have Polaris access but not Helios or other users' private folders.
 
 ## Applying changes
 
 Use the dedicated demo VM, never the operator's production workspace. Pull the
-versioned source and use `scripts/seed-showcase.sh --admin krystof --member peter
+versioned source and use `scripts/seed-showcase.sh --admin <admin> --member <user>
 --refresh` only when intentionally resetting seeded content. This overwrites
 matching seeded files and JSON, but keeps unrelated files. For screenshots or an
 isolated correction, install only the changed files with the existing ownership
@@ -47,7 +49,7 @@ Chromium. This checks artifact behavior with a sandboxed mock host. Also check
 the real deployment: fresh login opens the tour; links and four README images
 work; pipeline refuses an incomplete review and saves a complete one; invoice
 rejects invalid quantities and exports a readable PDF; Kanban updates Markdown;
-Cockpit filters real tasks; Peter sees Polaris but not Helios. Remove only files
+Cockpit filters real tasks; the member sees Polaris but not Helios. Remove only files
 created by your tests and restore any JSON fixtures changed during testing.
 
 Recheck the onboarding in a fresh session for `demo` and a full user, plus a

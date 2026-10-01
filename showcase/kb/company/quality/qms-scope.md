@@ -24,6 +24,6 @@ process. No requirement is declared non-applicable merely for convenience.
 
 ## Context actions
 
-- [ ] Reassess supply continuity for the gateway enclosure @peter #risk #qms
-- [ ] Check ISO's published revision status and assess applicable changes @peter #audit #qms
-- [ ] Add climate-related interested-party considerations to management review @peter #strategy #qms
+- [ ] Reassess supply continuity for the gateway enclosure @{{member}} #risk #qms
+- [ ] Check ISO's published revision status and assess applicable changes @{{member}} #audit #qms
+- [ ] Add climate-related interested-party considerations to management review @{{member}} #strategy #qms
