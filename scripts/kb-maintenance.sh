@@ -54,12 +54,19 @@ cfg() {
 }
 REPO=$(cfg KB_REPO /srv/kb)
 PGDB=$(cfg KB_PG_DB kb)
-OPERATOR=$(cfg KB_MAINT_USER krystof)          # whose claude credentials to use
+HUB_PORT=$(cfg KB_HUB_PORT 8300)
+# Whose signed-in claude runs the triage: install.sh records the admin who set
+# the box up. Boxes installed before that fall back to the founding admin, whom
+# install.sh always lists first in KB_PROTECTED_USERS. No name is baked in.
+OPERATOR=$(cfg KB_MAINT_USER "")
+[ -n "$OPERATOR" ] || { OPERATOR=$(cfg KB_PROTECTED_USERS ""); OPERATOR=${OPERATOR%%,*}; }
 MODEL=$(cfg KB_MAINT_MODEL sonnet)
 BUDGET=$(cfg KB_MAINT_TIMEOUT 900)             # seconds; a triage that hangs is a no-op
 
 mkdir -p "$LOG_DIR" "$STATE_DIR" 2>/dev/null || true
-UNITS="kb-hub kb-syncd kb-indexer kb-embedd kb-convert postgresql cloudflared"
+UNITS="kb-hub kb-syncd kb-indexer kb-embedd kb-convert postgresql"
+# The tunnel is optional (docs/remote-access.md): only watch it where it exists.
+systemctl cat cloudflared.service >/dev/null 2>&1 && UNITS="$UNITS cloudflared"
 
 # Everything since the previous run — bounded, so one loud day cannot blow up
 # the context window (or the bill).
@@ -338,7 +345,7 @@ TOOLS=(
   # without a shell. Do not re-add them.
   "Bash(wc:*)" "Bash(stat:*)" "Bash(cat /var/log/kb/*)" "Bash(sudo cat /var/log/kb/*)"
   "Bash(git log:*)" "Bash(git status:*)" "Bash(git diff:*)"
-  "Bash(curl -s -o /dev/null -w * http://127.0.0.1:8300/)"
+  "Bash(curl -s -o /dev/null -w * http://127.0.0.1:$HUB_PORT/)"
   "Bash(sudo systemctl restart kb-convert)"
   "Bash(sudo systemctl restart kb-indexer)"
   "Bash(sudo logrotate --force /etc/logrotate.d/kb)"
@@ -372,10 +379,11 @@ else
 fi
 
 REPORT="$WORK/report.md"
-CLAUDE_BIN=$(runuser -u "$OPERATOR" -- bash -lc 'command -v claude' 2>/dev/null)
+CLAUDE_BIN=""
+[ -n "$OPERATOR" ] && CLAUDE_BIN=$(runuser -u "$OPERATOR" -- bash -lc 'command -v claude' 2>/dev/null)
 if [ -z "$CLAUDE_BIN" ]; then
-  printf '## VERDICT: PROBLEMS\n\n### Real problems\n- **Maintenance agent cannot run** — the `claude` CLI was not found for user %s, so nothing was triaged this run.\n' \
-    "$OPERATOR" > "$REPORT"
+  printf '## VERDICT: PROBLEMS\n\n### Real problems\n- **Maintenance agent cannot run** — %s, so nothing was triaged this run. Install Claude Code as that admin and sign in once (`claude` in a web terminal), or set KB_MAINT_USER in /etc/kb/kb.env to an admin who has.\n' \
+    "$([ -n "$OPERATOR" ] && echo "the \`claude\` CLI was not found for user $OPERATOR" || echo "no maintenance user is set (KB_MAINT_USER)")" > "$REPORT"
   rc=127
 else
   runuser -u "$OPERATOR" -- env \

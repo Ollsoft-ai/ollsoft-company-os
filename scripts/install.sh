@@ -49,12 +49,14 @@ if [ -f /etc/kb/kb.env ]; then
   PRIOR_ALERT_PUSH="${KB_ALERT_PUSH:-}"
   PRIOR_EMBED_PROVIDER="${KB_EMBED_PROVIDER:-}"
   PRIOR_RERANK_PROVIDER="${KB_RERANK_PROVIDER:-}"
+  PRIOR_MAINT_USER="${KB_MAINT_USER:-}"
   PRIOR_ENV="$(cat /etc/kb/kb.env)"
 fi
 PRIOR_ENV="${PRIOR_ENV:-}"
 PRIOR_PROTECTED="${PRIOR_PROTECTED:-}"
 PRIOR_NTFY_TOPIC="${PRIOR_NTFY_TOPIC:-}"
 PRIOR_ALERT_PUSH="${PRIOR_ALERT_PUSH:-0}"
+PRIOR_MAINT_USER="${PRIOR_MAINT_USER:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -266,14 +268,8 @@ if [ ! -e "$REPO/company/todos.html" ]; then
           "$REPO/company/todos.html"
 fi
 
-# Skills DO get refreshed every run — they document the platform and must track
-# the code, not drift from it.
+# The platform's skills are installed (and refreshed) by deploy.sh, below.
 install -d -m 0755 -o root -g kb-users "$REPO/.claude/skills"
-for d in "$SRC"/company-skills/*/; do
-  name="$(basename "$d")"
-  install -d -m 0755 -o root -g kb-users "$REPO/.claude/skills/$name"
-  install -m 0644 -o root -g kb-users "$d/SKILL.md" "$REPO/.claude/skills/$name/SKILL.md"
-done
 
 # ---------------------------------------------------------------------------
 say "python venv"
@@ -306,22 +302,6 @@ else
   die "npm not found and no pre-built bundle present; install nodejs/npm and re-run"
 fi
 [ -f "$SRC/frontend/static/app.html" ] || die "frontend build produced no app.html — check frontend/assets/"
-
-# ---------------------------------------------------------------------------
-say "deploy code to $PREFIX"
-# ---------------------------------------------------------------------------
-mkdir -p "$PREFIX/frontend"
-rsync -a --delete "$SRC/kb_platform" "$PREFIX/"
-rsync -a --delete "$SRC/scripts"     "$PREFIX/"
-rsync -a --delete "$SRC/frontend/static" "$PREFIX/frontend/"
-cp "$SRC/requirements.txt" "$PREFIX/" 2>/dev/null || true
-# World-readable + executable: per-user backends run this code as their own uid.
-chown -R root:root "$PREFIX" "$VENV"
-chmod -R a+rX "$PREFIX" "$VENV"
-if [ -d "$CVENV" ]; then
-  chown -R root:root "$CVENV"
-  chmod -R a+rX "$CVENV"
-fi
 
 # ---------------------------------------------------------------------------
 say "postgres"
@@ -361,31 +341,12 @@ shared_buffers = ${sb_mb}MB"
     systemctl restart postgresql     # shared_buffers only changes on a restart
   fi
 fi
-runuser -u kbindexer -- psql -d kb -v ON_ERROR_STOP=1 < "$SRC/scripts/schema.sql"
+# The kb schema itself (scripts/schema.sql) is applied by deploy.sh, below.
 # Personal schema + search_path for the admin (the hub does this for later users).
 runuser -u postgres -- psql -d kb -v ON_ERROR_STOP=1 <<SQL
 CREATE SCHEMA IF NOT EXISTS "u_$ADMIN_USER" AUTHORIZATION "$ADMIN_USER";
 ALTER ROLE "$ADMIN_USER" SET search_path = "u_$ADMIN_USER", kb, public;
 SQL
-
-# ---------------------------------------------------------------------------
-say "kb-history and kb-search CLIs"
-# ---------------------------------------------------------------------------
-# The documented way for a user to read version history: the socket checks the
-# caller's identity via SO_PEERCRED, so this needs no privileges of its own.
-cat > /usr/local/bin/kb-history <<WRAP
-#!/bin/sh
-# Ollsoft Company OS version-history CLI. Installed by scripts/install.sh.
-PYTHONPATH="$PREFIX" exec "$VENV/bin/python" -m kb_platform.vc_cli "\$@"
-WRAP
-chmod 0755 /usr/local/bin/kb-history
-# kb-search: hybrid search as the caller (docs/semantic-search.md).
-cat > /usr/local/bin/kb-search <<WRAP
-#!/bin/sh
-# Ollsoft Company OS search CLI. Installed by scripts/install.sh.
-PYTHONPATH="$PREFIX" exec "$VENV/bin/python" -m kb_platform.search_cli "\$@"
-WRAP
-chmod 0755 /usr/local/bin/kb-search
 
 # ---------------------------------------------------------------------------
 say "runtime config and directories"
@@ -432,6 +393,10 @@ KB_NTFY_TOPIC=$PRIOR_NTFY_TOPIC
 KB_ALERT_PUSH=$PRIOR_ALERT_PUSH
 # Seconds an identical alert title stays muted for pushes (log is unaffected).
 KB_ALERT_DEDUP=21600
+# Whose signed-in Claude Code runs the daily maintenance triage
+# (kb-maintenance.timer): the admin who installed the box. Point it at another
+# admin to hand the job over; they need \`claude\` installed and signed in.
+KB_MAINT_USER=${PRIOR_MAINT_USER:-$ADMIN_USER}
 # --- semantic search (docs/semantic-search.md) --------------------------------
 # Provider wiring; the keys are separate files, /etc/kb/embed.key and
 # /etc/kb/rerank.key, written by scripts/install-search-keys.sh. none = full-text
@@ -453,58 +418,20 @@ if [ -n "$PRIOR_ENV" ]; then
       "$carried" >> /etc/kb/kb.env
   fi
 fi
-chmod 644 /etc/kb/kb.env
+# Root's alone: the units read it through systemd, and it holds the alert
+# topic — whoever knows it can read the alerts and push fake ones.
+chown root:root /etc/kb/kb.env
+chmod 640 /etc/kb/kb.env
 
 # ---------------------------------------------------------------------------
-say "systemd units"
+say "deploy: code, CLIs, skills, schema, units, timers, start"
 # ---------------------------------------------------------------------------
-cp "$SRC/systemd/kb.conf" /etc/tmpfiles.d/kb.conf
-cp "$SRC/systemd/kb-logrotate.conf" /etc/logrotate.d/kb
-install -d -m 750 -o root -g root /var/log/kb
-for u in "$SRC"/systemd/kb-*.service; do
-  # Point ExecStart/venv at the chosen prefix.
-  # Tokenise all defaults BEFORE expanding any, or a --prefix that contains
-  # another default gets substituted twice (e.g. /opt/kb-platform/kb-venv).
-  # The convert venv goes first: longest path, must not be chewed by the others.
-  sed -e "s|/opt/kb-convert-venv|@@CVENV@@|g" \
-      -e "s|/opt/kb-venv|@@VENV@@|g"   -e "s|/opt/kb-platform|@@PREFIX@@|g" \
-      -e "s|@@CVENV@@|$CVENV|g" \
-      -e "s|@@VENV@@|$VENV|g"          -e "s|@@PREFIX@@|$PREFIX|g" \
-      "$u" > "/etc/systemd/system/$(basename "$u")"
-done
-for u in "$SRC"/systemd/kb-*.timer; do
-  [ -e "$u" ] || continue
-  cp "$u" "/etc/systemd/system/$(basename "$u")"
-done
-systemd-tmpfiles --create /etc/tmpfiles.d/kb.conf
-systemctl daemon-reload
-
-FAILED=0
-# kb-embedd always runs: without keys it only reports `unconfigured` and sends nothing.
-UNITS="kb-syncd kb-hub kb-indexer kb-embedd"
-[ -x "$CVENV/bin/python" ] && UNITS="$UNITS kb-convert"
+# The same script that redeploys code later, so an install and a redeploy can
+# never drift apart (they did: install once enabled one timer, deploy three).
 if [ "$DO_START" -eq 1 ]; then
-  # shellcheck disable=SC2086  # UNITS is a deliberate word list
-  systemctl enable $UNITS >/dev/null 2>&1
-  systemctl enable --now kb-heartbeat.timer >/dev/null 2>&1 || true
-  # restart, not just start: on an upgrade the units are already running and
-  # would otherwise keep executing the previous code and environment.
-  # shellcheck disable=SC2086
-  systemctl restart $UNITS
-  sleep 3
-  for unit in $UNITS; do
-    st="$(systemctl is-active "$unit")"
-    printf '  %-12s %s\n' "$unit" "$st"
-    [ "$st" = "active" ] || FAILED=1
-  done
-  if [ "$FAILED" -ne 0 ]; then
-    echo
-    echo "ERROR: a service failed to start. Diagnose with:" >&2
-    echo "  journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -n 50 --no-pager" >&2
-    exit 1
-  fi
+  bash "$SRC/scripts/deploy.sh"
 else
-  echo "  installed but not started (--no-start)"
+  bash "$SRC/scripts/deploy.sh" --no-start
 fi
 
 # ---------------------------------------------------------------------------

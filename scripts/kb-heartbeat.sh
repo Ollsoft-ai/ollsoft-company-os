@@ -9,9 +9,10 @@
 # to ignore the channel, which is how monitoring dies.
 set -u
 
-REPO=/srv/kb; PGDB=kb
+REPO=/srv/kb; PGDB=kb; PORT=8300
 [ -f /etc/kb/kb.env ] && { REPO="$(. /etc/kb/kb.env; echo "${KB_REPO:-/srv/kb}")";
-                            PGDB="$(. /etc/kb/kb.env; echo "${KB_PG_DB:-kb}")"; }
+                            PGDB="$(. /etc/kb/kb.env; echo "${KB_PG_DB:-kb}")";
+                            PORT="$(. /etc/kb/kb.env; echo "${KB_HUB_PORT:-8300}")"; }
 STATE_DIR="${STATE_DIRECTORY:-/var/lib/kb-monitor}"
 mkdir -p "$STATE_DIR"
 ALERT="$(dirname "$(readlink -f "$0")")/kb-alert.sh"
@@ -25,7 +26,7 @@ for u in kb-hub kb-syncd kb-indexer postgresql; do   # kb-embedd: check 8, only 
 done
 
 # --- 2. the hub answers HTTP -------------------------------------------------
-code=$(curl -m 8 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8300/ || echo 000)
+code=$(curl -m 8 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:"$PORT"/ || echo 000)
 case "$code" in 200|302) ;; *) note "hub answered HTTP $code (want 302)";; esac
 
 # --- 3. postgres accepts connections ------------------------------------------

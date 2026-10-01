@@ -231,7 +231,9 @@ their backend reads it. To roll back to older code, move the two files back
 first: `sudo mv /srv/kb/.os/{egress,launchers}.json /srv/kb/.claude/`.
 
 For a code-only redeploy during development, `sudo bash scripts/deploy.sh` is
-faster — it reads `/etc/kb/kb.env` for your paths.
+faster — it reads `/etc/kb/kb.env` for your paths. It is the same deploy step
+`install.sh` ends with, so a redeploy and an install leave identical units,
+timers, CLIs and skills.
 
 ---
 

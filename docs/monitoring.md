@@ -73,8 +73,10 @@ sudo sed -i 's/^KB_ALERT_PUSH=0/KB_ALERT_PUSH=1/' /etc/kb/kb.env
    strict chronological order, OOM kills *with the cgroup that was killed*, a
    live re-check of every file a staleness alert named, sidecar outcomes, backup
    ages, index lag;
-2. **hands it to a headless `claude`** running as the operator with a
-   harness-enforced tool allowlist, which judges it against
+2. **hands it to a headless `claude`** running as the operator — `KB_MAINT_USER`
+   in `/etc/kb/kb.env`, which `install.sh` sets to the admin who installed the
+   box (older boxes: the first name in `KB_PROTECTED_USERS`); that admin needs
+   `claude` installed and signed in — with a harness-enforced tool allowlist, which judges it against
    `scripts/kb-maintenance-policy.md`;
 3. **notifies only if the verdict is `PROBLEMS`** — and via the same deduped
    `kb-alert.sh`, so a problem that persists for a week is one notification per
