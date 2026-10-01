@@ -2288,6 +2288,10 @@ button.chat-tool-sum:hover { color: var(--ink); }
 .chat-queued-x { border: 0; background: transparent; color: var(--muted); cursor: pointer;
   font: inherit; text-decoration: underline; padding: 0; }
 .chat-queued-x:hover { color: var(--ink); }
+/* jumping the queue stops the turn in front of it: it reads as an action, not a link */
+.chat-queued-go { border: 1px solid var(--line); background: transparent; color: var(--muted);
+  cursor: pointer; font: inherit; padding: .12rem .5rem .18rem; border-radius: 999px; }
+.chat-queued-go:hover { color: var(--accent); border-color: var(--accent); }
 .chat-msg-ctx { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .4rem; }
 .chat-ctx-chip.sent { gap: .3rem; padding: .22rem .6rem; cursor: pointer;
   color: var(--muted); font: 500 .72rem/1.3 var(--sans); background: transparent; }

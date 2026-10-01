@@ -14,7 +14,7 @@ set -euo pipefail
 
 PREFIX="${KB_AGENTS_PREFIX:-/opt/kb-agents}"
 NODE_MAJOR="${KB_AGENTS_NODE_MAJOR:-22}"
-DEFAULT_PKGS=(@agentclientprotocol/claude-agent-acp@0.79.0 @agentclientprotocol/codex-acp@1.12.0 @google/gemini-cli@0.60.0)
+DEFAULT_PKGS=(@agentclientprotocol/claude-agent-acp@0.81.2 @agentclientprotocol/codex-acp@1.12.0 @google/gemini-cli@0.60.0)
 
 node_only=0
 pkgs=()

@@ -3840,10 +3840,17 @@ function closeTab(t, fromPointer) {
   t.el.remove();
   // The tab you get next is this pane's neighbour, not some other column's.
   const rest = paneTabs(p);
-  if (p.active === t) p.active = rest[j] || rest[j - 1] || null;
+  const wasShowing = p.active === t;
+  if (wasShowing) p.active = rest[j] || rest[j - 1] || null;
   const wasActive = active === t;
   if (!rest.length) paneEmptied(p, true);
   if (wasActive) activateTab(nextActiveAfter(p));
+  // A kind that never becomes the global `active` — a chat, a terminal — still
+  // leaves a hole behind it: the neighbour promoted just above is the pane's
+  // tab now, but nothing has SHOWN it, so it keeps the display:none it was
+  // hidden with and the strip points at a blank group until you click it.
+  // Show it the way a click would.
+  else if (wasShowing && p.active) showTab(p.active, false);
   else { renderTabBar(); saveSession(); }
   refocus();
 }
@@ -4009,6 +4016,16 @@ function warmChat() {
   if (!_chatMod) _chatMod = import("./chat.js").then((m) => { m.init(chatShell); return m; })
     .catch((e) => { _chatMod = null; throw e; });
   return _chatMod;
+}
+// Waits for the page to go quiet first: the chat chunk and an agent process
+// are not worth taking bandwidth or CPU from the first paint.
+function prewarmChat() {
+  let id = null;
+  try { id = localStorage.getItem("kbChatAgent"); } catch (e) { return; }
+  if (!id) return;
+  const go = () => { warmChat().then((m) => m.prewarm(id)).catch(() => { /* chat still opens the slow way */ }); };
+  if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 5000 });
+  else setTimeout(go, 2000);
 }
 let _repoRoot = "";
 // What the chat module may use of the shell — the whole contract, in one place.
@@ -8980,6 +8997,11 @@ async function boot() {
   // back, and on the heartbeat the event stream already sends
   document.addEventListener("visibilitychange", () => { if (!document.hidden) loadInbox(); });
   setInterval(loadInbox, 120000);
+  // Somebody who chats will chat again: once the page has settled, open the
+  // agent's socket, which has the backend start the process and keep a session
+  // ready. Only for the agent they last used — a person who never chats
+  // downloads nothing and starts nothing.
+  prewarmChat();
   // Dictation. Hidden outright where it cannot work (no MediaRecorder, or an
   // insecure context — getUserMedia needs https or localhost), which also makes
   // `when: dictationReady` false and hands F9 back to the shell.

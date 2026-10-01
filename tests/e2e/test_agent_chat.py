@@ -120,6 +120,24 @@ def test_the_chat_button_opens_a_new_chat_every_time(browser):
     ctx.close()
 
 
+def test_closing_a_chat_tab_shows_its_neighbour_without_a_click(browser):
+    """A chat never becomes the global active tab, so closing one used to take the
+    branch that only redraws the strip: the neighbour was promoted but never shown,
+    and the group stayed blank until you clicked the tab."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    page.click('[data-testid="chat-new"]')
+    page.wait_for_function("() => document.querySelectorAll('.tab-content.chat .chat-input').length === 2", timeout=20000)
+    page.click("#panes .tab.current .tab-x")
+    page.wait_for_function("() => document.querySelectorAll('.tab-content.chat').length === 1", timeout=20000)
+    # the promoted chat is on screen, and the strip agrees with what the group shows
+    assert page.evaluate("() => { const e = document.querySelector('.tab-content.chat');"
+                         " return !!e && e.offsetParent !== null; }"), "the neighbour chat is blank"
+    assert page.evaluate("() => document.querySelectorAll('#panes .tab.current').length") == 1
+    ctx.close()
+
+
 CHATVIEW = "window.__kbchatview(document.querySelector('.chat-view'))"
 
 
@@ -586,3 +604,108 @@ def test_a_tree_row_dropped_on_the_chat_becomes_context(browser):
             page.request.post(BASE + "/api/fs/delete", data=json.dumps({"path": p}),
                               headers={"content-type": "application/json"})
         ctx.close()
+
+
+def test_a_finished_chat_never_reattaches_as_still_working(browser):
+    """A replay is the past, and it must not start the clock. A backend log
+    rebuilt by session/load holds the conversation with no turn end in it, so
+    the next reattach used to leave a finished chat "Working…" — seconds
+    counting, composer locked — until you pressed stop."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    ask_echo(page, "say something")
+    # the restart is what makes the tab ask the agent for the conversation:
+    # from here the backend's log IS that replayed history
+    r = page.request.post(BASE + "/api/acp/restart", data=json.dumps({"agent": "echo"}),
+                          headers={"content-type": "application/json"})
+    assert r.ok, r.status
+    page.reload()
+    page.wait_for_selector('[data-testid="chat-input"]', timeout=30000)
+    page.wait_for_function("() => [...document.querySelectorAll('.chat-msg.user')].some(e => e.textContent.includes('say something'))", timeout=30000)
+    page.wait_for_function("() => !" + CHATVIEW + ".running", timeout=20000)
+    # and now the reattach whose replay is that history
+    page.reload()
+    page.wait_for_selector('[data-testid="chat-input"]', timeout=30000)
+    page.wait_for_function("() => [...document.querySelectorAll('.chat-msg.user')].some(e => e.textContent.includes('say something'))", timeout=30000)
+    page.wait_for_timeout(1500)      # long enough for the replay to do the wrong thing
+    assert page.evaluate("() => !" + CHATVIEW + ".running"), "a chat that finished is not working"
+    assert page.locator(".chat-status.busy").count() == 0, "no spinner over a finished chat"
+    assert page.locator(".chat-send.stop").count() == 0, "the composer is yours, not a stop button"
+    ctx.close()
+
+
+def test_a_queued_message_can_be_taken_back_into_the_composer(browser):
+    """Taking a queued message back returns it as you wrote it, and it is not
+    sent behind your back when the turn in front of it ends."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    page.fill('[data-testid="chat-input"]', "tell me a slow story")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-send.stop", timeout=10000)
+    page.fill('[data-testid="chat-input"]', "second thoughts")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-msg.user.queued", timeout=5000)
+    page.click(".chat-queued-x")
+    assert page.input_value('[data-testid="chat-input"]') == "second thoughts", "it came back to the composer"
+    assert page.locator(".chat-msg.user.queued").count() == 0
+    page.wait_for_function("() => !" + CHATVIEW + ".running", timeout=30000)
+    assert "second thoughts" not in page.text_content(".chat-log"), "a message taken back is never sent"
+    ctx.close()
+
+
+def test_send_now_pushes_a_queued_message_past_the_running_turn(browser):
+    """Send now stops the turn in front of the queued message instead of
+    waiting it out — Claude Code's escape-then-send, as a button."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    page.fill('[data-testid="chat-input"]', "tell me a slow story")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-send.stop", timeout=10000)
+    page.fill('[data-testid="chat-input"]', "actually this instead")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".chat-msg.user.queued", timeout=5000)
+    # watch the wire: jumping the queue means stopping the turn in front of it
+    # rather than waiting the turn out. The echo double answers a stop with a
+    # plain end_turn, so the transcript alone cannot tell the two apart.
+    page.evaluate("() => { const v = " + CHATVIEW + "; v.__sent = []; "
+                  "const n = v.conn.notify.bind(v.conn); v.conn.notify = (m, p) => { v.__sent.push(m); return n(m, p); }; }")
+    page.click(".chat-queued-go")
+    page.wait_for_function("() => (" + CHATVIEW + ".__sent || []).includes('session/cancel')", timeout=5000)
+    page.wait_for_function("() => !document.querySelector('.chat-msg.user.queued')", timeout=15000)
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.chat-msg.agent')].some(e => e.textContent.includes('actually this instead'))",
+        timeout=20000)
+    ctx.close()
+
+
+def test_a_replay_does_not_start_the_clock_and_the_backend_can_stop_it(browser):
+    """The reattach rule, both halves, driven directly: a chunk arriving as
+    part of a replay is the past and must not start the clock, and "attached"
+    is the truth about whether a turn runs — in both directions. Only ever
+    switching it on is what left finished chats spinning."""
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_echo_chat(page)
+    ask_echo(page, "hello there")
+    page.wait_for_function("() => !" + CHATVIEW + ".running", timeout=20000)
+    chunk = ("(seq) => { const v = " + CHATVIEW + ", sid = v.sessionId;"
+             " v.attaching = true; v.buffer = []; v.dropBuffer = false;"
+             " v.onSessionMessage({kb: 'u', sessionId: sid, seq: seq, m: {sessionId: sid, update:"
+             " {sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: 'from the past'}}}});"
+             " v.onSessionMessage({kb: 'attached', sessionId: sid, seq: seq + 1, running: false, meta: {}}); }")
+    attached = ("(a) => { const v = " + CHATVIEW + ";"
+                " v.onSessionMessage({kb: 'attached', sessionId: v.sessionId, seq: a[0], running: a[1], meta: {}}); }")
+    page.evaluate(chunk, 9000)
+    assert page.evaluate("() => !" + CHATVIEW + ".running"), "a replayed chunk is not a turn in progress"
+    assert page.locator(".chat-status.busy").count() == 0
+    # the backend saying a turn IS running still starts it
+    page.evaluate(attached, [9010, True])
+    assert page.evaluate("() => " + CHATVIEW + ".running"), "a turn running when you attach still shows"
+    # and the backend saying it is not ends it — the half that was missing
+    page.evaluate(attached, [9011, False])
+    assert page.evaluate("() => !" + CHATVIEW + ".running"), "the backend can stop the clock"
+    assert page.locator(".chat-send.stop").count() == 0
+    ctx.close()

@@ -220,6 +220,10 @@ class AgentConn {
       this.pending.clear();
       for (const v of this.tabs) v.onDisconnected();
       if (this.closedByUs) return;
+      // nobody is looking at this one (it was opened ahead of a chat, to warm
+      // the agent up): it is not worth reconnecting to, and a silent retry
+      // loop against an agent that refuses is worth even less
+      if (!this.tabs.size) { conns.delete(this.agentId); return; }
       const wait = Math.min(15000, 1000 * Math.pow(2, this.retries++));
       this.timer = setTimeout(() => this.connect(), wait);
     };
@@ -272,6 +276,22 @@ function agentConn(agentId) {
   return c;
 }
 
+// Open the agent's socket before anyone asks for a chat. The backend answers
+// it by starting the agent process and keeping a session ready (see
+// kb_platform/acp.py), so opening a chat is a socket round trip instead of a
+// wait. Only for an agent that can actually take a session — an unusable one
+// would just be a connection that fails on every page.
+export async function prewarm(agentId) {
+  if (!agentId || conns.has(agentId)) return;
+  try {
+    const data = await (await fetch("/api/acp/agents")).json();
+    const a = (data.agents || []).find((x) => x.id === agentId);
+    const signed = a && a.auth && a.auth.kind && a.auth.kind !== "none";
+    if (!(a && a.installed && (signed || a.hasCred || a.hasKey))) return;
+  } catch (e) { return; }
+  if (!conns.has(agentId)) agentConn(agentId);
+}
+
 // ---- the view -----------------------------------------------------------------
 const views = new Map();   // tab id → ChatView
 
@@ -302,6 +322,7 @@ class ChatView {
     this.seq = 0;                 // replay cursor
     this.running = false;
     this.loading = false;         // a session/load is streaming the past back
+    this.replaying = false;       // the attach replay is being applied: these frames are the past
     this.msgs = [];               // rendered items in order
     this.current = null;          // the agent message being streamed
     this.thought = null;
@@ -1293,12 +1314,15 @@ class ChatView {
       prompt.push({ type: "resource_link", uri: "file://" + shell.abs(c.path),
                     name: shell.baseName(c.path), title: c.path });
     for (const a of this.attachments) prompt.push({ type: "image", data: a.data, mimeType: a.mimeType });
+    const atts = this.attachments.slice();
     this.composer.value = ""; this.autosize(); this.slash.hidden = true;
     this.attachments = []; this.renderAttachments(); this.syncSend();
     this.spoke = true;
     const wrap = this.addUser(text, prompt.filter((p) => p.type === "image"), ctx);
     if (!this.title && text) this.rename(plainTitle(text), true);
-    const item = { prompt, text, wrap };
+    // atts/ctx are kept so a queued message taken back can be put together
+    // again in the composer, not just its text
+    const item = { prompt, text, wrap, atts, ctx };
     // one turn at a time: a message written while the agent is working waits
     // its turn rather than racing it
     if (this.running) { this.holdQueued(item); return; }
@@ -1324,21 +1348,50 @@ class ChatView {
     }
   }
   // Waiting for the turn in front of it. The bubble says so, and the item
-  // goes the moment the agent finishes (or is stopped).
+  // goes the moment the agent finishes (or is stopped). Two ways out: take it
+  // back, and it returns to the composer as you wrote it; or send it now,
+  // which stops the turn in front of it rather than waiting the turn out.
   holdQueued(item) {
     this.queued = this.queued || [];
     this.queued.push(item);
     item.wrap.classList.add("queued");
     if (!item.wrap.querySelector(".chat-queued")) {
       const mark = el("div", "chat-queued", "Queued — goes when this turn ends");
-      const x = el("button", "chat-queued-x", "Cancel"); x.type = "button";
+      const go = el("button", "chat-queued-go", "Send now"); go.type = "button";
+      go.title = "Stop what the agent is doing and send this next";
+      go.addEventListener("click", () => this.forceQueued(item));
+      const x = el("button", "chat-queued-x", "Take back"); x.type = "button";
+      x.title = "Put it back in the composer";
       x.addEventListener("click", () => {
-        this.queued = this.queued.filter((q) => q !== item);
+        this.queued = (this.queued || []).filter((q) => q !== item);
         item.wrap.remove();
+        this.unsend(item);
       });
-      mark.append(x);
+      mark.append(go, x);
       item.wrap.append(mark);
     }
+  }
+  // Jump the queue: this one goes first, and the turn in its way is stopped.
+  // endTurn flushes the queue, so it leaves the moment the agent lets go —
+  // including the 5s fallback for an agent that never confirms the stop.
+  forceQueued(item) {
+    this.queued = [item, ...(this.queued || []).filter((q) => q !== item)];
+    const mark = item.wrap.querySelector(".chat-queued");
+    if (mark) {
+      if (mark.firstChild) mark.firstChild.nodeValue = "Sending now — stopping the turn…";
+      const go = mark.querySelector(".chat-queued-go");
+      if (go) go.remove();
+    }
+    if (this.running) this.cancel();
+    else this.flushQueued();
+  }
+  // A message taken back out of the queue, put together again in the composer:
+  // its text, its attachments and the documents it carried.
+  unsend(item) {
+    if (item.text) this.composer.value = this.composer.value ? this.composer.value + "\n" + item.text : item.text;
+    if (item.atts && item.atts.length) { this.attachments = this.attachments.concat(item.atts); this.renderAttachments(); }
+    for (const c of (item.ctx || [])) if (!c.auto) this.addCtxPath(c.path);
+    this.autosize(); this.syncSend(); this.composer.focus();
   }
   async flushQueued() {
     const waiting = this.queued || [];
@@ -1628,9 +1681,13 @@ class ChatView {
       this.attaching = false;
       const frames = this.dropBuffer ? [] : this.buffer.slice();
       this.buffer = []; this.dropBuffer = false;
-      // the replay and what streamed meanwhile, in the log's order, once each
+      // the replay and what streamed meanwhile, in the log's order, once each.
+      // `replaying` keeps the "a chunk means a turn is running" rule out of it:
+      // these chunks are the past, and a replayed history carries no turn end
+      // to switch it off again (a log rebuilt by session/load has none at all).
       frames.sort((a, b) => (typeof a.seq === "number" && a.seq >= 0 ? a.seq : Infinity) - (typeof b.seq === "number" && b.seq >= 0 ? b.seq : Infinity));
-      for (const f of frames) this.onSessionMessage(f);
+      this.replaying = true;
+      try { for (const f of frames) this.onSessionMessage(f); } finally { this.replaying = false; }
       if (m.meta && (m.meta.modes || m.meta.configOptions)) {
         this.modes = m.meta.modes || this.modes; this.configOptions = m.meta.configOptions || this.configOptions;
         this.renderModes();
@@ -1640,7 +1697,11 @@ class ChatView {
       // conversation, as Recent chats does
       const caps = (this.conn && this.conn.hello && this.conn.hello.init && this.conn.hello.init.agentCapabilities) || {};
       if (this.restored && !this.loadedOnce && m.seq === 0 && !m.running && caps.loadSession) { this.loadedOnce = true; this.loadHistory(); return; }
+      // the backend is the truth about whether a turn is running — in both
+      // directions. Only ever switching it on is what left a finished chat
+      // spinning with a counting clock until you pressed stop.
       if (m.running && !this.running) this.setRunning(true);
+      if (!m.running && this.running && !this.loading) this.endTurn(null);
       if (!m.running && !this.loading) { this.finishThought(); this.showEmpty(); }
       if (this.outbox.length) this.flushOutbox();
       return;
@@ -1678,7 +1739,7 @@ class ChatView {
     }
     // a turn that was running when the page opened streams on without our
     // having sent anything: the chunks say so (a replay of the past does not)
-    if (u.sessionUpdate && u.sessionUpdate !== "user_message_chunk" && !this.running && !this.loading && u.sessionUpdate.endsWith("_chunk")) this.setRunning(true);
+    if (u.sessionUpdate && u.sessionUpdate !== "user_message_chunk" && !this.running && !this.loading && !this.replaying && u.sessionUpdate.endsWith("_chunk")) this.setRunning(true);
     this.scrollIfPinned();
   }
   contentText(c) { return c && c.type === "text" ? c.text : ""; }

@@ -89,6 +89,15 @@ def agent_path() -> str:
     parts.append(os.environ.get("PATH") or "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     return os.pathsep.join(parts)
 IDLE_SECONDS = 30 * 60
+# A spare session, made before anyone asks for one. session/new costs seconds
+# inside the agent and — unlike the process itself — does not get cheaper on a
+# warm one, so it is the part worth doing in advance. A spare freezes what the
+# agent reads when a session is born (CLAUDE.md, the skills, today's date), so
+# it is short-lived on purpose; KB_SPARE_SESSIONS=0 turns the whole thing off.
+SPARE_TTL = 4 * 60
+SPARE_CWDS = 3                       # how many folders to keep a spare for
+SPARE_MAX = 50                       # per process lifetime, so a loop cannot pile them up
+SPARES_ON = os.environ.get("KB_SPARE_SESSIONS", "1") not in ("0", "no", "off", "false")
 STREAM_LIMIT = 64 * 1024 * 1024      # one line can carry a base64 image or a whole replayed history
 LOG_ENTRIES = 4000                   # per session, for replay after a reconnect
 LOG_BYTES = 8 * 1024 * 1024
@@ -109,7 +118,7 @@ _SID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 CATALOGUE: list[dict] = [
     {"id": "claude", "name": "Claude Code", "vendor": "Anthropic",
      "bin": "claude-agent-acp", "args": [], "env": {"NO_BROWSER": "1", "CLAUDE_CODE_REMOTE": "1"},
-     "npm": ["@agentclientprotocol/claude-agent-acp@0.79.0"],
+     "npm": ["@agentclientprotocol/claude-agent-acp@0.81.2"],
      "keys": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
      "cred": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
      "login": {"how": "terminal", "cmd": ["claude-agent-acp", "--cli", "auth", "login", "--claudeai"],
@@ -390,6 +399,10 @@ class AgentProc:
         self._err_reader: asyncio.Task | None = None
         self._started = asyncio.Event()
         self._lock = asyncio.Lock()
+        self.spares: dict[str, tuple[float, dict]] = {}   # cwd → (made at, session/new result)
+        self._sparing: set[str] = set()                   # cwds with a spare being made right now
+        self._spares_made = 0
+        self._warming: set[asyncio.Task] = set()          # strong refs: a bare task can be collected
 
     # -- lifecycle --
     async def start(self) -> None:
@@ -444,6 +457,79 @@ class AgentProc:
                 self.init_error = f"{self.agent['name']} failed to start: {e}"
             self._started.set()
 
+    # -- spare sessions --
+    def warm_later(self, cwd: str | None = None) -> None:
+        """Make a spare in the background. Never awaited by anything a tab waits on."""
+        if not SPARES_ON:
+            return
+        t = asyncio.create_task(self.warm(cwd))
+        self._warming.add(t)
+        t.add_done_callback(self._warming.discard)
+
+    async def warm(self, cwd: str | None = None) -> None:
+        cwd = cwd if isinstance(cwd, str) and cwd.startswith("/") else self.cwd
+        if not SPARES_ON or not self.alive() or self._spares_made >= SPARE_MAX:
+            return
+        if cwd in self._sparing or self._spare_fresh(cwd):
+            return
+        if cwd not in self.spares and len(self.spares) >= SPARE_CWDS:
+            return
+        self._sparing.add(cwd)
+        self._spares_made += 1
+        try:
+            res = await asyncio.wait_for(self.request("session/new", {"cwd": cwd, "mcpServers": []}), timeout=120)
+        except RpcError as e:
+            # the agent refuses to open sessions at all (not signed in, most likely):
+            # stop trying, so a reconnecting tab does not poke it once a second.
+            log.info("acp %s: no spare sessions (%s)", self.agent["id"], e.message)
+            self._spares_made = SPARE_MAX
+            return
+        except Exception:   # noqa: BLE001 — a spare is a nicety; it never becomes a tab's error
+            return
+        finally:
+            self._sparing.discard(cwd)
+        if isinstance(res, dict) and isinstance(res.get("sessionId"), str):
+            self.spares[cwd] = (time.time(), res)
+
+    def _spare_fresh(self, cwd: str) -> bool:
+        ent = self.spares.get(cwd)
+        if ent is None:
+            return False
+        if time.time() - ent[0] > SPARE_TTL:
+            del self.spares[cwd]
+            return False
+        return True
+
+    def _take_spare(self, params: dict) -> dict | None:
+        """A spare answers only a session/new that asks for exactly what the spare
+        is: same folder, no MCP servers, nothing else in the params."""
+        cwd = params.get("cwd")
+        if not SPARES_ON or not isinstance(cwd, str):
+            return None
+        if params.get("mcpServers") or set(params) - {"cwd", "mcpServers"}:
+            return None
+        if not self._spare_fresh(cwd):
+            return None
+        return self.spares.pop(cwd)[1]
+
+    async def _hand_spare(self, conn: Conn, tab_id, res: dict, params: dict) -> None:
+        """Give a tab a session made earlier, on exactly the terms
+        `_on_agent_response` gives it one made on demand."""
+        sid = res["sessionId"]
+        m = self.meta.setdefault(sid, {})
+        for k in ("modes", "configOptions"):
+            if res.get(k) is not None:
+                m[k] = res[k]
+        self.owner[sid] = conn
+        conn.owned.add(sid)
+        self.last_used = time.time()
+        try:
+            remember_chat(sid, self.agent["id"], params.get("cwd", self.cwd))
+        except OSError:
+            pass
+        await conn.send({"jsonrpc": "2.0", "id": tab_id, "result": res})
+        self.warm_later(params.get("cwd"))
+
     def alive(self) -> bool:
         return self.proc is not None and self.proc.returncode is None and self.init is not None
 
@@ -491,10 +577,15 @@ class AgentProc:
 
     async def forward_request(self, conn: Conn, msg: dict) -> None:
         """A request from a tab: re-numbered, remembered, forwarded."""
-        rid = self.next_id
-        self.next_id += 1
         method, params = msg.get("method"), msg.get("params") or {}
         params = self._fix_params(method, params)
+        if method == "session/new":
+            spare = self._take_spare(params)
+            if spare is not None:                       # already made: no round trip to the agent
+                await self._hand_spare(conn, msg.get("id"), spare, params)
+                return
+        rid = self.next_id
+        self.next_id += 1
         self.pending_out[rid] = (conn, msg.get("id"), method, params)
         sid = params.get("sessionId") if isinstance(params, dict) else None
         if method == "session/prompt" and isinstance(sid, str):
@@ -661,6 +752,10 @@ class AgentProc:
                 remember_chat(sid, self.agent["id"], params.get("cwd", self.cwd))
             except OSError:
                 pass
+            # this one was made the slow way — no spare, or one too stale to use.
+            # Have the next chat's session ready before anybody asks for it.
+            if conn is not None:
+                self.warm_later(params.get("cwd"))
         if method == "session/prompt" and isinstance(sid, str):
             lg = self.log_for(sid)
             lg.turn_running = False
@@ -838,6 +933,7 @@ async def get_proc(agent_id: str, cwd: str) -> AgentProc:
         await p.stop()
     p = PROCS[agent_id] = AgentProc(BY_ID[agent_id], cwd)
     await p.start()
+    p.warm_later(cwd)       # the first chat should not wait for session/new either
     if _reaper is None or _reaper.done():
         _reaper = asyncio.create_task(_reap())
     return p
@@ -1006,6 +1102,7 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
     await conn.send({"kb": "hello", "agent": agent_status(proc.agent), "init": proc.init, "cwd": proc.cwd,
                      "auth": proc.auth, "chats": [c for c in read_chats() if c.get("agent") == aid],
                      "stderr": proc.stderr[-20:]})
+    proc.warm_later(proc.cwd)   # a tab is open: have a session ready for it
     try:
         async for msg in ws:
             if msg.type != WSMsgType.TEXT:

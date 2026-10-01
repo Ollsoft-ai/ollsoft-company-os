@@ -22,6 +22,7 @@ FAKE_AGENT = textwrap.dedent(r'''
     def send(obj):
         sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
     req_id = 100
+    sessions = 0
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -35,7 +36,8 @@ FAKE_AGENT = textwrap.dedent(r'''
         elif method == "session/new":
             assert params["cwd"].startswith("/"), params
             assert isinstance(params["mcpServers"], list)
-            send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "sess-1", "modes": {"currentModeId": "ask", "availableModes": [{"id": "ask", "name": "Ask"}]}}})
+            sessions += 1
+            send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "sess-%d" % sessions, "modes": {"currentModeId": "ask", "availableModes": [{"id": "ask", "name": "Ask"}]}}})
         elif method == "session/prompt":
             sid = params["sessionId"]
             text = params["prompt"][0]["text"]
@@ -322,3 +324,110 @@ def test_a_session_starts_in_a_real_folder_or_the_root(tmp_path):
         assert fix("session/new", bad)["cwd"] == "/srv/kb"
     # …and the folder never touches a method that has no business with it
     assert fix("session/prompt", {"cwd": "/nope"}) == {"cwd": "/nope"}
+
+
+# ---- spare sessions ---------------------------------------------------------
+# session/new costs seconds inside a real agent and does not get cheaper on a
+# warm process, so the bridge makes one in advance. The rule these tests hold
+# down: a handed-over spare is indistinguishable from a session made on demand.
+
+def test_a_spare_session_is_handed_over_and_replaced(fake_agent):
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        await proc.warm("/tmp")
+        assert "/tmp" in proc.spares, "a spare was made before anyone asked"
+        ws = FakeWS(); conn = acp.Conn(ws)
+        proc.conns.add(conn)
+        await proc.forward_request(conn, {"jsonrpc": "2.0", "id": "a1", "method": "session/new",
+                                          "params": {"cwd": "/tmp"}})
+        r = await ws.wait_for(lambda m: m.get("id") == "a1")
+        sid = r["result"]["sessionId"]
+        assert sid == "sess-1", "the tab got the session that was already made"
+        # ... on exactly the terms a session made on demand comes with
+        assert proc.owner[sid] is conn
+        assert sid in conn.owned
+        assert proc.meta[sid]["modes"]["currentModeId"] == "ask", "a reattaching tab still gets the modes"
+        assert fake_agent["_remembered"] and fake_agent["_remembered"][0][0] == sid, "it is in the chat index"
+        assert r["result"]["modes"], "the tab gets the whole session/new result"
+        # the pool refills itself, and the next chat gets the next session
+        for _ in range(200):
+            if proc.spares.get("/tmp"):
+                break
+            await asyncio.sleep(0.02)
+        assert proc.spares["/tmp"][1]["sessionId"] == "sess-2", "a fresh spare is waiting"
+        await proc.forward_request(conn, {"jsonrpc": "2.0", "id": "a2", "method": "session/new",
+                                          "params": {"cwd": "/tmp"}})
+        r2 = await ws.wait_for(lambda m: m.get("id") == "a2")
+        assert r2["result"]["sessionId"] == "sess-2"
+        assert proc.owner["sess-2"] is conn
+        await proc.stop()
+    asyncio.run(run())
+
+
+def test_a_spare_only_answers_a_request_it_actually_matches(fake_agent):
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        await proc.warm("/tmp")
+        ws = FakeWS(); conn = acp.Conn(ws)
+        proc.conns.add(conn)
+        # another folder, MCP servers, or anything else in the params: go and ask the agent
+        for i, params in enumerate([{"cwd": "/"}, {"cwd": "/tmp", "mcpServers": [{"name": "x"}]},
+                                    {"cwd": "/tmp", "model": "opus"}]):
+            await proc.forward_request(conn, {"jsonrpc": "2.0", "id": "b%d" % i, "method": "session/new",
+                                              "params": params})
+            r = await ws.wait_for(lambda m: m.get("id") == "b%d" % i)
+            assert r["result"]["sessionId"] != "sess-1", params
+            assert proc.spares.get("/tmp"), "the spare is still there for a request that fits"
+        await proc.stop()
+    asyncio.run(run())
+
+
+def test_a_stale_spare_is_never_served(fake_agent, monkeypatch):
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        await proc.warm("/tmp")
+        made, res = proc.spares["/tmp"]
+        proc.spares["/tmp"] = (made - acp.SPARE_TTL - 1, res)   # older than the TTL
+        ws = FakeWS(); conn = acp.Conn(ws)
+        proc.conns.add(conn)
+        await proc.forward_request(conn, {"jsonrpc": "2.0", "id": "c1", "method": "session/new",
+                                          "params": {"cwd": "/tmp"}})
+        r = await ws.wait_for(lambda m: m.get("id") == "c1")
+        assert r["result"]["sessionId"] == "sess-2", "a spare that froze too long ago is dropped, not served"
+        # and the pool heals: a session made the slow way still leaves one ready
+        for _ in range(200):
+            if proc.spares.get("/tmp"):
+                break
+            await asyncio.sleep(0.02)
+        assert proc.spares["/tmp"][1]["sessionId"] == "sess-3", "the next chat does not pay for it twice"
+        await proc.stop()
+    asyncio.run(run())
+
+
+def test_spares_can_be_turned_off_and_a_refusal_stops_them(fake_agent, monkeypatch):
+    async def run():
+        monkeypatch.setattr(acp, "SPARES_ON", False)
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        await proc.warm("/tmp")
+        proc.warm_later("/tmp")
+        await asyncio.sleep(0.05)
+        assert not proc.spares, "KB_SPARE_SESSIONS=0 means no sessions are made in advance"
+        await proc.stop()
+        # an agent that refuses session/new (nobody signed in) is asked once, not forever
+        monkeypatch.setattr(acp, "SPARES_ON", True)
+        proc2 = acp.AgentProc(fake_agent, "/tmp")
+        await proc2.start()
+
+        async def refuse(method, params):
+            raise acp.RpcError(-32000, "Authentication required")
+        monkeypatch.setattr(proc2, "request", refuse)
+        await proc2.warm("/tmp")
+        assert not proc2.spares
+        assert proc2._spares_made >= acp.SPARE_MAX, "it gives up instead of poking the agent again"
+        await proc2.warm("/tmp")
+        await proc2.stop()
+    asyncio.run(run())
