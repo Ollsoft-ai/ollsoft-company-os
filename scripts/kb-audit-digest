@@ -116,9 +116,11 @@ def main() -> int:
 
     # C locale: ausearch parses --start/--end and prints audit(...) by locale.
     env = dict(os.environ, LC_ALL="C", LANG="C")
+    # errors="replace": the kernel cuts a proctitle at 128 bytes, often inside
+    # an emoji folder name, so a record need not be valid UTF-8.
     proc = subprocess.run(["/usr/sbin/ausearch", "--start", *stamp(args.since),
                            "--end", *stamp(args.until), "--interpret"],
-                          text=True, capture_output=True, env=env)
+                          encoding="utf-8", errors="replace", capture_output=True, env=env)
     if proc.returncode not in {0, 1}:  # 1 = nothing matched
         print(json.dumps({"ok": False, "error": proc.stderr.strip() or "ausearch failed"}))
         return 2
