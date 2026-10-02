@@ -96,4 +96,7 @@ Privately, not as a public issue. See [docs/SECURITY.md](docs/SECURITY.md).
 ## License
 
 By contributing you agree that your contributions are licensed under the
-Apache License 2.0, the same as the rest of the project.
+Business Source License 1.1, the same as the rest of the project, and that you
+grant Ollsoft s.r.o. the right to license your contribution under other terms as
+well — including the commercial licenses Ollsoft sells and the Apache 2.0 license
+each version converts to. You keep the copyright in your own contribution.

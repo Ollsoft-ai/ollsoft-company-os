@@ -467,6 +467,10 @@ mode, an ACL, or a Postgres grant instead.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Business Source License 1.1 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The source is public: read it, audit it, build it, modify it, run it for development or testing. **Production use is free for up to three named users**, and free for any number of users for sixty days while you evaluate it. Beyond that, production use in an organisation needs a commercial license — write to info@ollsoft.ai.
+
+Each version becomes Apache 2.0 four years after its release.
 
 Built at [Ollsoft](https://ollsoft.ai).
