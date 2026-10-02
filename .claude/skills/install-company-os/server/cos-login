@@ -1,0 +1,21 @@
+#!/bin/bash
+# cos-login — the admin signs in to Company OS on the server, so the installer can
+# use the admin API; the session lands in ~/.cos-admin.jar (0600, valid 12 h).
+#   ssh -t companyos cos-login
+# Run as yourself, not with sudo. The password goes from the keyboard to curl's
+# stdin: never into a command line, a file or the installer's view.
+set -euo pipefail
+[ "$(id -u)" -ne 0 ] || { echo "run it as yourself, without sudo" >&2; exit 1; }
+port=${COS_PORT:-8300}
+read -rsp "Company OS password for $USER: " p; echo
+p=${p//$'\r'/}
+umask 077
+code=$(printf '%s' "$p" | curl -s -c "$HOME/.cos-admin.jar" -o /dev/null -w '%{http_code}' \
+         --data-urlencode "username=$USER" --data-urlencode "password@-" "http://127.0.0.1:$port/login")
+chmod 600 "$HOME/.cos-admin.jar" 2>/dev/null || true
+case "$code" in
+  200) echo "signed in — tell the installer it is done" ;;
+  401) echo "wrong password (HTTP 401) — run it again" >&2; exit 1 ;;
+  429) echo "too many attempts (HTTP 429) — wait a few minutes" >&2; exit 1 ;;
+  *)   echo "unexpected answer: HTTP $code" >&2; exit 1 ;;
+esac

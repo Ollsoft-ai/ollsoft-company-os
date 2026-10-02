@@ -6,27 +6,25 @@ You are `root` on port 22 with the key from phase 1. `$ADMIN` = the admin userna
 
 **Ask first:** "Which timezone should the server use? It decides when the nightly 03:00 security reboot and the 07:30 health check run." Default `UTC`.
 
-## 0. Helper for long commands
+## 0. The installer's helpers
+
+Four small scripts from this skill's `server/` folder, copied as files — never typed through a quoted command:
+
+| Helper | Does |
+|---|---|
+| `cos-run` | runs a long command detached, so an SSH drop cannot kill it |
+| `cos-keydrop` | the human pastes a secret straight into a root-only file |
+| `cos-login` | the human signs in to Company OS on the server (admin API session) |
+| `cos-access` | the installer's temporary passwordless sudo, on and off |
 
 ```bash
-cat > /usr/local/sbin/cos-run <<'EOF'
-#!/bin/bash
-# cos-run <name> <command...>  — run detached so an SSH drop cannot kill it
-# cos-run <name>               — status: "running" or "exit N", plus the last log lines
-n=${1:?name}; shift
-if [ $# -eq 0 ]; then
-  [ -f /var/log/cos-$n.rc ] && echo "exit $(cat /var/log/cos-$n.rc)" || echo running
-  journalctl -u cos-$n -n "${LINES_:-20}" --no-pager -o cat; exit 0
-fi
-rm -f /var/log/cos-$n.rc
-systemd-run --quiet --collect --same-dir --unit=cos-$n \
-  -E DEBIAN_FRONTEND=noninteractive \
-  bash -c '"$@"; echo $? > /var/log/cos-'"$n"'.rc' _ "$@"
-EOF
-chmod 755 /usr/local/sbin/cos-run
+scp <skill>/server/cos-* companyos-root:/usr/local/bin/
+ssh companyos-root 'sed -i "s/\r$//" /usr/local/bin/cos-* && chmod 755 /usr/local/bin/cos-*'
 ```
 
-Start: `ssh <host> 'sudo cos-run upgrade apt-get ...'`. Poll every 30–60 s with `ssh <host> 'sudo cos-run upgrade'` until it prints `exit 0`. Anything else: read the log, fix, re-run.
+The `sed` matters on Windows: a clone there can carry CRLF line endings, and bash refuses a script with them. They stay installed after handover, for re-running phases.
+
+Long commands: start with `ssh <host> 'sudo cos-run upgrade apt-get ...'`, poll every 30–60 s with `ssh <host> 'sudo cos-run upgrade'` until it prints `exit 0`. Anything else: read the log, fix, re-run.
 
 ## 1. Update, timezone
 
@@ -42,9 +40,7 @@ id "$ADMIN" >/dev/null 2>&1 || adduser --disabled-password --gecos "" "$ADMIN"
 usermod -aG sudo "$ADMIN"
 install -d -m 700 -o "$ADMIN" -g "$ADMIN" /home/$ADMIN/.ssh
 install -m 600 -o "$ADMIN" -g "$ADMIN" /root/.ssh/authorized_keys /home/$ADMIN/.ssh/authorized_keys
-# lets YOU run sudo over non-interactive SSH; removed in the handover phase
-echo "$ADMIN ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-company-os-installer
-chmod 440 /etc/sudoers.d/90-company-os-installer && visudo -cf /etc/sudoers.d/90-company-os-installer
+cos-access on "$ADMIN"     # lets YOU run sudo over non-interactive SSH; off again at handover
 ```
 
 - **The password is set in phase 3** — it becomes the web login.

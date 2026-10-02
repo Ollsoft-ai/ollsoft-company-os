@@ -7,7 +7,7 @@
 **Ask:** "Who should get an account? For each: full name, email, and **full** (browser, terminal, AI agents) or **web-only** (browser only). Should anyone besides you be an admin? Admin means root on the server."
 
 - Username: lowercase, `^[a-z][a-z0-9_]{1,30}$`, usually the first name. Confirm the list before creating anything.
-- Initial password: generate one per person (`openssl rand -base64 15`), at least 12 characters.
+- Initial password: generate one per person **on the server** — `ssh companyos openssl rand -base64 15 | tr -d '\r\n'` — at least 12 characters. Generated on Windows, it carries a hidden `\r` that breaks the request.
 
 ```bash
 admin POST /admin/users '{"username":"jana","first":"Jana","last":"Nováková","email":"jana@acme.com","password":"<generated>","kind":"full"}'

@@ -1,0 +1,22 @@
+#!/bin/bash
+# cos-access on|off [user] — the installer's temporary passwordless sudo, as one
+# file: /etc/sudoers.d/90-company-os-installer.
+#   sudo cos-access on       the human, typing their password once, to re-run a phase
+#   sudo cos-access off      the installer, at handover
+set -euo pipefail
+[ "$(id -u)" -eq 0 ] || { echo "run it with sudo" >&2; exit 1; }
+f=/etc/sudoers.d/90-company-os-installer
+case "${1:-}" in
+  on)
+    u=${2:-${SUDO_USER:-}}
+    [ -n "$u" ] && id "$u" >/dev/null 2>&1 || { echo "for which user? sudo cos-access on <user>" >&2; exit 2; }
+    tmp=$(mktemp)
+    echo "$u ALL=(ALL) NOPASSWD:ALL" > "$tmp"
+    visudo -cf "$tmp" >/dev/null && install -m 0440 -o root -g root "$tmp" "$f"
+    rm -f "$tmp"
+    echo "installer access on for $u — remove it with: sudo cos-access off" ;;
+  off)
+    rm -f "$f"
+    echo "installer access off" ;;
+  *) echo "usage: cos-access on|off [user]" >&2; exit 2 ;;
+esac

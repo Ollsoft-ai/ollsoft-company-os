@@ -1,6 +1,6 @@
 ---
 name: install-company-os
-description: Install Ollsoft Company OS on a fresh cloud server, interactively, from the user's own computer — rent a VPS (Hetzner or Contabo), harden it, install the platform, put it behind Cloudflare on their domain, then ask one by one about branding, ElevenLabs dictation, semantic search, AI agents (Claude Code, Codex, Hermes), user accounts, projects, starter content, monitoring and backups. Use when someone says "install Company OS", "set up / self-host Company OS", "put Company OS on a server", or follows the README's install-with-your-agent step. Also for re-running one phase on an existing install (add Cloudflare later, add search keys, add people, set up backups).
+description: Install Ollsoft Company OS on a fresh cloud server, interactively, from the user's own computer — rent a VPS (Hetzner or Contabo), harden it, install the platform, put it behind Cloudflare on their domain, then ask one by one about branding, ElevenLabs dictation, semantic search, AI agents (Claude Code, Codex, Hermes), user accounts, projects, starter content, monitoring and backups, and finally moving their existing knowledge in from Notion, Obsidian, Confluence, Google Drive, SharePoint, git or elsewhere. Use when someone says "install Company OS", "set up / self-host Company OS", "put Company OS on a server", or follows the README's install-with-your-agent step. Also for re-running one phase on an existing install (add Cloudflare later, add search keys, add people, set up backups, migrate data from another tool).
 ---
 
 # Install Company OS, guided
@@ -15,6 +15,9 @@ You run on the **human's own computer** and drive a brand-new server over SSH. T
 - **Never lock them out.** Keep the working SSH session until a fresh connection on the new settings succeeds.
 - **Secrets don't pass through you unless they choose so.** Default to a *key drop*. Never echo a secret, never put one in the state file, the knowledgebase or a reply.
 - **Long commands run detached** (`cos-run`, phase 2) and you poll.
+- **What the human types contains no quotes.** They may be in PowerShell or cmd, which mangle bash quoting — a login and a key drop failed that way. Anything more than a plain command is a helper on the server (`cos-keydrop`, `cos-login`, `cos-access`), so their line is `ssh -t companyos sudo cos-keydrop elevenlabs`.
+- **On Windows, local tool output ends in a hidden `\r`.** It broke an account creation once. Generate secrets on the server, and strip `\r` from anything you read locally (`tr -d '\r'`).
+- **Never ask for or accept a private key.** For a server they already use, say up front that you only need them to add *your* public key, and give them the one plain command for that.
 - **State file** `~/company-os-install/<host>.md`, local: answers, choices, IDs, each phase done/skipped — no secrets. Read it first; if it exists, offer to resume.
 - **Stop on surprises** — wrong OS, a 200 where a 302 belongs, a failed verify. Explain, fix, then continue.
 
@@ -38,7 +41,8 @@ Read each file when you reach it, not before.
 | 6 | AI agents | which agents, terminal CLIs for whom, Hermes | `reference/6-agents.md` |
 | 7 | People + content | accounts, their terminal agents, admins, projects, sensitive folders, starter content | `reference/7-people.md` |
 | 8 | Operations | AI health check, alerts, Hermes brief + security audit, uptime, backups, share links, network drive, personal OneDrive | `reference/8-ops.md` (drive: `reference/network-drive.md`) |
-| 9 | Handover | — | below |
+| 9 | Migration | anything to bring in — Notion, Obsidian, Confluence, Google Drive, SharePoint, git…? | `reference/9-migrate.md` |
+| 10 | Handover | — | below |
 
 ## Helpers
 
@@ -54,7 +58,7 @@ Host companyos
   ServerAliveInterval 30
 ```
 
-**Admin API** — needs the session from phase 3 §5. Answers are JSON; `{"error": …}` means it failed.
+**Admin API** — needs the session the human opens with `ssh -t companyos cos-login` (phase 3 §5). Answers are JSON; `{"error": …}` means it failed.
 
 ```bash
 admin() { printf '%s' "${3:-}" | ssh companyos "curl -s -b ~/.cos-admin.jar -X $1 -H 'Content-Type: application/json' ${3:+--data-binary @-} http://127.0.0.1:8300$2"; echo; }
@@ -67,30 +71,33 @@ admin() { printf '%s' "${3:-}" | ssh companyos "curl -s -b ~/.cos-admin.jar -X $
 kbenv() { ssh companyos "sudo sed -i '/^$1=/d' /etc/kb/kb.env && echo '$1=$2' | sudo tee -a /etc/kb/kb.env >/dev/null && sudo chmod 640 /etc/kb/kb.env"; }
 ```
 
-**Key drop** — the human runs this in their own terminal; the key goes straight to a root-only file:
+**Key drop** — the human runs this in their own terminal; the secret goes straight into `/root/.cos-<name>.key` (0600), stripped of Windows line endings:
 
-```bash
-ssh -t companyos 'read -rsp "<what> (hidden): " k; echo; printf %s "$k" | sudo sh -c "umask 077; cat > /root/.cos-<name>.key"'
-# multi-line (env files):
-ssh -t companyos 'echo "Paste, then Enter and Ctrl-D:"; sudo sh -c "umask 077; cat > /root/.cos-<name>.key"'
+```
+ssh -t companyos sudo cos-keydrop <name>
+ssh -t companyos sudo cos-keydrop <name> --multiline      (env files: paste, Enter, Ctrl-D)
 ```
 
 If they would rather paste it in the chat, write it the same way via stdin, and tell them once that it now sits in this conversation's history — rotate it later if that matters.
 
-## Phase 9 — Handover
+## Phase 10 — Handover
 
-1. **Remove what only the install needed** (sudoers last — it ends your passwordless sudo):
+1. **Remove what only the install needed** (`cos-access off` last — it ends your passwordless sudo):
    ```bash
-   ssh companyos 'rm -f ~/.cos-admin.jar; sudo sh -c "rm -f /root/ollsoft-company-os-*.txt; shred -u /root/.cos-*.key 2>/dev/null"; sudo rm -f /etc/sudoers.d/90-company-os-installer'
+   ssh companyos 'rm -f ~/.cos-admin.jar; sudo sh -c "rm -f /root/ollsoft-company-os-*.txt; shred -u /root/.cos-*.key 2>/dev/null"; sudo cos-access off'
    ```
    Verify: `ssh companyos sudo -n true` now fails with *a password is required*.
 2. **Cloudflare API token** (token path): they delete it under My Profile → API Tokens.
 3. **Final check from outside:** `https://<host>` → 302 to Access · they sign in · all `kb-*` services active · `systemctl list-timers 'kb-*'` shows heartbeat, gitgc and whatever phase 8 enabled · a backup snapshot exists.
 4. **Server record** in their knowledgebase, private: `users/<admin>/company-os-server.md`, written as the admin — IP, SSH alias and port, what is installed, providers on, Cloudflare IDs, backup target, **where** each key lives (never a value), how to upgrade. House style: short, bullets, no hard wraps.
-5. **Upgrading later** (they type their sudo password):
-   `ssh -t companyos 'cd ~/ollsoft-company-os && git pull && sudo bash scripts/install.sh --admin $USER'`
+5. **Upgrading later** — two plain lines (they type their sudo password at the second):
+   ```
+   ssh companyos git -C ollsoft-company-os pull --ff-only
+   ssh -t companyos sudo bash ollsoft-company-os/scripts/install.sh --admin <admin>
+   ```
+   A private repo needs the read-only deploy key from phase 3 for the pull.
 6. **Tell them in ≤ 8 lines:** the URL, who has accounts, what is on, what was skipped and that "run install-company-os, phase N" adds it later.
 
 ## Re-running a phase on an existing install
 
-Read the state file. Your passwordless sudo is gone, so the human first runs (typing their password) `ssh -t companyos 'echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-company-os-installer'`; recreate the admin session (phase 3 §5) if the phase calls the API; finish with phase 9 step 1.
+Read the state file. Your passwordless sudo is gone, so the human first runs `ssh -t companyos sudo cos-access on` (typing their password once); if the phase calls the API they also run `ssh -t companyos cos-login`; finish with phase 10 step 1.

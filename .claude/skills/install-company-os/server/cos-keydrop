@@ -1,0 +1,21 @@
+#!/bin/bash
+# cos-keydrop <name> [--multiline] — a secret typed or pasted by the human goes
+# straight into /root/.cos-<name>.key (0600); the installer never sees it.
+#   ssh -t companyos sudo cos-keydrop elevenlabs
+# No quotes in that line, so PowerShell, cmd and bash all pass it unchanged.
+set -euo pipefail
+[ "$(id -u)" -eq 0 ] || { echo "run it with sudo: sudo cos-keydrop $*" >&2; exit 1; }
+name=${1:?usage: cos-keydrop <name> [--multiline]}
+[[ "$name" =~ ^[a-z0-9-]{1,40}$ ]] || { echo "name: lowercase letters, digits and dashes" >&2; exit 2; }
+out=/root/.cos-$name.key
+umask 077
+if [ "${2:-}" = "--multiline" ]; then
+  echo "Paste it, then press Enter and Ctrl-D:"
+  cat > "$out"
+else
+  read -rsp "Paste $name (input hidden), then Enter: " k; echo
+  printf '%s' "$k" > "$out"
+fi
+sed -i 's/\r$//; s/\r//g' "$out"            # a Windows terminal pastes CRLF
+[ -s "$out" ] || { rm -f "$out"; echo "nothing received" >&2; exit 1; }
+echo "saved ($(wc -c < "$out") bytes) — tell the installer it is done"

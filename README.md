@@ -9,8 +9,9 @@ An AI agent on your own computer walks you through the whole thing: renting a
 server (Hetzner or Contabo), hardening it, installing, putting it on your domain
 behind Cloudflare, and then — one question at a time — branding, voice
 dictation, semantic search, AI agents, accounts, starter content, monitoring and
-backups. You answer questions and click through two dashboards; it does the rest
-over SSH and checks every step.
+backups — and at the end it moves your existing knowledge in from Notion,
+Obsidian, Confluence, Google Drive, SharePoint or git. You answer questions and
+click through two dashboards; it does the rest over SSH and checks every step.
 
 ```bash
 git clone https://github.com/Ollsoft-ai/ollsoft-company-os.git

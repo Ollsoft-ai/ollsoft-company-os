@@ -15,7 +15,9 @@ ssh companyos 'git clone <origin-url> ~/ollsoft-company-os'
   git -C <local clone> bundle create /tmp/companyos.bundle HEAD
   scp /tmp/companyos.bundle companyos:
   ssh companyos 'git clone ~/companyos.bundle ~/ollsoft-company-os && rm ~/companyos.bundle'
+  ssh companyos git -C ollsoft-company-os remote set-url origin <origin-url>
   ```
+  The `set-url` matters: a clone of a bundle points at the bundle, which is deleted, so the server could never pull an update.
 - **Upgrades will need `git pull`**, so also offer a read-only deploy key: `ssh-keygen -t ed25519 -N "" -f ~/.ssh/companyos_deploy` on the server, an `~/.ssh/config` `Host github.com` entry using it, and the human (or whoever gave them access) adds the `.pub` under the repo's Settings → Deploy keys, read-only.
 
 ## 2. The admin password = their web login
@@ -56,13 +58,13 @@ All `active`, hub `302` or `200`, password status `P`. Then the human signs in f
 
 ## 5. Admin session for the later phases
 
-Phases 5–8 call admin endpoints (settings, logo, users, groups, agents). Have the human create a session **on the server** — again the password stays with them:
+Phases 5–9 call admin endpoints (settings, logo, users, groups, agents). Have the human create a session **on the server** — the password goes from their keyboard to the server, never through you:
 
-```bash
-ssh -t companyos 'read -rsp "Company OS password: " p; echo; curl -s -c ~/.cos-admin.jar -o /dev/null -w "%{http_code}\n" --data-urlencode "username=$USER" --data-urlencode "password=$p" http://127.0.0.1:8300/login; chmod 600 ~/.cos-admin.jar'
+```
+ssh -t companyos cos-login
 ```
 
-- Prints `200`. You then call `ssh companyos 'curl -s -b ~/.cos-admin.jar …'`. Valid 12 h; repeat if a call returns `403 admin only`.
+- It prints `signed in`. You then call `ssh companyos 'curl -s -b ~/.cos-admin.jar …'`. Valid 12 h; have them run it again if a call returns `403 admin only`.
 - `GET /admin/me` → `{"admin": true}` proves it.
 - **Deleted at handover.**
 

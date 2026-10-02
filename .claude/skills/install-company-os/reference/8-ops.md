@@ -8,7 +8,7 @@
 
 The timer is already on and runs as the installing admin (`KB_MAINT_USER` in `kb.env`). It needs Claude Code installed **and signed in** for them (phase 6; they run `claude` once in a web terminal) — until then every run reports "maintenance agent cannot run".
 
-- **Yes:** after they signed in, run it once: `ssh companyos 'sudo systemctl start --no-block kb-maintenance.service'`, then poll `ssh companyos 'systemctl is-active kb-maintenance.service; sudo tail -5 /var/log/kb/maintenance.log'` (up to 15 min).
+- **Yes:** give that admin read access to the system logs, so the check can dig past the bundle it is handed — `ssh companyos 'sudo usermod -aG systemd-journal <admin>'` (read-only; an admin can sudo anyway). After they signed in to Claude, run it once: `ssh companyos 'sudo systemctl start --no-block kb-maintenance.service'`, then poll `ssh companyos 'systemctl is-active kb-maintenance.service; sudo tail -5 /var/log/kb/maintenance.log'` (up to 15 min).
 - **Another admin should own it:** `kbenv KB_MAINT_USER <admin>`.
 - **No:** `ssh companyos 'sudo systemctl disable --now kb-maintenance.timer'`.
 

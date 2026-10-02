@@ -1,0 +1,13 @@
+#!/bin/bash
+# cos-run <name> <command...>  — run detached, so an SSH drop cannot kill it
+# cos-run <name>               — status: "running" or "exit N", plus the last log lines
+# Installed by the install-company-os skill (phase 2); kept for re-running phases.
+n=${1:?name}; shift
+if [ $# -eq 0 ]; then
+  [ -f /var/log/cos-$n.rc ] && echo "exit $(cat /var/log/cos-$n.rc)" || echo running
+  journalctl -u cos-$n -n "${LINES_:-20}" --no-pager -o cat; exit 0
+fi
+rm -f /var/log/cos-$n.rc
+systemd-run --quiet --collect --same-dir --unit=cos-$n \
+  -E DEBIAN_FRONTEND=noninteractive \
+  bash -c '"$@"; echo $? > /var/log/cos-'"$n"'.rc' _ "$@"
