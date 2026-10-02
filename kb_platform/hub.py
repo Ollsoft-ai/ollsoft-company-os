@@ -1911,7 +1911,7 @@ class Hub:
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
-        data = await request.json()
+        data = await _body(request)
         rel = data.get("path", "")
         p = common.resolve_repo_path(rel)
         if p is None:
@@ -2135,7 +2135,7 @@ class Hub:
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
-        data = await request.json()
+        data = await _body(request)
         p = common.resolve_repo_path(data.get("path", ""))
         if p is None or not p.exists():
             return web.json_response({"error": "not found"}, status=404)
@@ -2361,7 +2361,7 @@ class Hub:
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
-        data = await request.json()
+        data = await _body(request)
         p = common.resolve_repo_path(data.get("path", ""))
         if p is None or not p.exists():
             return web.json_response({"error": "not found"}, status=404)
@@ -2451,7 +2451,7 @@ class Hub:
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
-        data = await request.json()
+        data = await _body(request)
         p = common.resolve_repo_path(data.get("path", ""))
         if p is None or not p.exists():
             return web.json_response({"error": "not found"}, status=404)
@@ -2478,7 +2478,7 @@ class Hub:
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
-        data = await request.json()
+        data = await _body(request)
         row = publicshare.get(str(data.get("id", "")))
         if row is None:
             return web.json_response({"error": "no such link"}, status=404)
@@ -2589,7 +2589,7 @@ class Hub:
             return web.json_response(
                 {"error": "you need write access to .os/egress.json (ask an admin to grant it)"},
                 status=403)
-        d = await request.json()
+        d = await _body(request)
         artifact = str(d.get("artifact", "")).strip().strip("/")
         domains = d.get("domains")
         p = common.resolve_repo_path(artifact)
@@ -2621,7 +2621,7 @@ class Hub:
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
-        d = await request.json()
+        d = await _body(request)
         artifact = str(d.get("artifact", "")).strip().strip("/")
         url = str(d.get("url", ""))
         method = str(d.get("method", "GET")).upper()
@@ -2852,7 +2852,7 @@ class Hub:
         everyone reads it, only an admin — via this root endpoint — writes it)."""
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
-        buttons, err = common.validate_launchers(await request.json())
+        buttons, err = common.validate_launchers(await _body(request))
         if err:
             return web.json_response({"error": err}, status=400)
         common.write_company_config("launchers.json",
@@ -2886,7 +2886,7 @@ class Hub:
     async def admin_create_user(self, request: web.Request) -> web.Response:
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
-        d = await request.json()
+        d = await _body(request)
         u = str(d.get("username", "")).strip()
         first = str(d.get("first", "")).strip()
         last = str(d.get("last", "")).strip()
@@ -2976,7 +2976,7 @@ class Hub:
         admin = self._require_admin(request)
         if not admin:
             return web.json_response({"error": "admin only"}, status=403)
-        d = await request.json()
+        d = await _body(request)
         u = str(d.get("username", "")).strip()
         want_shell = bool(d.get("shell"))
         if not _USERNAME_RE.match(u):
@@ -3000,7 +3000,7 @@ class Hub:
         admin = self._require_admin(request)
         if not admin:
             return web.json_response({"error": "admin only"}, status=403)
-        d = await request.json()
+        d = await _body(request)
         u = str(d.get("username", "")).strip()
         if u in PROTECTED_USERS or u == admin:
             return web.json_response({"error": "this user cannot be removed"}, status=400)
@@ -3037,7 +3037,7 @@ class Hub:
     async def admin_create_group(self, request: web.Request) -> web.Response:
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
-        name = str((await request.json()).get("name", "")).strip()
+        name = str((await _body(request)).get("name", "")).strip()
         if not _GROUP_RE.match(name):
             return web.json_response({"error": "group name must be lowercase letters/digits/-/_"}, status=400)
         try:
@@ -3054,7 +3054,7 @@ class Hub:
         never system groups, never a group that is some user's primary group."""
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
-        name = str((await request.json()).get("name", "")).strip()
+        name = str((await _body(request)).get("name", "")).strip()
         if not _GROUP_RE.match(name):
             return web.json_response({"error": "bad group name"}, status=400)
         if name == "kb-users":
@@ -3075,7 +3075,7 @@ class Hub:
         admin = self._require_admin(request)
         if not admin:
             return web.json_response({"error": "admin only"}, status=403)
-        d = await request.json()
+        d = await _body(request)
         group = str(d.get("group", "")).strip()
         user = str(d.get("username", "")).strip()
         action = d.get("action")
@@ -3161,6 +3161,17 @@ class Hub:
 # and are served no-store by their own routes, so a direct fetch of
 # /static/app.html must not get a year either.
 STATIC_CACHE = "public, max-age=31536000, immutable"
+
+
+async def _body(request: web.Request):
+    """The request's JSON body. A body that is not JSON — a stray control
+    character from a script on Windows, say — is the caller's mistake: 400,
+    never a 500 with a traceback in the journal."""
+    try:
+        return await request.json()
+    except ValueError:   # json.JSONDecodeError and UnicodeDecodeError both are
+        raise web.HTTPBadRequest(text=json.dumps({"error": "the request body is not valid JSON"}),
+                                 content_type="application/json") from None
 
 
 @web.middleware

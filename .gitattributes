@@ -1,0 +1,10 @@
+# Code that runs on the Linux server keeps LF line endings, even in a clone on
+# Windows: the guided installer copies its helpers (and a bundle of the repo)
+# from the operator's own computer, and bash refuses a script with CRLF.
+*.sh       text eol=lf
+*.py       text eol=lf
+*.service  text eol=lf
+*.timer    text eol=lf
+*.rules    text eol=lf
+scripts/*                                   text eol=lf
+.claude/skills/install-company-os/server/*  text eol=lf

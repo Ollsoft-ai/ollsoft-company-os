@@ -102,11 +102,20 @@ if [ "$DO_PACKAGES" -eq 1 ]; then
 say "system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+# Node from NodeSource (a box that already builds JavaScript has it) bundles npm
+# in its own nodejs package and conflicts with Ubuntu's separate npm package, so
+# asking for both stopped the whole install. Ask for npm only when nothing
+# provides it — Ubuntu's own nodejs needs it, NodeSource's never does.
+NPM_PKG=npm
+if command -v npm >/dev/null 2>&1 || apt-cache policy nodejs 2>/dev/null | grep -q nodesource; then
+  NPM_PKG=""
+fi
+# shellcheck disable=SC2086  # NPM_PKG is empty or one word, on purpose
 apt-get install -y -qq \
   postgresql postgresql-contrib \
   python3-pip python3-venv python3-dev \
   acl inotify-tools build-essential libpam0g-dev \
-  nodejs npm git curl ca-certificates rsync
+  nodejs $NPM_PKG git curl ca-certificates rsync
 # pgvector package name tracks the server major version
 PGMAJ="$(psql --version | grep -oE '[0-9]+' | head -1)"
 apt-get install -y -qq "postgresql-${PGMAJ}-pgvector" \
