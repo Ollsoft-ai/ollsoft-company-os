@@ -17,7 +17,7 @@ You run on the **human's own computer** and drive a brand-new server over SSH. T
 - **Long commands run detached** (`cos-run`, phase 2) and you poll.
 - **What the human types contains no quotes.** They may be in PowerShell or cmd, which mangle bash quoting — a login and a key drop failed that way. Anything more than a plain command is a helper on the server (`cos-keydrop`, `cos-login`, `cos-access`), so their line is `ssh -t companyos sudo cos-keydrop elevenlabs`.
 - **On Windows, local tool output ends in a hidden `\r`.** It broke an account creation once. Generate secrets on the server, and strip `\r` from anything you read locally (`tr -d '\r'`).
-- **Never ask for or accept a private key.** For a server they already use, say up front that you only need them to add *your* public key, and give them the one plain command for that.
+- **Never ask for a private key.** For a server they already use, say up front that you only need them to add *your* public key, and give them the one plain command for that. If they paste a private key anyway, you may use it — say once that it is not best practice (it now sits in this conversation's history), use it only to add your own key, delete your copy straight after, and tell them to replace it.
 - **State file** `~/company-os-install/<host>.md`, local: answers, choices, IDs, each phase done/skipped — no secrets. Read it first; if it exists, offer to resume.
 - **Stop on surprises** — wrong OS, a 200 where a 302 belongs, a failed verify. Explain, fix, then continue.
 
