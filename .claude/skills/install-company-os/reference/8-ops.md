@@ -127,6 +127,10 @@ ssh companyos 'cd ~/ollsoft-company-os && sudo cos-run share bash scripts/instal
 - `kbenv KB_SHARE_BASE https://share.<domain>` then `ssh companyos sudo systemctl restart kb-hub`.
 - Verify: `curl -sI https://share.<domain>/` answers **without** a redirect to `cloudflareaccess.com`; the human right-clicks a document → Share publicly… and opens the link in a private window.
 
+## Network drive on this computer (optional)
+
+Company OS as a drive in Explorer, Finder or the Linux file manager — Office files opened and saved straight into it. Detect the human's OS and follow `reference/network-drive.md`; it reuses the SSH key from phase 1. That file also says what the starter pack's onboarding page must tell colleagues, who each mount it with their own key.
+
 ## Personal OneDrive on the server (optional, per person)
 
 **Ask:** "Does anyone want their own OneDrive available on the server — so their AI agents can read files from it and save into it? It stays private to that person and is not part of the knowledgebase."
@@ -173,7 +177,3 @@ ssh companyos 'sudo loginctl enable-linger <user> && sudo systemctl --user -M <u
 - `--umask=077`: no other person or their agents can read it; only root can (so an admin via sudo).
 - Verify: `ssh companyos 'sudo systemctl --user -M <user>@ is-active rclone-onedrive; sudo -u <user> ls ~<user>/OneDrive | head -3'` shows `active` and their files.
 - Not backed up by phase 8's restic job, on purpose — OneDrive is already Microsoft's copy.
-
-## Windows drive (optional, per PC)
-
-If anyone wants the knowledgebase as a drive letter in Explorer: point them to `docs/windows-drive.md` (rclone + WinFsp over SFTP). Phase 2 already set `sftp-server -u 0002` for it.

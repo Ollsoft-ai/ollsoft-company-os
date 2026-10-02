@@ -9,7 +9,7 @@ Either way **each person signs in with their own AI account** in the app. Compan
 
 ## Ask
 
-"Which AI agents should people have? Claude Code, OpenAI Codex and Gemini are the usual three; Copilot, Grok, Qwen, OpenCode and DeepSeek are also available. Which one should a new chat open with? Should I also pre-install the terminal versions of Claude Code and Codex, and for whom?" Hermes is its own question, below.
+"Which AI agents should people have? Claude Code, OpenAI Codex and Gemini are the usual three; Copilot, Grok, Qwen, OpenCode and DeepSeek are also available. Which one should a new chat open with? Should I also pre-install the terminal versions of Claude Code and Codex for you?" Colleagues get the same question in phase 7, once their accounts exist. Hermes is its own question, below.
 
 ## Agent chat adapters (server-wide)
 
@@ -25,7 +25,7 @@ ssh companyos 'sudo cos-run agents'                                             
 
 ## Terminal CLIs (per person, full accounts only)
 
-Run as each chosen person — after phase 7 creates them, or now for the admin:
+Run as each chosen person — now for the admin, in phase 7 for colleagues:
 
 ```bash
 ssh companyos 'sudo -iu <user> bash -c "curl -fsSL https://claude.ai/install.sh | bash"'              # Claude Code

@@ -20,7 +20,7 @@ You run on the **human's own computer** and drive a brand-new server over SSH. T
 
 ## Before phase 1, ask
 
-1. Their computer: macOS, Linux or Windows.
+1. Nothing about their computer — detect it: `uname -s` gives `Darwin` (macOS), `Linux`, or `MINGW*`/`MSYS*`/`CYGWIN*` (Windows); PowerShell has `$env:OS` = `Windows_NT`. Say what you found; phase 1's SSH key and phase 8's network drive follow it.
 2. Company name, and the **admin username** (lowercase, usually their first name) — their Linux account and web login.
 3. Do they already have a fresh Ubuntu 24.04 server? Then skip to phase 1's *Get key-based root access*.
 
@@ -36,8 +36,8 @@ Read each file when you reach it, not before.
 | 4 | Domain + Cloudflare | Cloudflare? domain, who may sign in, dashboard or token | `reference/4-edge.md` |
 | 5 | Branding + providers | name, logo, ElevenLabs, search keys, budgets | `reference/5-providers.md` |
 | 6 | AI agents | which agents, terminal CLIs for whom, Hermes | `reference/6-agents.md` |
-| 7 | People + content | accounts, admins, projects, sensitive folders, starter content | `reference/7-people.md` |
-| 8 | Operations | AI health check, alerts, Hermes brief + security audit, uptime, backups, share links, personal OneDrive | `reference/8-ops.md` |
+| 7 | People + content | accounts, their terminal agents, admins, projects, sensitive folders, starter content | `reference/7-people.md` |
+| 8 | Operations | AI health check, alerts, Hermes brief + security audit, uptime, backups, share links, network drive, personal OneDrive | `reference/8-ops.md` (drive: `reference/network-drive.md`) |
 | 9 | Handover | — | below |
 
 ## Helpers

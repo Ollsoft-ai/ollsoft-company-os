@@ -18,7 +18,7 @@ admin POST /admin/users '{"username":"jana","first":"Jana","last":"Nováková","
 - **Changing it:** full accounts run `passwd` in a web terminal on first login. Web-only accounts cannot; an admin resets them with `sudo passwd <user>`.
 - **Extra admins:** `ssh companyos 'sudo usermod -aG sudo <user>'`. Then protect every admin from deletion by another admin: set `KB_PROTECTED_USERS=<a>,<b>` in `/etc/kb/kb.env`, `sudo systemctl restart kb-hub`.
 - **Cloudflare Access:** anyone whose email the policy does not already cover (`email_domain`) must be added — dashboard: edit policy `Staff`; token path: `cf PUT accounts/$ACC/access/policies/$POL` with the full `include` list. **Email in Access first, then the account.**
-- Agent CLIs for these people: back to phase 6 if they asked.
+- **Then ask:** "Should I also install the terminal agents for them — Claude Code, Codex, Hermes — so each person finds them ready in their web terminal?" Per person and agent they pick, run phase 6's *Terminal CLIs* / *Hermes Agent* commands (full accounts only). Each person signs in with their own AI account on first use; tell them so in the hand-out.
 
 ## Restricted projects
 
@@ -50,7 +50,7 @@ ssh companyos 'G=proj-<slug>; D="/srv/kb/projects/<Folder name>"
 | **Example artifacts** | Live apps copied into their `company/`, sample data included: Kanban board, sales pipeline, invoice generator, risk heatmap. Combine with the starter pack. |
 | **Demo company** | A complete fictional engineering firm (handbook, ISO quality records, pipeline, Kanban, cockpit) to explore, removable with one command. |
 
-**Starter pack.** Ask what the company does, the team and their roles, the main recurring processes, tools in use, and the three things a new hire must know. Write as the admin (`ssh companyos 'cat > "/srv/kb/company/…"'`) so history shows them as author. Follow `/srv/kb/.claude/CLAUDE.md` on the server: bullets over prose, one fact per line, no hard-wrapped lines. Tasks are `- [ ] … @user`.
+**Starter pack.** Ask what the company does, the team and their roles, the main recurring processes, tools in use, and the three things a new hire must know. `company/onboarding.md` also carries the SSH-key and network-drive steps for colleagues, with this server's IP and port (see the end of `reference/network-drive.md`). Write as the admin (`ssh companyos 'cat > "/srv/kb/company/…"'`) so history shows them as author. Follow `/srv/kb/.claude/CLAUDE.md` on the server: bullets over prose, one fact per line, no hard-wrapped lines. Tasks are `- [ ] … @user`.
 
 **Example artifacts.** Copy `~/ollsoft-company-os/showcase/kb/<path>` → `/srv/kb/<path>` as the admin, **keeping the paths** — the pipeline, invoice and risk apps read their data from fixed locations. The Kanban is the exception: it reads `kanban.md` next to itself, so any folder works. The templates name people as `{{admin}}`/`{{member}}` (logins) and `{{Admin}}`/`{{Member}}` (first names): replace them with real people in every copied `.md`/`.html`/`.json`.
 
