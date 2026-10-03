@@ -191,11 +191,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 
 ## What it does
 
-- **Multiplayer markdown editing** on the files themselves (browser + `vim` +
-  agents all merge through one CRDT; the `.md` file *is* a CRDT peer). Every
-  document save is versioned in a root-only git repo with the real author
-  recorded; users read their permitted history via `kb-history` or the editor's
-  history panel, never git directly.
+- **Multiplayer markdown editing** on the files themselves: browser, `vim` and
+  agents all merge through one CRDT, because the `.md` file *is* a CRDT peer.
 - **Live presence & cursors**: see who has a doc open and each collaborator's
   named cursor moving in real time, in both rich and source views.
 - **Rich or source editing**: a rendered-but-editable view (headings, bold, links,
@@ -209,8 +206,6 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 - **Link what is already there**: drag any file or folder from the tree into an
   open document and it becomes a link at the drop point. Images and video embed,
   documents open as a tab when you click through.
-- **Kernel-enforced permissions**, surfaced through a web file tree, editor, and a
-  real in-browser terminal (each running as your OS user).
 - **The tree puts recent work on top**: folders stay alphabetical so navigation
   never moves, while the files inside each one are ordered newest-first and
   carry a subtle last-modified stamp.
@@ -232,19 +227,19 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   through the hub, nobody may read it, and the caller never picks the upstream
   URL. See [docs/dictation.md](docs/dictation.md).
 - **Search by meaning and by words**: full-text + vectors (pgvector) fused and reranked, in any language, RLS-scoped per user; `kb-search` for agents; hard spend caps. Optional: plug in your own provider keys ([docs/semantic-search.md](docs/semantic-search.md)).
-- **Task search** over the same Postgres index.
 - **To-dos**: `- [ ] task @assignee #tag` checkboxes aggregated across everything
-  you can see, filterable, with write-back to the source file.
-- **Sandboxed artifacts**: agent-written HTML dashboards that query the database
-  and read, write, list, create and delete files in their own folder *as the
-  viewer*, contained by an opaque-origin iframe + CSP.
+  you can see, searchable and filterable over the same Postgres index, with
+  write-back to the source file.
+- **Artifacts are contained** by an opaque-origin iframe and a CSP, which is what
+  makes a page an agent wrote safe to open, and what bounds it to its own folder.
 - **File sharing**: per-file and per-folder ACLs via a permissions UI, including
   automatic traverse-grants so a share actually reaches the file.
 - **Admin UI** (admin group only): create and remove users, create groups, assign
   membership, with full provisioning of the OS account, home, private dir, Postgres
   role and personal schema.
-- **AI agents** run as each user, with shared context and company **skills** in
-  the repo teaching Claude Code and Codex how to use the platform.
+- **Company skills live in the repo** and teach Claude Code and Codex how this
+  platform works, so an agent arrives knowing the conventions rather than being
+  told them again in every session.
 
 ---
 
