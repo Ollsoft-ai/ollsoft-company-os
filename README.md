@@ -8,8 +8,10 @@ that person sees.
 Your data is never in somebody else's cloud, and an agent reaches it the way a
 colleague does rather than through an API.
 
-*If you know Obsidian: like that, but multiplayer, permissioned, and built for
-agents.*
+Think Notion, but the permissions go all the way down to the file, the small
+tools are ones your team builds inside it rather than buys, and agents work
+there beside you. It is an actual operating system, so it is also where the work
+gets done, not only where it gets written down.
 
 ![A delivery board beside the markdown file it is stored in](docs/images/board-and-markdown.png)
 
