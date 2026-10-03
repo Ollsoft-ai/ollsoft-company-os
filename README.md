@@ -1,7 +1,15 @@
 # Ollsoft Company OS
 
-An **OS-native, AI-agent-native company knowledgebase**. Think "Obsidian, but
-multiplayer, permissioned, and built for agents" — running on a single Linux box.
+**Notion, except your data is plain files on a server you own — which is also
+why your AI agents can work in it like a colleague instead of through an API.**
+
+Documents, tasks, and the small internal tools a company ends up building for
+itself, in one workspace. Every permission is a Linux permission, so what each
+person and each agent may reach is decided by the kernel rather than by
+application code.
+
+*If you know Obsidian: like that, but multiplayer, permissioned, and built for
+agents.*
 
 ![A delivery board beside the markdown file it is stored in](docs/images/board-and-markdown.png)
 
@@ -18,13 +26,10 @@ Details in [LICENSE](LICENSE).
 
 ## Install it with your AI agent
 
-An AI agent on your own computer walks you through the whole thing: renting a
-server (Hetzner or Contabo), hardening it, installing, putting it on your domain
-behind Cloudflare, and then — one question at a time — branding, voice
-dictation, semantic search, AI agents, accounts, starter content, monitoring and
-backups — and at the end it moves your existing knowledge in from Notion,
-Obsidian, Confluence, Google Drive, SharePoint or git. You answer questions and
-click through two dashboards; it does the rest over SSH and checks every step.
+An AI agent on your own computer does the whole thing over SSH — server,
+hardening, domain, accounts, search, agents, monitoring, backups — asking one
+question at a time and checking every step. At the end it moves your existing
+documents in from Notion, Obsidian, Confluence, Drive, SharePoint or git.
 
 ```bash
 git clone https://github.com/Ollsoft-ai/ollsoft-company-os.git
@@ -39,29 +44,39 @@ claude        # then type: /install-company-os
 - You need `ssh` (built into macOS, Linux and Windows 10+), about an hour, a card
   for the server and, optionally, a domain.
 - Interrupted? Run it again — it keeps a state file and resumes.
-- It asks before switching on the **anonymous weekly ping** (version, how many
-  users, which Linux, whether installs and updates worked — never a hostname, an
-  IP, a name or anything from your documents) and before setting up
-  **automatic updates**. `sudo kb-telemetry show` prints the exact bytes;
-  [docs/telemetry.md](docs/telemetry.md) and [docs/updates.md](docs/updates.md).
 
 Prefer to run the commands yourself? See **[Install by hand](#install-by-hand)**.
 
 ## Design
 
-The design rests on three ideas:
+**Four primitives. Everything else is what falls out of them.**
 
-1. **Markdown files are the source of truth.** Everything lives as plain `.md`
-   files in a git repo at `/srv/kb`. The database is a *disposable* index you can
-   drop and rebuild from the files at any time.
-2. **One Linux user per human. The kernel enforces access.** Every web request is
-   served by a process running *as that OS user* (`runuser`), so the kernel — not
-   application code — decides what each person can read and write. Postgres
-   Row-Level Security mirrors the same Unix permissions, so search and SQL can
-   never return a file you couldn't `cat`.
-3. **Everything composes on files + Unix + Postgres.** Multiplayer editing, task
-   aggregation, live dashboards, agents, sharing — none of them need a bespoke
-   permission system. They inherit the kernel's.
+1. **Files.** Plain markdown in a git repo at `/srv/kb`. A document is a file, a
+   project is a folder. Nothing is locked inside a database.
+2. **The Linux kernel.** One OS user per human, and every web request served by a
+   process running *as that user* (`runuser`) — so the kernel, not application
+   code, decides what each person may read and write.
+3. **Postgres.** A *disposable* index of those files: drop it and rebuild it from
+   the markdown whenever you like. Row-Level Security mirrors the same Unix
+   permissions, so search and SQL can never return a file you could not `cat`.
+4. **HTML artifacts.** A company's own small tools — a board, a CRM, an invoice
+   generator — are single HTML files sitting in a folder. They run sandboxed, *as
+   the person who opened them*, reaching files and SQL through a bridge bound by
+   that person's permissions.
+
+What those four give you without being asked twice:
+
+- **The indexer** parses the markdown into rows and carries the Unix permissions
+  across with it. A `- [ ] task @someone #tag` written anywhere becomes a to-do
+  list, and every search is permission-scoped without a line of permission code.
+- **Sharing is a Unix group.** Giving a folder an audience is giving it an owning
+  group — which the file tree, the editor, search, SQL and the agents already
+  obey, because they obey the kernel.
+- **Multiplayer editing** is a CRDT over the same file; the daemon writes it back
+  preserving owner, group and mode, so a shared edit cannot launder permissions.
+- **Version history** is git, attributed to the OS user who made the edit.
+- **Agents** run as the user too, so Claude or Codex see exactly what that person
+  sees — no integration to grant, no second set of credentials to leak.
 
 There is no permission table in this codebase. That is the whole point.
 
@@ -69,24 +84,31 @@ There is no permission table in this codebase. That is the whole point.
 
 ## What it looks like
 
-![The workspace: documents, the file tree and the guided tour](docs/images/workspace.png)
-*Documents in a tree you can see all of — and nothing you may not.*
+![One person edits the markdown; another person's board already shows it](docs/images/live-edit-to-board.png)
+*Two people, two browsers, one file. On the left somebody types into
+`kanban.md`; on the right a colleague's board already carries the change. The
+board is not synced with the file — **it is** the file.*
+
+![Two cursors in the same document at the same time](docs/images/multiplayer-document.png)
+*The same document open by two people, each cursor named and coloured. Merging
+is a CRDT over the file on disk, so `vim` over SSH is a third seat at the table.*
+
+![A shell in the browser, running as the signed-in Linux user](docs/images/terminal.png)
+*A real shell in the browser, as your own Linux account — and `grep` finds the
+same card the board was showing. Same files, same permissions, no API in
+between.*
 
 ![Tasks gathered from across the knowledgebase, blocked work first](docs/images/cockpit.png)
 *Every open task from every document **you are allowed to read**, blocked work
-first. No second task list to keep in step.*
+first. Nobody maintains a second task list.*
 
 ![A customer pipeline running as a small app beside the documents](docs/images/pipeline.png)
-*A CRM is just an artifact in a folder. It runs as the person who opened it, so
-it can only touch what they could.*
+*A CRM is an artifact in a folder. It runs as the person who opened it, so it
+can only reach what they could.*
 
 ![An invoice generator producing a PDF into the finance folder](docs/images/invoice.png)
-*…and so is an invoice generator, which writes its PDF back into the folder
-beside the contract it came from.*
-
-![A shell in the browser, running as the signed-in Linux user](docs/images/terminal.png)
-*A real shell in the browser, as your own Linux account. The same permissions as
-everything above, because they are the same permissions.*
+*…and so is an invoice generator, which writes its PDF back beside the contract
+it came from.*
 
 ## Requirements
 
@@ -224,39 +246,11 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 
 ---
 
-## Architecture at a glance
+## Architecture
 
-```
-                          browser  (session cookie, https + websocket)
-                              │
-                     ┌────────▼─────────┐
-                     │   kb-hub · ROOT  │   PAM login → signed cookie.
-                     │  127.0.0.1:8300  │   Spawns & reverse-proxies per-user
-                     └───┬──────────┬───┘   backends. Privileged /fs/* + /admin/*.
-        runuser -u <you> │          │  /ws/doc  (+ signed uid/gids token)
-      ┌──────────────────▼──┐   ┌───▼──────────────────┐
-      │  user backend       │   │   kb-syncd · ROOT     │  y-websocket CRDT relay +
-      │  runs AS <you>      │   │  file daemon; writes  │  filesystem merge. Preserves
-      │  files·pty·sql·tasks│   │  .md, preserves owner │  owner/group/mode. Read-only
-      │  artifact bridge    │   └───────────┬──────────┘   viewers can't mutate.
-      └──────────┬──────────┘               │ inotify ⇄ Yjs
-                 │ peer auth                 ▼
-        ┌────────▼─────────┐    /srv/kb  ·  git-versioned markdown = TRUTH
-        │   PostgreSQL     │◀── kb-indexer (user kbindexer): parses md → rows,
-        │  RLS = Unix      │    refreshes group membership, honors POSIX ACLs.
-        │  read + traverse │    Disposable · rebuildable · Postgres FTS.
-        └──────────────────┘
-                                kb-convert (same user): office/PDF binaries →
-                                hidden read-only .md sidecars, so their text is
-                                searchable and agent-readable like any doc.
-```
-
-The two root services (`kb-hub`, `kb-syncd`) do only auth, proxying, and the
-CRDT/file merge — the small, auditable surface. Everything touching a user's data
-runs *as that user* (`runuser`, peer auth) or re-checks their Unix bits.
-
-Full component tour: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
-Capacity ceilings, growth hygiene and the drift watchlist: **[docs/SCALING.md](docs/SCALING.md)**.
+One diagram, in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the hub that
+authenticates and spawns, the per-user backend that runs as you, the CRDT file
+daemon, and the index whose row-level security is the same Unix permissions.
 
 ---
 
