@@ -62,7 +62,7 @@ Host companyos
 
 ```bash
 admin() { printf '%s' "${3:-}" | ssh companyos "curl -s -b ~/.cos-admin.jar -X $1 -H 'Content-Type: application/json' ${3:+--data-binary @-} http://127.0.0.1:8300$2"; echo; }
-# admin GET /admin/me      admin POST /admin/settings '{"set":{"brand.name":"Acme"}}'
+# admin GET /admin/me      admin POST /admin/settings '{"set":{"ui.theme":"dark"}}'
 ```
 
 **kb.env** — keeps it 0640 (it holds the alert topic):

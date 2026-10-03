@@ -4,15 +4,16 @@ One question per block, in this order. Every one can be skipped and added later 
 
 ## Branding
 
-**Ask:** "What name should the app show (max 40 characters)? Dark, light, or the default deep-blue look?"
+**Ask:** "Dark, light, or the default deep-blue look? Any brand colour?"
 
 ```bash
-admin POST /admin/settings '{"set":{"brand.name":"<name>","ui.theme":"deep-blue"}}'
+admin POST /admin/settings '{"set":{"ui.theme":"deep-blue"}}'
+# brand colour, optional:  '{"set":{"ui.theme.custom":{"accent":"#rrggbb"}}}'
 ```
 
-Tell them: **a logo and custom colours can be set later** in the app, under Settings → Company.
+Tell them: **the logo, and the text beside it** — the company name, a slogan, anything up to 40 characters — **they set later** in the app, under Settings → Company. Until then it reads "Company OS".
 
-Verify: they reload the page and see the name.
+Verify: they reload the page and see the look they picked.
 
 ## Voice dictation — ElevenLabs
 
