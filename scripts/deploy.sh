@@ -191,9 +191,22 @@ else
   # existing boxes and a fresh install gets exactly the same set.
   # shellcheck disable=SC2086  # UNITS is a deliberate word list
   systemctl enable $UNITS >/dev/null 2>&1
-  # Monitoring, not workloads — always on, and never bounced by a code deploy.
-  systemctl enable --now kb-heartbeat.timer kb-maintenance.timer kb-gitgc.timer \
-    kb-telemetry.timer kb-update.timer >/dev/null 2>&1 || true
+  # Monitoring and housekeeping, not workloads — always on, and never bounced by
+  # a code deploy.
+  #
+  # One at a time, and a failure is PRINTED. These used to be a single
+  # `enable --now a b c … >/dev/null 2>&1 || true`, which is how kb-update.timer
+  # sat disabled on a live box with nothing in the output to say so: systemctl
+  # stops at the first unit it cannot handle, and the redirect threw away the
+  # reason. A timer that silently fails to enable means no automatic updates and
+  # no security patches, which is the worst thing on this list to lose quietly.
+  for t in kb-heartbeat.timer kb-maintenance.timer kb-gitgc.timer \
+           kb-telemetry.timer kb-update.timer; do
+    [ -f "/etc/systemd/system/$t" ] || continue
+    if ! out=$(systemctl enable --now "$t" 2>&1); then
+      echo "  !! $t did not enable: $out" >&2
+    fi
+  done
   if [ "$RESTART" -eq 1 ]; then
     echo "== restart =="
     # restart, not just start: running units would otherwise keep executing
