@@ -2,6 +2,66 @@
 
 For the next person working on this. Read [ARCHITECTURE.md](ARCHITECTURE.md) first.
 
+## Repository layout
+
+```
+ollsoft-company-os/
+├── kb_platform/            the Python backend (one module per component)
+│   ├── common.py           paths, config, HMAC session tokens, safe path helpers
+│   ├── pam_auth.py         PAM login
+│   ├── hub.py              ROOT: login, spawner, reverse proxy, /fs/* + /admin/*
+│   ├── user_server.py      per-user backend (runs AS the user)
+│   ├── syncd.py            ROOT: CRDT relay + filesystem daemon
+│   └── indexer.py          markdown → Postgres index (RLS metadata, ACLs, tasks)
+├── frontend/               vanilla-JS SPA (CodeMirror 6 + Yjs + xterm), esbuild
+│   ├── src/app.js          the whole client
+│   ├── src/richview.js     the writing surface: widgets, live preview, tables, @mentions
+│   │                       (no app inside it — the public-link page mounts the same module)
+│   ├── src/publicdoc.js    that surface with no app behind it: one file, a plain save
+│   ├── src/dictation.js    microphone capture + push-to-talk (owns no routing)
+│   ├── assets/             hand-authored shell: app.html, login.html, style.css, logos
+│   ├── static/             build output (generated, gitignored)
+│   └── build.mjs           esbuild bundler
+├── scripts/
+│   ├── install.sh          one-command install / upgrade  ← start here
+│   ├── seed-demo.sh        sample company, and the test suite's fixtures
+│   ├── deploy.sh           code, CLIs, skills, schema, units, timers → live (install.sh ends with it)
+│   ├── kb-heartbeat.sh     functional health check (kb-heartbeat.timer, 5 min)
+│   ├── kb-alert.sh         append an alert to /var/log/kb/alerts.log (push is opt-in)
+│   ├── kb-maintenance.sh   daily triage: bundle -> headless agent -> notify only if real
+│   ├── kb-maintenance-policy.md  what counts as noise vs a real problem, and what the agent may do
+│   ├── install-dictation-key.sh  validate + install the ElevenLabs key (root 0600)
+│   ├── install-audit.sh    auditd + kb-audit.rules (no usernames) + kb-audit-digest (daily summary)
+│   ├── bounce_backends.py  restart per-user backends after a deploy
+│   ├── schema.sql          Postgres schema, RLS functions, grants
+│   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
+├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-embedd / kb-convert units, the
+│                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
+├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
+├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
+├── .claude/skills/install-company-os/  the agent-guided installer (run from your own computer)
+├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
+└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · unified-views · agent-chat · public-sharing · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
+```
+
+**Created on the box by the installer** (not in this repo):
+
+```
+/opt/kb-platform      code, world-readable (so per-user backends can run it)
+/opt/kb-venv          the Python venv, world-executable
+/opt/kb-convert-venv  kb-convert's parser venv — heavy deps, kept separate on purpose
+/srv/kb               the knowledgebase: git repo of markdown + attachments
+/srv/kb/.os/          platform config in the repo: launchers, egress allow-list, company settings
+/srv/kb-public/       what the public-link container can see: per-share bind mounts + configs
+**/.trash/            a deleted file waits in one of these, beside where it lived
+/etc/kb/kb.env        runtime configuration read by the systemd units
+/etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it
+/etc/kb/session.key   HMAC key (root 0600)
+/run/kb               unix sockets: syncd.sock (root), users/<u>/ (per-user 0700)
+```
+
+---
+
 ## Dev loop
 
 Source is your clone of this repo; the running system runs from the install
@@ -31,7 +91,56 @@ sudo bash scripts/deploy.sh
 sudo -u kbindexer psql -d kb -f your_migration.sql
 ```
 
+## Operating it
+
+```bash
+# status and logs
+systemctl status kb-hub kb-syncd kb-indexer kb-embedd kb-convert
+journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -f
+
+# redeploy after editing code (reads /etc/kb/kb.env for paths)
+sudo bash scripts/deploy.sh
+
+# rebuild the frontend after editing frontend/src
+(cd frontend && node build.mjs) && sudo bash scripts/deploy.sh
+
+# the index is disposable — rebuild it from the markdown at any time
+sudo systemctl restart kb-indexer
+
+# office/PDF → markdown sidecars are equally disposable — force a resweep
+sudo systemctl restart kb-convert
+
+# monitoring: alerts are logged, not pushed (see docs/monitoring.md)
+sudo tail -5 /var/log/kb/alerts.log            # every alert ever raised
+sudo tail -40 /var/log/kb/maintenance.log      # the daily triage verdicts
+sudo /opt/kb-platform/scripts/kb-maintenance.sh --dry-run --stdout   # triage now
+```
+
+> `deploy.sh` restarts `kb-hub`, and its cgroup holds every open web terminal and
+> per-user backend. Pass `--no-restart` if anyone might be mid-session, then
+> restart only what your change touched.
+
 ## Testing
+
+**There is nothing to set up first.** The suite seeds and removes its own
+fixtures: each run makes a namespace of its own (`company/kbtest-<ns>/`,
+`projects/kbtest-<ns>-acme/`, throwaway `kbt_<ns>_*` accounts) and removes all of
+it afterwards, so a run cannot collide with — or delete — real content. It needs
+passwordless sudo to create those accounts.
+
+First time on a box:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/playwright install chromium        # for tests/e2e
+# optional: firefox + webkit for tests/e2e/test_cross_browser.py (they skip if absent)
+```
+
+Set `KB_TEST_NS=<id>` to reuse a namespace you seeded yourself — conftest will
+not tear down what it did not create, which is what CI does, because pytest runs
+there as an account without sudo. `KB_TEST_NO_SEED=1` skips the lifecycle
+entirely.
 
 The layout model has JavaScript unit tests that need no browser and no box:
 
@@ -40,7 +149,6 @@ node --test tests/js/*.test.mjs      # layout.js: normalize, v1 migration, the v
 ```
 
 CI runs them right after the installer. Everything else is Python, below.
-
 
 ```bash
 .venv/bin/python -m pytest tests/ -q          # full suite
@@ -242,3 +350,4 @@ natural next steps.
   Scaling out needs LDAP + a shared filesystem — a real rewrite, not a feature.
 - **Root hardening.** `kb-hub`/`kb-syncd` run as root; dropping capabilities +
   seccomp/AppArmor scoping is a reasonable next step for higher assurance.
+

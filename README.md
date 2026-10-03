@@ -3,6 +3,19 @@
 An **OS-native, AI-agent-native company knowledgebase**. Think "Obsidian, but
 multiplayer, permissioned, and built for agents" — running on a single Linux box.
 
+![A delivery board beside the markdown file it is stored in](docs/images/board-and-markdown.png)
+
+*The board on the left is stored in the markdown file on the right. Edit either;
+both are the same task. A person, a dashboard and an AI agent all work on the
+same file.*
+
+**Free for up to three named users**, and free for any number of users for sixty
+days while you evaluate it. Above that, production use in an organisation needs a
+commercial licence — [info@ollsoft.ai](mailto:info@ollsoft.ai). The source is
+public either way: read it, audit it, build it, run it for development or
+testing. Every version becomes Apache 2.0 four years after its release.
+Details in [LICENSE](LICENSE).
+
 ## Install it with your AI agent
 
 An AI agent on your own computer walks you through the whole thing: renting a
@@ -26,6 +39,11 @@ claude        # then type: /install-company-os
 - You need `ssh` (built into macOS, Linux and Windows 10+), about an hour, a card
   for the server and, optionally, a domain.
 - Interrupted? Run it again — it keeps a state file and resumes.
+- It asks before switching on the **anonymous weekly ping** (version, how many
+  users, which Linux, whether installs and updates worked — never a hostname, an
+  IP, a name or anything from your documents) and before setting up
+  **automatic updates**. `sudo kb-telemetry show` prints the exact bytes;
+  [docs/telemetry.md](docs/telemetry.md) and [docs/updates.md](docs/updates.md).
 
 Prefer to run the commands yourself? See **[Install by hand](#install-by-hand)**.
 
@@ -48,6 +66,27 @@ The design rests on three ideas:
 There is no permission table in this codebase. That is the whole point.
 
 ---
+
+## What it looks like
+
+![The workspace: documents, the file tree and the guided tour](docs/images/workspace.png)
+*Documents in a tree you can see all of — and nothing you may not.*
+
+![Tasks gathered from across the knowledgebase, blocked work first](docs/images/cockpit.png)
+*Every open task from every document **you are allowed to read**, blocked work
+first. No second task list to keep in step.*
+
+![A customer pipeline running as a small app beside the documents](docs/images/pipeline.png)
+*A CRM is just an artifact in a folder. It runs as the person who opened it, so
+it can only touch what they could.*
+
+![An invoice generator producing a PDF into the finance folder](docs/images/invoice.png)
+*…and so is an invoice generator, which writes its PDF back into the folder
+beside the contract it came from.*
+
+![A shell in the browser, running as the signed-in Linux user](docs/images/terminal.png)
+*A real shell in the browser, as your own Linux account. The same permissions as
+everything above, because they are the same permissions.*
 
 ## Requirements
 
@@ -221,144 +260,15 @@ Capacity ceilings, growth hygiene and the drift watchlist: **[docs/SCALING.md](d
 
 ---
 
-## Repository layout
+## Where things are
 
-```
-ollsoft-company-os/
-├── kb_platform/            the Python backend (one module per component)
-│   ├── common.py           paths, config, HMAC session tokens, safe path helpers
-│   ├── pam_auth.py         PAM login
-│   ├── hub.py              ROOT: login, spawner, reverse proxy, /fs/* + /admin/*
-│   ├── user_server.py      per-user backend (runs AS the user)
-│   ├── syncd.py            ROOT: CRDT relay + filesystem daemon
-│   └── indexer.py          markdown → Postgres index (RLS metadata, ACLs, tasks)
-├── frontend/               vanilla-JS SPA (CodeMirror 6 + Yjs + xterm), esbuild
-│   ├── src/app.js          the whole client
-│   ├── src/richview.js     the writing surface: widgets, live preview, tables, @mentions
-│   │                       (no app inside it — the public-link page mounts the same module)
-│   ├── src/publicdoc.js    that surface with no app behind it: one file, a plain save
-│   ├── src/dictation.js    microphone capture + push-to-talk (owns no routing)
-│   ├── assets/             hand-authored shell: app.html, login.html, style.css, logos
-│   ├── static/             build output (generated, gitignored)
-│   └── build.mjs           esbuild bundler
-├── scripts/
-│   ├── install.sh          one-command install / upgrade  ← start here
-│   ├── seed-demo.sh        sample company, and the test suite's fixtures
-│   ├── deploy.sh           code, CLIs, skills, schema, units, timers → live (install.sh ends with it)
-│   ├── kb-heartbeat.sh     functional health check (kb-heartbeat.timer, 5 min)
-│   ├── kb-alert.sh         append an alert to /var/log/kb/alerts.log (push is opt-in)
-│   ├── kb-maintenance.sh   daily triage: bundle -> headless agent -> notify only if real
-│   ├── kb-maintenance-policy.md  what counts as noise vs a real problem, and what the agent may do
-│   ├── install-dictation-key.sh  validate + install the ElevenLabs key (root 0600)
-│   ├── install-audit.sh    auditd + kb-audit.rules (no usernames) + kb-audit-digest (daily summary)
-│   ├── bounce_backends.py  restart per-user backends after a deploy
-│   ├── schema.sql          Postgres schema, RLS functions, grants
-│   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
-├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-embedd / kb-convert units, the
-│                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
-├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
-├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
-├── .claude/skills/install-company-os/  the agent-guided installer (run from your own computer)
-├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
-└── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · unified-views · agent-chat · public-sharing · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
-```
-
-**Created on the box by the installer** (not in this repo):
-
-```
-/opt/kb-platform      code, world-readable (so per-user backends can run it)
-/opt/kb-venv          the Python venv, world-executable
-/opt/kb-convert-venv  kb-convert's parser venv — heavy deps, kept separate on purpose
-/srv/kb               the knowledgebase: git repo of markdown + attachments
-/srv/kb/.os/          platform config in the repo: launchers, egress allow-list, company settings
-/srv/kb-public/       what the public-link container can see: per-share bind mounts + configs
-**/.trash/            a deleted file waits in one of these, beside where it lived
-/etc/kb/kb.env        runtime configuration read by the systemd units
-/etc/kb/elevenlabs.key  dictation credential (root 0600) — the hub alone reads it
-/etc/kb/session.key   HMAC key (root 0600)
-/run/kb               unix sockets: syncd.sock (root), users/<u>/ (per-user 0700)
-```
-
----
-
-## Configuration
-
-Everything the services need lives in `/etc/kb/kb.env`, written by the installer:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `KB_REPO` | `/srv/kb` | Knowledgebase location |
-| `KB_HUB_PORT` | `8300` | Hub listen port (127.0.0.1 only) |
-| `KB_PG_DB` | `kb` | Postgres database name |
-| `KB_ADMIN_GROUP` | `sudo` | OS group granting platform-admin rights |
-| `KB_PROTECTED_USERS` | founding admin | Accounts the admin UI refuses to modify or delete |
-| `KB_PLATFORM_ROOT` | `/opt/kb-platform` | Deployed code |
-| `KB_VENV_PY` | `/opt/kb-venv/bin/python` | Interpreter for per-user backends |
-| `KB_NTFY_TOPIC` | *(empty)* | ntfy topic for pushed alerts; empty = no pushes possible |
-| `KB_ALERT_PUSH` | `0` | `1` pushes every alert as it happens. `0` = log only, triaged daily |
-| `KB_ALERT_DEDUP` | `21600` | Seconds an identical alert title stays muted for pushes |
-
-After editing: `sudo systemctl restart kb-hub kb-syncd kb-indexer kb-embedd kb-convert`.
-
-Things people choose — the theme, and whatever joins it — are not environment
-variables but **settings**: a company default in `/srv/kb/.os/settings.json`
-that anyone may override in their own `users/<name>/.os/settings.json`, from
-the Settings dialog or by editing the file. See [docs/settings.md](docs/settings.md).
-
----
-
-## Operating it
-
-```bash
-# status and logs
-systemctl status kb-hub kb-syncd kb-indexer kb-embedd kb-convert
-journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -f
-
-# redeploy after editing code (reads /etc/kb/kb.env for paths)
-sudo bash scripts/deploy.sh
-
-# rebuild the frontend after editing frontend/src
-(cd frontend && node build.mjs) && sudo bash scripts/deploy.sh
-
-# the index is disposable — rebuild it from the markdown at any time
-sudo systemctl restart kb-indexer
-
-# office/PDF → markdown sidecars are equally disposable — force a resweep
-sudo systemctl restart kb-convert
-
-# monitoring: alerts are logged, not pushed (see docs/monitoring.md)
-sudo tail -5 /var/log/kb/alerts.log            # every alert ever raised
-sudo tail -40 /var/log/kb/maintenance.log      # the daily triage verdicts
-sudo /opt/kb-platform/scripts/kb-maintenance.sh --dry-run --stdout   # triage now
-```
-
-> `deploy.sh` restarts `kb-hub`, and its cgroup holds every open web terminal and
-> per-user backend. Pass `--no-restart` if anyone might be mid-session, then
-> restart only what your change touched.
-
-### Running the tests
-
-The suite seeds and removes its own fixtures — there is nothing to set up first.
-Each run creates a namespace of its own (`company/kbtest-<ns>/`,
-`projects/kbtest-<ns>-acme/`, throwaway `kbt_<ns>_*` accounts), and removes all of
-it afterwards, so a run cannot collide with — or delete — real content. It needs
-passwordless sudo to create those accounts.
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/playwright install chromium        # for tests/e2e
-# optional: firefox + webkit for tests/e2e/test_cross_browser.py (they skip if absent)
-.venv/bin/python -m pytest tests/ -q
-```
-
-Set `KB_TEST_NS=<id>` to reuse a namespace you seeded yourself (conftest will not
-tear down what it did not create — this is what CI does, because pytest runs
-there as an account without sudo), or `KB_TEST_NO_SEED=1` to skip the lifecycle
-entirely.
-
-`tests/cli/` needs no browser and is the fast loop. See
-**[docs/DEVELOPING.md](docs/DEVELOPING.md)**.
+- **Code layout, the dev loop, how to add a view, running the tests** —
+  [docs/DEVELOPING.md](docs/DEVELOPING.md)
+- **Install, upgrade, every `/etc/kb/kb.env` variable** —
+  [docs/SETUP.md](docs/SETUP.md)
+- **How it is put together, and why** — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Updates and the release channels** — [docs/updates.md](docs/updates.md)
+- **What the anonymous ping sends** — [docs/telemetry.md](docs/telemetry.md)
 
 ---
 
@@ -468,10 +378,8 @@ mode, an ACL, or a Postgres grant instead.
 
 ## License
 
-Business Source License 1.1 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-The source is public: read it, audit it, build it, modify it, run it for development or testing. **Production use is free for up to three named users**, and free for any number of users for sixty days while you evaluate it. Beyond that, production use in an organisation needs a commercial license — write to info@ollsoft.ai.
-
-Each version becomes Apache 2.0 four years after its release.
+**Business Source License 1.1** — [LICENSE](LICENSE), [NOTICE](NOTICE), and the
+plain-language summary at the top of this page. Commercial licensing:
+[info@ollsoft.ai](mailto:info@ollsoft.ai).
 
 Built at [Ollsoft](https://ollsoft.ai).

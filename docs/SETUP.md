@@ -276,7 +276,9 @@ granted it. See the `kb-database` skill — the fix is a `GRANT ... TO kb_users`
 
 ## Configuration reference
 
-`/etc/kb/kb.env`, read by the systemd units:
+`/etc/kb/kb.env`, written by the installer and read by the systemd units. This
+is the only list; the README links here rather than keeping a second copy that
+drifts.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
@@ -289,8 +291,32 @@ granted it. See the `kb-database` skill — the fix is a `GRANT ... TO kb_users`
 | `KB_PG_DB` | `kb` | Postgres database |
 | `KB_ADMIN_GROUP` | `sudo` | OS group granting platform-admin rights |
 | `KB_PROTECTED_USERS` | founding admin | accounts the admin UI won't modify or delete |
+| `KB_VERSION` | from the tag | written by `scripts/deploy.sh`; what the UI and the ping report |
+| `KB_LICENCE` | *(empty)* | any non-empty value records a commercial licence and silences the seat notice. Not validated — see [LICENSE](../LICENSE) |
+| `KB_UPDATE_CHANNEL` | `stable` | `stable` (released tags) · `edge` (every commit) · `off`. [docs/updates.md](updates.md) |
+| `KB_SRC` | `/opt/kb-src` | the root-owned clone `kb-update.sh` pulls into |
+| `KB_UPDATE_DEFERRALS` | `3` | hours to wait out live web terminals before giving up for this week |
+| `KB_TELEMETRY` | `on` | `off` sends nothing. [docs/telemetry.md](telemetry.md) |
+| `KB_TELEMETRY_URL` | Ollsoft's | where the anonymous ping goes |
 
-Restart the services after editing.
+Alerts, which are logged always and pushed only on purpose
+([docs/monitoring.md](monitoring.md)):
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `KB_NTFY_TOPIC` | *(empty)* | ntfy topic for pushed alerts; empty = no pushes are possible |
+| `KB_ALERT_PUSH` | `0` | `1` pushes every alert as it happens; `0` logs only, triaged daily |
+| `KB_ALERT_DEDUP` | `21600` | seconds an identical alert title stays muted for pushes |
+| `KB_MAINT_USER` | *(empty)* | whose signed-in agent runs the daily maintenance triage |
+
+Restart the services after editing:
+`sudo systemctl restart kb-hub kb-syncd kb-indexer kb-embedd kb-convert`.
+
+**Things people choose are not environment variables.** The theme, the brand
+name and whatever joins them are *settings*: a company default in
+`/srv/kb/.os/settings.json` that anyone may override in their own
+`users/<name>/.os/settings.json`, from the Settings dialog or by editing the
+file. See [docs/settings.md](settings.md).
 
 ---
 
