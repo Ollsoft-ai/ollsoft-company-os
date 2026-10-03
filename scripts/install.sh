@@ -20,13 +20,14 @@
 #   --prefix <path>     Where code is deployed.        Default /opt/kb-platform
 #   --port <n>          Hub listen port on 127.0.0.1.  Default 8300
 #   --admin-group <g>   OS group granting admin rights. Default sudo
+#   --no-telemetry      Send nothing, ever (same as KB_TELEMETRY=off).
 #   --no-packages       Skip apt-get (deps already installed).
 #   --no-start          Install but don't enable/start the services.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 ADMIN_USER=""; ADMIN_PASS=""; REPO=/srv/kb; PREFIX=/opt/kb-platform
-PORT=8300; ADMIN_GROUP=sudo; DO_PACKAGES=1; DO_START=1
+PORT=8300; ADMIN_GROUP=sudo; DO_PACKAGES=1; DO_START=1; TELEMETRY_OFF=0
 VENV="${PREFIX%/*}/kb-venv"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -50,6 +51,12 @@ if [ -f /etc/kb/kb.env ]; then
   PRIOR_EMBED_PROVIDER="${KB_EMBED_PROVIDER:-}"
   PRIOR_RERANK_PROVIDER="${KB_RERANK_PROVIDER:-}"
   PRIOR_MAINT_USER="${KB_MAINT_USER:-}"
+  # Consent and update policy are the customer's answers, not derivable state.
+  # Re-running the installer must never quietly switch telemetry back on or
+  # turn automatic updates off again.
+  PRIOR_TELEMETRY="${KB_TELEMETRY:-}"
+  PRIOR_CHANNEL="${KB_UPDATE_CHANNEL:-}"
+  PRIOR_SRC="${KB_SRC:-}"
   PRIOR_ENV="$(cat /etc/kb/kb.env)"
 fi
 PRIOR_ENV="${PRIOR_ENV:-}"
@@ -57,6 +64,28 @@ PRIOR_PROTECTED="${PRIOR_PROTECTED:-}"
 PRIOR_NTFY_TOPIC="${PRIOR_NTFY_TOPIC:-}"
 PRIOR_ALERT_PUSH="${PRIOR_ALERT_PUSH:-0}"
 PRIOR_MAINT_USER="${PRIOR_MAINT_USER:-}"
+PRIOR_TELEMETRY="${PRIOR_TELEMETRY:-on}"
+PRIOR_CHANNEL="${PRIOR_CHANNEL:-}"
+
+# Where the server keeps its own clone of the public repo for automatic
+# updates. ALWAYS a root-owned path, never the directory the install ran from:
+# the installer is often cloned into somebody's home, and a user-writable
+# checkout that root later deploys from would let any member of that account
+# choose the code the platform runs. /opt/kb-src is root's.
+SRC_CLONE="${PRIOR_SRC:-/opt/kb-src}"
+
+# A developer installing from their own working copy should not wake up on
+# Monday running someone else's commit, so that box defaults to no automatic
+# updates. A plain server install (unpacked tarball, or a clone under /opt)
+# gets the recommended channel.
+DEV_CHECKOUT=0
+if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 \
+   && [ "$(stat -c %u "$SRC" 2>/dev/null || echo 0)" != 0 ]; then
+  DEV_CHECKOUT=1
+fi
+if [ -z "$PRIOR_CHANNEL" ]; then
+  [ "$DEV_CHECKOUT" -eq 1 ] && PRIOR_CHANNEL=off || PRIOR_CHANNEL=stable
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,6 +95,7 @@ while [ $# -gt 0 ]; do
     --prefix)       PREFIX="${2:?}"; VENV="${PREFIX%/*}/kb-venv"; shift 2 ;;
     --port)         PORT="${2:?}"; shift 2 ;;
     --admin-group)  ADMIN_GROUP="${2:?}"; shift 2 ;;
+    --no-telemetry) TELEMETRY_OFF=1; shift ;;
     --no-packages)  DO_PACKAGES=0; shift ;;
     --no-start)     DO_START=0; shift ;;
     -h|--help)      sed -n '2,/^# ---/p' "$0" | sed '$d'; exit 0 ;;
@@ -73,8 +103,33 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# After the flags, not before them: --no-telemetry is an argument.
+[ "$TELEMETRY_OFF" -eq 1 ] && PRIOR_TELEMETRY=off
+
 die() { echo "ERROR: $*" >&2; exit 1; }
-say() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+STEP=start
+say() { STEP="$*"; printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+
+# Telemetry for the install itself. A finished install is uninteresting; one
+# that stops at step N is the whole reason this exists — so the trap reports
+# the step name, never a message, a path or any output.
+TM_URL="${KB_TELEMETRY_URL:-https://companyos-support.ollsoft.org/t}"
+tm() {
+  [ "${TELEMETRY_OFF:-0}" -eq 1 ] && return 0
+  [ "${KB_TELEMETRY:-on}" = off ] && return 0
+  [ -d /etc/kb ] || return 0
+  # the kernel's uuid source is always there; uuidgen is a package
+  [ -s /etc/kb/install-id ] \
+    || (umask 022; cat /proc/sys/kernel/random/uuid > /etc/kb/install-id) 2>/dev/null \
+    || return 0
+  curl -m 5 -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+    -d "{\"install_id\":\"$(cat /etc/kb/install-id)\",\"event\":\"$1\",\"detail\":\"${2:-}\",\"version\":\"$(cat "$SRC/VERSION" 2>/dev/null)\",\"os\":\"$(. /etc/os-release; echo "$ID $VERSION_ID")\"}" \
+    "$TM_URL" >/dev/null 2>&1 || true
+}
+# Armed only once the arguments are known to be good: a usage error is the
+# operator's typo, not a failed install, and reporting it would be noise.
+ARMED=0
+trap 'rc=$?; [ $rc -ne 0 ] && [ "$ARMED" -eq 1 ] && tm install_failed "$STEP"; exit $rc' EXIT
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo bash scripts/install.sh ...)"
 [ -n "$ADMIN_USER" ] || die "--admin <username> is required"
@@ -361,6 +416,8 @@ SQL
 say "runtime config and directories"
 # ---------------------------------------------------------------------------
 install -d -m 0755 /run/kb /run/kb/users /etc/kb
+ARMED=1
+tm install_started
 if [ ! -f /etc/kb/session.key ]; then
   head -c 48 /dev/urandom | base64 | tr -d '\n' > /etc/kb/session.key
   chmod 600 /etc/kb/session.key
@@ -387,6 +444,23 @@ KB_ADMIN_GROUP=$ADMIN_GROUP
 # Accounts the admin UI refuses to modify or delete, comma-separated. The
 # founding admin is listed so a second admin cannot lock them out.
 KB_PROTECTED_USERS=$PROTECTED_LIST
+# --- updates ----------------------------------------------------------------
+# stable = released tags only (recommended), edge = every commit on main,
+# off = never update by itself. WHEN it runs is a systemd drop-in, not a key
+# here: /etc/systemd/system/kb-update.timer.d/schedule.conf, so an update
+# cannot overwrite the schedule the customer chose. See docs/updates.md.
+KB_UPDATE_CHANNEL=$PRIOR_CHANNEL
+# The clone kb-update.sh pulls into and deploys from.
+KB_SRC=$SRC_CLONE
+# Hours to wait out live web-terminal shells before giving up for this week.
+# A restart kills them, including other people's unsaved work.
+KB_UPDATE_DEFERRALS=3
+# --- telemetry --------------------------------------------------------------
+# Anonymous: install id, version, number of named users, distro, Postgres
+# version, install/update outcome. Never a hostname, an IP, an account name or
+# anything from the knowledgebase. `kb-telemetry show` prints the exact bytes.
+# off = send nothing. See docs/telemetry.md.
+KB_TELEMETRY=$PRIOR_TELEMETRY
 # --- monitoring -------------------------------------------------------------
 # Alerts are ALWAYS appended to /var/log/kb/alerts.log. These two keys only
 # control whether an alert is *also* pushed to a phone, which is off by
@@ -433,7 +507,22 @@ chown root:root /etc/kb/kb.env
 chmod 640 /etc/kb/kb.env
 
 # ---------------------------------------------------------------------------
-say "deploy: code, CLIs, skills, schema, units, timers, start"
+say "update source + deploy: code, CLIs, skills, schema, units, timers, start"
+# ---------------------------------------------------------------------------
+# The clone that scripts/kb-update.sh pulls into. Only made when this install
+# did not itself come from one.
+if [ "$PRIOR_CHANNEL" != off ] && [ ! -d "$SRC_CLONE/.git" ]; then
+  if git clone --quiet https://github.com/Ollsoft-ai/ollsoft-company-os.git "$SRC_CLONE"; then
+    chown -R root:root "$SRC_CLONE"
+    echo "  update source: $SRC_CLONE (root-owned)"
+  else
+    echo "  WARNING: could not clone the update source; automatic updates are off"
+    sed -i 's/^KB_UPDATE_CHANNEL=.*/KB_UPDATE_CHANNEL=off/' /etc/kb/kb.env
+  fi
+elif [ "$PRIOR_CHANNEL" = off ] && [ "$DEV_CHECKOUT" -eq 1 ]; then
+  echo "  automatic updates off: installed from a working copy owned by $(stat -c %U "$SRC")"
+fi
+
 # ---------------------------------------------------------------------------
 # The same script that redeploys code later, so an install and a redeploy can
 # never drift apart (they did: install once enabled one timer, deploy three).
@@ -442,6 +531,11 @@ if [ "$DO_START" -eq 1 ]; then
 else
   bash "$SRC/scripts/deploy.sh" --no-start
 fi
+
+# Now that the platform is deployed, the richer sender is available: this one
+# carries the user count and the Postgres version too.
+[ "$PRIOR_TELEMETRY" != off ] && \
+  "$PREFIX/scripts/kb-telemetry" event install_ok >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 say "done"
@@ -455,6 +549,10 @@ Ollsoft Company OS is installed.
 $( [ -f "$CREDS" ] && echo "  Password    in $CREDS (delete it once you've logged in)" )
   Repo        $REPO
   Config      /etc/kb/kb.env
+  Updates     $PRIOR_CHANNEL channel, $(systemctl list-timers kb-update.timer --no-legend 2>/dev/null | awk '{print $1, $2, $3}' | head -1 || echo "weekly")
+              change with: docs/updates.md
+  Telemetry   $PRIOR_TELEMETRY — see exactly what is sent: sudo kb-telemetry show
+              turn it off:  KB_TELEMETRY=off in /etc/kb/kb.env
   Logs        journalctl -u kb-hub -u kb-syncd -u kb-indexer -u kb-embedd -u kb-convert -f
 
 Optional: populate a sample company to explore the permission model —

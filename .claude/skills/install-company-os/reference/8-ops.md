@@ -70,6 +70,22 @@ ssh companyos 'sudo -iu <user> ~/.local/bin/hermes cron run <job-id>'     # each
 - `--deliver`: `telegram`, `discord`, `signal`, or whatever `hermes gateway setup` configured.
 - More jobs later are one sentence to Hermes in a web terminal: "every Monday, summarise what changed in company/handbook".
 
+## Automatic updates — recommend on, Sunday 02:00
+
+> New releases can install themselves. It waits until nobody has a terminal open, and if the new version doesn't come up it puts the old one back. I'd leave that on, Sunday at two in the morning — different day or time, or rather not at all?
+
+- **Default after install, and what to recommend:** `stable` channel (released versions only), `Sun *-*-* 02:00:00`.
+- **Any schedule they want.** Write it as a drop-in — never edit the unit file, an update would overwrite it:
+  ```bash
+  ssh -t companyos 'sudo install -d /etc/systemd/system/kb-update.timer.d && printf "[Timer]\nOnCalendar=\nOnCalendar=%s\n" "Wed *-*-* 23:30:00" | sudo tee /etc/systemd/system/kb-update.timer.d/schedule.conf && sudo systemctl daemon-reload && sudo systemctl restart kb-update.timer'
+  ```
+  The empty `OnCalendar=` is required: it clears the shipped time instead of adding a second one.
+- **Every commit instead of releases** (only if they ask, and they rarely should): `kbenv KB_UPDATE_CHANNEL edge`.
+- **Off:** `kbenv KB_UPDATE_CHANNEL off`. Then tell them the two manual lines from phase 10.
+- **A box installed from somebody's working copy has updates off already** — the installer does that on purpose. If this is a server they want kept current, `kbenv KB_UPDATE_CHANNEL stable` and check `/opt/kb-src` exists.
+- Verify: `ssh companyos systemctl list-timers kb-update.timer` shows a next run, and `sudo bash /opt/kb-src/scripts/kb-update.sh --dry-run` says what it would do.
+- Details, including how the rollback works: `docs/updates.md`.
+
 ## Outside check — the box cannot report its own death
 
 **Ask:** "Want an outside service to ping the site and tell you if the whole server goes down?"

@@ -35,14 +35,14 @@ Read each file when you reach it, not before.
 |---|---|---|---|
 | 1 | Rent the server | provider, IP, key or password | `reference/1-server.md` |
 | 2 | Harden | timezone | `reference/2-harden.md` |
-| 3 | Install + audit trail | — they set their own password | `reference/3-install.md` |
+| 3 | Install + audit trail | password they set themselves; telemetry on or off | `reference/3-install.md` |
 | 4 | Domain + Cloudflare | Cloudflare? domain, who may sign in, dashboard or token | `reference/4-edge.md` |
 | 5 | Branding + providers | name, theme, ElevenLabs, search keys, budgets | `reference/5-providers.md` |
 | 6 | AI agents | which agents, terminal CLIs for whom, Hermes | `reference/6-agents.md` |
 | 7 | People + content | accounts, their terminal agents, admins, projects, sensitive folders, starter content | `reference/7-people.md` |
-| 8 | Operations | AI health check, alerts, Hermes brief + security audit, uptime, backups, share links, network drive, personal OneDrive | `reference/8-ops.md` (drive: `reference/network-drive.md`) |
+| 8 | Operations | AI health check, alerts, Hermes brief + security audit, uptime, backups, share links, network drive, personal OneDrive, automatic updates | `reference/8-ops.md` (drive: `reference/network-drive.md`) |
 | 9 | Migration | anything to bring in — Notion, Obsidian, Confluence, Google Drive, SharePoint, git…? | `reference/9-migrate.md` |
-| 10 | Handover | — | below |
+| 10 | Handover | security e-mail, product-news e-mail | below |
 
 ## Helpers
 
@@ -90,13 +90,21 @@ If they would rather paste it in the chat, write it the same way via stdin, and 
 2. **Cloudflare API token** (token path): they delete it under My Profile → API Tokens.
 3. **Final check from outside:** `https://<host>` → 302 to Access · they sign in · all `kb-*` services active · `systemctl list-timers 'kb-*'` shows heartbeat, gitgc and whatever phase 8 enabled · a backup snapshot exists.
 4. **Server record** in their knowledgebase, private: `users/<admin>/company-os-server.md`, written as the admin — IP, SSH alias and port, what is installed, providers on, Cloudflare IDs, backup target, **where** each key lives (never a value), how to upgrade. House style: short, bullets, no hard wraps.
-5. **Upgrading later** — two plain lines (they type their sudo password at the second):
+5. **Two e-mail addresses, asked as two separate questions.** A product-news list may not ride along on a security consent — ask once for each, and "skip" is a perfectly good answer to either:
+   - *"Where should security notices for your version go? One short mail when there's a patch you need."*
+   - *"And product news, every month or two — same address, a different one, or skip?"*
+   ```bash
+   ssh companyos 'curl -m 10 -s -X POST -H "Content-Type: application/json" \
+     -d "{\"email\":\"<address>\",\"company\":\"<company>\",\"security\":true,\"news\":false}" \
+     https://companyos-support.ollsoft.org/subscribe'
    ```
-   ssh companyos git -C ollsoft-company-os pull --ff-only
-   ssh -t companyos sudo bash ollsoft-company-os/scripts/install.sh --admin <admin>
+   Record which consents were given in the state file, never the address itself.
+6. **Upgrading later** — phase 8 normally leaves this automatic, so say one line: *new releases install themselves on \<their chosen day and time\>, and roll back if they fail*. If updates are off, give them the two manual lines (sudo password at the second):
    ```
-   A private repo needs the read-only deploy key from phase 3 for the pull.
-6. **Tell them in ≤ 8 lines:** the URL, who has accounts, what is on, what was skipped and that "run install-company-os, phase N" adds it later.
+   ssh companyos sudo git -C /opt/kb-src pull --ff-only
+   ssh -t companyos sudo bash /opt/kb-src/scripts/kb-update.sh --now
+   ```
+7. **Tell them in ≤ 8 lines:** the URL, who has accounts, what is on, what was skipped and that "run install-company-os, phase N" adds it later.
 
 ## Re-running a phase on an existing install
 

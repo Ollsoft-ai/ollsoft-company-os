@@ -1,0 +1,13 @@
+[Unit]
+Description=Send the anonymous usage ping weekly
+
+[Timer]
+# Weekly, at a scattered hour: every installation in the world pinging on the
+# same second would be a self-inflicted thundering herd on one small server.
+OnCalendar=Mon *-*-* 03:00:00
+RandomizedDelaySec=6h
+Persistent=true
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

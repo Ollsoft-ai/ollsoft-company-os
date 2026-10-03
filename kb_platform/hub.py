@@ -299,9 +299,9 @@ def _human_users() -> list[dict]:
     profs = _profiles_load()
     out = []
     for e in pwd.getpwall():
-        # human accounts = uid range; a nologin shell no longer disqualifies —
-        # that is exactly what a "viewer" account looks like
-        if not 1000 <= e.pw_uid < 65000 or e.pw_name == "nobody":
+        # one definition of a human account, shared with the licence notice and
+        # the telemetry ping (common.is_named_user) so the counts cannot drift
+        if not common.is_named_user(e):
             continue
         p = profs.get(e.pw_name, {})
         out.append({"username": e.pw_name, "uid": e.pw_uid,
@@ -2494,8 +2494,14 @@ class Hub:
         return user if (user and _is_admin(user)) else None
 
     async def admin_me(self, request: web.Request) -> web.Response:
+        """Identity, admin flag, and the licence state the topbar chip reads.
+
+        The licence state goes to EVERY signed-in user, not only admins: over
+        the free tier the notice has to be seen by whoever can act on it, and
+        in a small company that is rarely the person who installed it."""
         user = self.current_user(request)
-        return web.json_response({"user": user, "admin": bool(user and _is_admin(user))})
+        return web.json_response({"user": user, "admin": bool(user and _is_admin(user)),
+                                  "licence": common.licence_state()})
 
     async def admin_list(self, request: web.Request) -> web.Response:
         if not self._require_admin(request):

@@ -56,6 +56,52 @@ PROTECTED_USERS = {"root", "kbindexer", "postgres", "nobody"} | {
     u.strip() for u in os.environ.get("KB_PROTECTED_USERS", "").split(",") if u.strip()
 }
 
+# --- named users: the one definition the licence and the UI both use -------
+# A "named user" in the licence is an individual human being with a login to
+# this installation. On this platform that is exactly an account in the human
+# uid range: agents are not accounts of their own (they run AS a person), and
+# service accounts are created with `useradd -r`, below 1000. A nologin shell
+# does NOT disqualify an account — that is precisely what a viewer looks like.
+#
+# Everything that counts users — the licence notice in the UI, the telemetry
+# ping, the admin list — goes through here, so the number a customer is billed
+# on and the number they see can never drift apart.
+NAMED_UID_MIN, NAMED_UID_MAX = 1000, 65000
+
+# Production use is free up to this many named users (LICENSE, Additional Use
+# Grant). Beyond it the UI says a licence is required; nothing is blocked.
+FREE_NAMED_USERS = 3
+
+
+def is_named_user(entry: pwd.struct_passwd) -> bool:
+    return NAMED_UID_MIN <= entry.pw_uid < NAMED_UID_MAX and entry.pw_name != "nobody"
+
+
+def named_users() -> list[str]:
+    return sorted(e.pw_name for e in pwd.getpwall() if is_named_user(e))
+
+
+def platform_version() -> str:
+    """Written into /etc/kb/kb.env by scripts/deploy.sh from the tag or VERSION."""
+    return os.environ.get("KB_VERSION", "").strip()
+
+
+def licence_state() -> dict:
+    """What the UI shows and the telemetry reports: how many named users exist,
+    where the free tier ends, and whether a commercial licence was recorded.
+
+    `KB_LICENCE` in /etc/kb/kb.env is a plain marker, not a validated key —
+    setting it silences the notice. That is deliberate: the licence is a
+    contract, and a company with an accountant does not run unlicensed
+    software. A hard lock on readable source would buy hostility and no
+    protection."""
+    n = len(named_users())
+    licensed = bool(os.environ.get("KB_LICENCE", "").strip())
+    return {"users": n, "free_limit": FREE_NAMED_USERS, "licensed": licensed,
+            "over_free_tier": n > FREE_NAMED_USERS and not licensed,
+            "version": platform_version()}
+
+
 # The venv python used to spawn per-user backends.
 VENV_PY = os.environ.get("KB_VENV_PY", str(Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python"))
 

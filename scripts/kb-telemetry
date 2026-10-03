@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Anonymous usage ping — what version is out there, on what, and how big.
+
+WHAT IS SENT, in full (there is nothing else, and `kb-telemetry show` prints
+exactly the bytes that would leave):
+
+    install_id   random UUID made once, in /etc/kb/install-id
+    version      KB_VERSION, e.g. "1.0.0"
+    users        number of named users (common.named_users — the licence's own
+                 definition, so this number and the one in the UI agree)
+    licensed     whether a commercial licence was recorded locally
+    os           distro id + version, from /etc/os-release
+    postgres     server version, major.minor
+    event        "ping", or an install/update outcome
+    detail       for a failure: which step, never a message or a path
+
+WHAT IS NOT SENT, and must never be added here: hostname, domain, IP, account
+names, e-mail addresses, file or folder names, document counts, anything from
+the knowledgebase itself. The receiving end does not log source IPs either —
+that is what makes "anonymous" a fact rather than a claim (docs/telemetry.md).
+
+Switching it off: KB_TELEMETRY=off in /etc/kb/kb.env. The admin UI and the
+installer both offer it; this script honours it on every run.
+
+Failure is silence. A ping that cannot be delivered is dropped — no retries, no
+log line, no effect on anything. If the receiver is down, nobody notices.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+
+DEFAULT_URL = "https://companyos-support.ollsoft.org/t"
+ID_FILE = Path("/etc/kb/install-id")
+TIMEOUT = 5
+
+
+def _enabled() -> bool:
+    return os.environ.get("KB_TELEMETRY", "on").strip().lower() not in ("off", "0", "no", "false")
+
+
+def _install_id() -> str:
+    """Made once and kept. Random, so it identifies the installation across
+    pings without identifying the company."""
+    try:
+        v = ID_FILE.read_text().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    v = str(uuid.uuid4())
+    try:
+        ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ID_FILE.write_text(v + "\n")
+        ID_FILE.chmod(0o644)      # not a secret: the admin may read it, docs say where
+    except OSError:
+        pass
+    return v
+
+
+def _os_release() -> str:
+    vals = {}
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                vals[k] = v.strip().strip('"')
+    except OSError:
+        return "unknown"
+    return f"{vals.get('ID', 'unknown')} {vals.get('VERSION_ID', '')}".strip()
+
+
+def _postgres() -> str:
+    """major.minor only. `psql --version` also prints the Debian packaging
+    string, which varies per mirror and says nothing useful."""
+    try:
+        out = subprocess.run(["psql", "--version"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = re.search(r"(\d+)\.(\d+)", out)
+    return f"{m.group(1)}.{m.group(2)}" if m else ""
+
+
+def _users() -> int | None:
+    """The licence's own count, or nothing. Never a guess: a wrong number here
+    would be a number we might one day bill on."""
+    try:
+        sys.path.insert(0, os.environ.get("KB_PLATFORM_ROOT", "/opt/kb-platform"))
+        from kb_platform import common          # noqa: PLC0415
+        return len(common.named_users())
+    except Exception:
+        return None
+
+
+def payload(event: str, detail: str = "") -> dict:
+    users = _users()
+    body = {"install_id": _install_id(), "version": os.environ.get("KB_VERSION", ""),
+            "os": _os_release(), "postgres": _postgres(), "event": event}
+    if users is not None:
+        body["users"] = users
+        body["licensed"] = bool(os.environ.get("KB_LICENCE", "").strip())
+    if detail:
+        body["detail"] = detail[:120]
+    return body
+
+
+def send(body: dict) -> bool:
+    url = os.environ.get("KB_TELEMETRY_URL", DEFAULT_URL)
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return 200 <= r.status < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        return False          # deliberate: delivery is never worth a complaint
+
+
+def main(argv: list[str]) -> int:
+    cmd = argv[1] if len(argv) > 1 else "ping"
+    if cmd == "show":                       # the honesty command, always works
+        print(json.dumps(payload("ping"), indent=2, sort_keys=True))
+        print(f"\nwould POST to: {os.environ.get('KB_TELEMETRY_URL', DEFAULT_URL)}",
+              file=sys.stderr)
+        print(f"enabled: {'yes' if _enabled() else 'no (KB_TELEMETRY=off)'}", file=sys.stderr)
+        return 0
+    if not _enabled():
+        return 0
+    if cmd == "event":
+        send(payload(argv[2] if len(argv) > 2 else "event",
+                     argv[3] if len(argv) > 3 else ""))
+    else:
+        send(payload("ping"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

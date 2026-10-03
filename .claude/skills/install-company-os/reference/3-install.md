@@ -80,3 +80,15 @@ ssh companyos 'cd ~/ollsoft-company-os && sudo bash scripts/install-audit.sh --r
 - Sensitive folders (HR, finance) get added in phase 7 with `--watch`.
 - Verify: it prints `N rules loaded` and `digest answers`.
 - Tell the human once: this, plus the web app's own audit log and the knowledgebase's git history (`kb-history`), is what daily reports and security audits are built from.
+
+## 7. Anonymous telemetry — say it, then ask
+
+Say it once, plainly, and move on. Do not sell it:
+
+> Company OS sends one anonymous ping a week — version, how many users, which Linux, and whether an install or update worked. No hostname, no IP address, no names, nothing from your documents. It's what tells us a release broke something before anyone writes in. Want to switch it off?
+
+- **They can check rather than trust you:** `ssh companyos sudo kb-telemetry show` prints the exact bytes that would be sent.
+- **Yes, off:** `kbenv KB_TELEMETRY off` — takes effect on the next run, nothing to restart.
+- If the install already ran with `--no-telemetry`, it is off: say so and **do not ask again**.
+- Record the answer in the state file. Re-running the installer never flips it back.
+- Full list of fields: `docs/telemetry.md`.

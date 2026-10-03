@@ -9041,6 +9041,19 @@ async function boot() {
   (async () => {
     try {
       const me = await (await fetch("/admin/me")).json();
+      // The licence notice: shown to everyone over the free tier, because in a
+      // small company the person who can buy a licence is rarely the person
+      // who installed the platform. Nothing is blocked — see LICENSE.
+      const lic = me.licence;
+      if (lic && lic.over_free_tier) {
+        const pill = $("#licence-pill");
+        if (pill) {
+          pill.textContent = `${lic.users} users · licence required`;
+          pill.title = `Production use is free for up to ${lic.free_limit} named users. `
+            + `This installation has ${lic.users}. Click for licensing.`;
+          pill.hidden = false;
+        }
+      }
       let show = false;
       if (me.admin) { isAdmin = true; show = true; }
       else {

@@ -1838,6 +1838,12 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
    the input, a bordered box with numbered options for a permission — and the
    person's own messages and the composer read like claude.ai. */
 .topbar-actions { display: inline-flex; align-items: center; gap: .25rem; }
+.licence-pill { font-size: .62rem; font-family: var(--mono); text-decoration: none;
+  padding: .15rem .45rem; border-radius: 999px; white-space: nowrap;
+  background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent); }
+.licence-pill:hover { background: color-mix(in srgb, var(--warn) 26%, transparent); }
+.licence-pill[hidden] { display: none; }
 .chat-btn { display: inline-flex; align-items: center; justify-content: center; padding: .35rem .5rem; }
 .chat-btn .icon { width: 18px; height: 18px; }
 /* the head is ☰ and the brand, on every screen: "New chat" is a row of the

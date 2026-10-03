@@ -1,0 +1,16 @@
+[Unit]
+Description=KB: install a new release and verify it came up
+# Waits out live web-terminal shells before restarting anything, and checks
+# out the previous commit again if the hub does not answer afterwards — see
+# scripts/kb-update.sh. KB_UPDATE_CHANNEL=off in /etc/kb/kb.env disables it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/kb/kb.env
+ExecStart=/bin/bash /opt/kb-src/scripts/kb-update.sh
+# The script may wait up to three hours for somebody's terminal to close, then
+# build the frontend and restart the stack.
+TimeoutStartSec=5h

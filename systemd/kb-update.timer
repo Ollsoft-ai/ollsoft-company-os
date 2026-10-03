@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for a new Company OS release weekly
+
+[Timer]
+# Sunday 02:00 is the installer's recommendation, and the installer rewrites
+# this line to whatever the customer chose. Persistent: a box that was off on
+# Sunday updates when it comes back, instead of waiting a week.
+OnCalendar=Sun *-*-* 02:00:00
+RandomizedDelaySec=20m
+Persistent=true
+AccuracySec=5m
+
+[Install]
+WantedBy=timers.target
