@@ -67,8 +67,8 @@ adding a second schedule. Check the result with
 ## Update by hand
 
 ```sh
-sudo bash /opt/kb-src/scripts/kb-update.sh --dry-run   # what would happen
-sudo bash /opt/kb-src/scripts/kb-update.sh --now       # don't wait for terminals
+sudo bash /opt/kb-platform/scripts/kb-update.sh --dry-run   # what would happen
+sudo bash /opt/kb-platform/scripts/kb-update.sh --now       # don't wait for terminals
 ```
 
 ## Versions

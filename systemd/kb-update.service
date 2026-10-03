@@ -10,7 +10,11 @@ Wants=network-online.target
 Type=oneshot
 User=root
 EnvironmentFile=-/etc/kb/kb.env
-ExecStart=/bin/bash /opt/kb-src/scripts/kb-update.sh
+# The RUNNER is the deployed platform copy, not the clone it pulls into: the
+# clone may legitimately not exist (updates off, or a box installed from a
+# working copy), and /opt/kb-platform is the one path scripts/deploy.sh rewrites
+# to follow a custom --prefix. Where to pull FROM is KB_SRC in kb.env.
+ExecStart=/bin/bash /opt/kb-platform/scripts/kb-update.sh
 # The script may wait up to three hours for somebody's terminal to close, then
 # build the frontend and restart the stack.
 TimeoutStartSec=5h

@@ -44,8 +44,12 @@ if [ -f /etc/kb/kb.env ]; then
 fi
 [ -n "$CHANNEL" ] || CHANNEL=stable
 
-TELEMETRY="$SRC/scripts/kb-telemetry"
-ALERT="$SRC/scripts/kb-alert.sh"
+# Helpers come from the deployed platform, which always exists; the clone may
+# not, and a missing clone must still be able to report itself.
+HELPERS="${KB_PLATFORM_ROOT:-/opt/kb-platform}/scripts"
+[ -x "$HELPERS/kb-telemetry" ] || HELPERS="$SRC/scripts"
+TELEMETRY="$HELPERS/kb-telemetry"
+ALERT="$HELPERS/kb-alert.sh"
 note() { echo "kb-update: $*"; }
 tell() { [ -x "$TELEMETRY" ] && "$TELEMETRY" event "$1" "${2:-}" >/dev/null 2>&1 || true; }
 alert() { [ -x "$ALERT" ] && "$ALERT" "$1" "$2" "${3:-default}" update >/dev/null 2>&1 || true; }

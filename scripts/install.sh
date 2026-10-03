@@ -129,7 +129,12 @@ tm() {
 # Armed only once the arguments are known to be good: a usage error is the
 # operator's typo, not a failed install, and reporting it would be noise.
 ARMED=0
-trap 'rc=$?; [ $rc -ne 0 ] && [ "$ARMED" -eq 1 ] && tm install_failed "$STEP"; exit $rc' EXIT
+_on_exit() {
+  local rc=$?
+  [ "$rc" -ne 0 ] && [ "$ARMED" -eq 1 ] && tm install_failed "$STEP"
+  exit "$rc"
+}
+trap _on_exit EXIT
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo bash scripts/install.sh ...)"
 [ -n "$ADMIN_USER" ] || die "--admin <username> is required"
@@ -458,7 +463,7 @@ KB_UPDATE_DEFERRALS=3
 # --- telemetry --------------------------------------------------------------
 # Anonymous: install id, version, number of named users, distro, Postgres
 # version, install/update outcome. Never a hostname, an IP, an account name or
-# anything from the knowledgebase. `kb-telemetry show` prints the exact bytes.
+# anything from the knowledgebase. \`kb-telemetry show\` prints the exact bytes.
 # off = send nothing. See docs/telemetry.md.
 KB_TELEMETRY=$PRIOR_TELEMETRY
 # --- monitoring -------------------------------------------------------------
