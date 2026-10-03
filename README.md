@@ -1,9 +1,9 @@
 # Ollsoft Company OS
 
 A company workspace where **the Linux kernel is the permission system**.
-Documents, tasks and internal tools as plain markdown files on your own server,
-with AI agents that work in them as the person who asked, seeing exactly what
-that person sees.
+Documents and tasks as plain markdown files on your own server, with AI agents
+that work in them as the person who asked, seeing exactly what that person
+sees.
 
 Your data is never in somebody else's cloud, and an agent reaches it the way a
 colleague does rather than through an API.
