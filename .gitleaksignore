@@ -1,0 +1,15 @@
+# Known-synthetic matches, so a real one is never lost in the noise.
+#
+# All three are fixtures for the platform's OWN secret detection
+# (tests/cli/test_chunking.py): the OpenAI-shaped key is the alphabet, the
+# Google-shaped one is "AIza" + "B" * 35, the private key says
+# MIIEexampleNOTAREALKEY in its own body, and the JWT is the canonical example
+# from jwt.io. A test for finding secrets has to contain things that look like
+# secrets.
+#
+# Regenerate after a deliberate change:
+#   gitleaks git . --report-format json --report-path /tmp/gl.json --exit-code 0
+
+4891b1b3e16fd879e034d35e1ed237a56ef876f3:tests/cli/test_chunking.py:generic-api-key:21
+4891b1b3e16fd879e034d35e1ed237a56ef876f3:tests/cli/test_chunking.py:private-key:38
+4891b1b3e16fd879e034d35e1ed237a56ef876f3:tests/cli/test_chunking.py:jwt:33
