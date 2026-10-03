@@ -58,7 +58,7 @@ All `active`, hub `302` or `200`, password status `P`. Then the human signs in f
 
 ## 5. Admin session for the later phases
 
-Phases 5–9 call admin endpoints (settings, logo, users, groups, agents). Have the human create a session **on the server** — the password goes from their keyboard to the server, never through you:
+Phases 5–9 call admin endpoints (settings, users, groups, agents). Have the human create a session **on the server** — the password goes from their keyboard to the server, never through you:
 
 ```
 ssh -t companyos cos-login

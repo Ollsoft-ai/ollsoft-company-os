@@ -4,16 +4,15 @@ One question per block, in this order. Every one can be skipped and added later 
 
 ## Branding
 
-**Ask:** "What name should the app show (max 40 characters)? Do you have a logo (SVG or PNG, ≤ 512 KB)? Dark, light, or the default deep-blue look? A brand colour?"
+**Ask:** "What name should the app show (max 40 characters)? Dark, light, or the default deep-blue look?"
 
 ```bash
 admin POST /admin/settings '{"set":{"brand.name":"<name>","ui.theme":"deep-blue"}}'
-# brand colour, optional:  '{"set":{"ui.theme.custom":{"accent":"#rrggbb"}}}'
-scp <logo> companyos:/tmp/logo.<ext>    # <ext> = svg or png, as the file really is
-ssh companyos 'curl -s -b ~/.cos-admin.jar -F file=@/tmp/logo.<ext> http://127.0.0.1:8300/admin/brand/logo; rm /tmp/logo.<ext>'
 ```
 
-Verify: they reload the page and see the name and logo on the sign-in screen.
+Tell them: **a logo and custom colours can be set later** in the app, under Settings → Company.
+
+Verify: they reload the page and see the name.
 
 ## Voice dictation — ElevenLabs
 

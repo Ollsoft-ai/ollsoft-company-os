@@ -37,7 +37,7 @@ Read each file when you reach it, not before.
 | 2 | Harden | timezone | `reference/2-harden.md` |
 | 3 | Install + audit trail | — they set their own password | `reference/3-install.md` |
 | 4 | Domain + Cloudflare | Cloudflare? domain, who may sign in, dashboard or token | `reference/4-edge.md` |
-| 5 | Branding + providers | name, logo, ElevenLabs, search keys, budgets | `reference/5-providers.md` |
+| 5 | Branding + providers | name, theme, ElevenLabs, search keys, budgets | `reference/5-providers.md` |
 | 6 | AI agents | which agents, terminal CLIs for whom, Hermes | `reference/6-agents.md` |
 | 7 | People + content | accounts, their terminal agents, admins, projects, sensitive folders, starter content | `reference/7-people.md` |
 | 8 | Operations | AI health check, alerts, Hermes brief + security audit, uptime, backups, share links, network drive, personal OneDrive | `reference/8-ops.md` (drive: `reference/network-drive.md`) |
