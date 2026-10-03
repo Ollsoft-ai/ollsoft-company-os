@@ -13,6 +13,8 @@ Create one by writing an `.html` file, e.g. `company/dashboards/mychart.html` (s
 
 The artifact never connects to a database or the filesystem directly. It posts a message to the host page, which performs the action **with the viewer's own identity and permissions** — the same as that person running `psql` or writing a file in their terminal. So the same artifact does, for each viewer, exactly what that viewer is allowed to do, and nothing more. You never write authorization logic in the artifact; the platform enforces it.
 
+The file verbs (`kb-read`, `kb-write`, `kb-read-bytes`, `kb-list`, `kb-mkdir`, `kb-delete`, `kb-upload`) stay inside the artifact's own folder, are checked by the backend, never follow a symlink out of that folder, and never touch `_secrets/`.
+
 Drop this SDK into every artifact — it gives you `kbQuery`, `kbRead`, `kbWrite`, and the folder tools `kbList`, `kbMkdir`, `kbDelete`:
 
 ```html

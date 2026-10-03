@@ -11,7 +11,7 @@ Read this before exposing the platform beyond a trusted single box.
 | A root daemon can't be tricked into writing the wrong file | **`openat`/`O_NOFOLLOW`** | all privileged writes refuse symlinks at every path component — the platform config dir `.os/` included: a pre-planted entry of that name is refused, never chowned through |
 | An artifact can't touch the app or exfiltrate | **opaque-origin iframe + CSP** | `sandbox="allow-scripts"` (no same-origin) + `connect-src 'none'` — the artifact itself never reaches the network |
 | An artifact can reach an approved API, and only that | **hub egress proxy** | deny-all by default; per-artifact domain allow-list in `.os/egress.json` (root:kb-users 0644 — an admin, or anyone granted write on that file, may change it). Requests are proxied by the hub, so the artifact never holds the credential |
-| An artifact can't reach the viewer's other data | **folder-scoped bridge** | `kb-read`/`kb-write`/`kb-list`/`kb-mkdir`/`kb-delete` limited to the artifact's own directory — the destructive ones re-checked server-side |
+| An artifact can't reach the viewer's other data | **folder-scoped bridge** | every file verb is limited to the artifact's own directory and checked in the backend, never `_secrets/`. `kb-read`/`kb-write`/`kb-read-bytes`/`kb-upload`/`kb-delete` act through an fd whose real path is checked after the open, so no link leads out. `kb-list`/`kb-mkdir` check the resolved path only: a colleague racing a middle folder for a link could make them list or create outside, with the viewer's permissions |
 | An uploaded file can't run script on the app's origin | **CSP + `nosniff` on `/api/attachment`** | `script-src 'none'`, so a planted SVG previews but never executes; a `.html` is classified as an artifact and served sandboxed by `/api/artifact/raw` instead |
 | A session cookie can't be forged | **HMAC-SHA256** with a root-only key | `/etc/kb/session.key`, 12h TTL |
 | An uploaded logo can't run script on the app's origin | **CSP sandbox on `/brand/logo`** + a refusal at upload | admin-only upload; an SVG containing `<script`, `javascript:` or event handlers is refused, and the served file carries `default-src 'none'; sandbox` so even a hostile SVG opened directly is inert |
@@ -110,6 +110,23 @@ top-level company document silently became read-only to everyone but its author,
 while `access(2)` kept reporting it writable. `company/` is a deliberate
 free-for-all; the subdirectory that is not — `company/.infrastructure/`, the
 maintenance agent's input — is protected directly by dropping group write.
+
+## Third adversarial audit — 2026-10-03
+
+Ten area reviewers, every finding independently verified (two verifiers for high and critical). 46 confirmed: 2 critical, 6 high, 13 medium, 19 low, 6 info. The critical and high ones are fixed, except two the owner accepted for a trusted team:
+
+| Finding (severity) | Fix |
+|--------------------|-----|
+| `/vc/diff` took any hex object id as `rev`, and `git show <blob>` ignores the pathspec, so anyone who could read one document could read every object in history, an abbreviated id being four hex digits; `/vc/show` read inside any subtree the same way (**critical**) | `rev` is peeled to a commit (`rev-parse --verify <rev>^{commit}`) before either is shown |
+| The agent chat's Claude adapter loads project and local settings (hooks, `.mcp.json`, env, `apiKeyHelper`) from the folder it starts in, with no trust prompt in ACP mode; the KB root and `company/` are writable by everyone, so a planted file ran as whoever opened a chat there (**critical**) | **accepted risk** (owner's decision, 2026-10-03): the chat must behave like `claude` started in `/srv/kb` in a terminal — company skills, MCP servers and project settings all load. Colleagues are trusted; see residual risks |
+| A public FOLDER link granted `kbshare` recursively, `_secrets/` and `.trash/` included, even other people's keys (**high**) | an fd-pinned walk that skips both; the sweep strips any `_secrets` made later; the container refuses those paths itself |
+| Public link creation re-resolved the path after the owner check, so a component swapped for a link could publish someone else's folder (**high**) | the target is opened once without following links; owner check, ACLs and the bind mount (`/proc/<pid>/fd/N`, verified by inode) all act on that fd |
+| `artifact_query`'s keyword filter did not stop exfiltration: an INSERT into a table the author shares, `pg_notify`, or a file in the artifact's folder all move the viewer's data without a privilege keyword (**high**) | **accepted risk** (owner's decision, 2026-10-03): artifacts stay author-trusted, with no prompt before someone else's page runs; the keyword filter stays as defence in depth |
+| The bridge's folder scope was a string check in the browser; `kb-read`/`kb-write`/`kb-read-bytes`/`kb-upload` followed symlinks (**high**) | scope enforced in the backend on the opened fd; uploads never write through a planted `_files` link |
+| `javascript:` links in a document ran on the app origin through `window.open` (**high**) | body links take the same `safeHref` allowlist as table cells |
+| The maintenance agent's allowlist held `curl … -w *` (curl's `-w` writes files), a prefix `sudo cat /var/log/kb/*` (`../` reaches any file), `sudo journalctl` (`--vacuum` erases the audit trail) and `git diff/log` (`--output=`) — while it runs as an admin with passwordless sudo (**high**) | all four gone; exact per-file log reads; the bundle carries the hub's HTTP status; the agent reads the journal through `systemd-journal`, given to its process only; `tests/cli/test_maintenance_allowlist.py` fails on any non-trailing `*` or inexact sudo rule |
+
+Still open from this audit, by severity: no Origin/CSRF check on state-changing routes and websockets (sibling `*.ollsoft.org` hosts are same-site), egress grants keyed to group-writable paths and `secret:` refs not scoped to the artifact's folder, an artifact frame may navigate itself (an exfiltration channel once allowed), rerank sends unredacted text, remote images auto-load in chat, and the post-login redirect. The full list is in the review report, kept off the knowledgebase until fixed.
 
 ## Audit trail — who changed access, and who opened what
 
@@ -242,7 +259,15 @@ Only with provider keys installed ([semantic-search.md](semantic-search.md)).
 - **Artifacts are author-trusted.** Contained against the system and other users,
   but an artifact you open runs code with *your* authority (read/write within your
   own permissions, folder-scoped). Only open artifacts from people you'd trust
-  with your own access — same as running a shared script.
+  with your own access — same as running a shared script. Its SQL can copy what
+  you can see into a table its author reads; no keyword filter stops that, and a
+  consent prompt was tried and declined (2026-10-03) as wrong for a trusted team.
+- **Agent chat loads the folder's own agent config.** Like `claude` in a
+  terminal, a chat reads `.claude/settings.json`, `.mcp.json` and `CLAUDE.md`
+  from the folder it starts in and above, and ACP mode has no trust prompt. The
+  KB root and `company/` are writable by every employee, so a colleague can put
+  hooks or an MCP server there that runs as whoever opens a chat — root, for an
+  admin with passwordless sudo. Accepted for a trusted team (2026-10-03).
 - **Private-dir files aren't globally indexed.** `kbindexer` can't read a `0700`
   `users/<u>/` dir, so those files aren't searchable (by design; a per-user
   indexer would be needed).

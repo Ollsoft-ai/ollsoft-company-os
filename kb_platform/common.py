@@ -15,6 +15,8 @@ import pwd
 import re
 import secrets
 import stat as stat_mod
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -779,6 +781,102 @@ ACL_DEFAULT_XATTR = "system.posix_acl_default"
 _ACL_USER_OBJ, _ACL_USER, _ACL_GROUP_OBJ, _ACL_GROUP, _ACL_MASK, _ACL_OTHER = (
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20)
 
+
+_ACL_MODIFY_OPS = ("-m", "-M", "--modify", "--modify-file", "--set", "--set-file")
+_ACL_CACHE_MAX = 4096
+
+
+def acl_apply_fd(tfd: int, is_dir: bool, args: list[str], cache: dict | None = None) -> None:
+    """Apply an ACL change (`args` e.g. ['-m','u:bob:r'] or ['-x','u:bob']) to
+    the file behind the pinned fd, race-free: run setfacl on a private root-only
+    temp (reusing its mask/ordering logic), then copy the resulting ACL onto the
+    fd via setxattr. Never operates on a re-traversable path, so a swapped symlink
+    cannot redirect it to /etc/*.
+
+    `cache` (a dict the caller keeps for one walk) maps what a file starts with
+    to what setfacl made of it, so a tree of a thousand files that share three
+    ACLs costs three setfacl runs, not a thousand."""
+    try:
+        acc_in = os.getxattr(tfd, ACL_XATTR)
+    except OSError:
+        acc_in = None
+    mode_in = stat_mod.S_IMODE(os.fstat(tfd).st_mode)
+    dfl_in = None
+    if is_dir:
+        try:
+            dfl_in = os.getxattr(tfd, ACL_DEFAULT_XATTR)
+        except OSError:
+            pass
+    key = (acc_in, mode_in, dfl_in, is_dir, tuple(args))
+    out = cache.get(key) if cache is not None else None
+    if out is None:
+        out = _acl_compute(acc_in, mode_in, dfl_in, is_dir, args)
+        if cache is not None and len(cache) < _ACL_CACHE_MAX:
+            cache[key] = out
+    acc_out, mode_out, dfl_out, dfl_touched = out
+    if acc_out is None:
+        # No extended ACL left — the args only touched base entries (u::/g::/o::)
+        # or stripped the last named one. That is a real result, not a failure:
+        # take the plain mode setfacl computed and drop any ACL still on the
+        # target. Raising here 500'd every "share this folder with people who
+        # can all edit", the most ordinary case there is.
+        try:
+            os.removexattr(tfd, ACL_XATTR)
+        except OSError:
+            pass
+        os.fchmod(tfd, mode_out)
+    else:
+        os.setxattr(tfd, ACL_XATTR, acc_out)
+    if dfl_touched:
+        if dfl_out is None:
+            try:
+                os.removexattr(tfd, ACL_DEFAULT_XATTR)
+            except OSError:
+                pass
+        else:
+            os.setxattr(tfd, ACL_DEFAULT_XATTR, dfl_out)
+
+
+def _acl_compute(acc_in, mode_in: int, dfl_in, is_dir: bool, args: list[str]):
+    """(access ACL or None, plain mode, default ACL or None, default touched?)
+    — what setfacl makes of a file that starts out as given."""
+    tmpfd, tmpf = tempfile.mkstemp(dir=str(RUN_DIR))
+    os.close(tmpfd)
+    try:
+        os.chmod(tmpf, mode_in)
+        if acc_in is not None:
+            os.setxattr(tmpf, ACL_XATTR, acc_in)
+        subprocess.run(["setfacl", *args, "--", tmpf], check=True, capture_output=True, timeout=5)
+        try:
+            acc_out, mode_out = os.getxattr(tmpf, ACL_XATTR), None
+        except OSError:
+            acc_out, mode_out = None, stat_mod.S_IMODE(os.stat(tmpf).st_mode)
+    finally:
+        os.unlink(tmpf)
+    if not is_dir:
+        return acc_out, mode_out, None, False
+    if dfl_in is None and not any(a in _ACL_MODIFY_OPS for a in args):
+        return acc_out, mode_out, None, False      # only removals: no default ACL to remove from
+    tmpd = tempfile.mkdtemp(dir=str(RUN_DIR))
+    try:
+        if dfl_in is not None:
+            os.setxattr(tmpd, ACL_DEFAULT_XATTR, dfl_in)
+        else:
+            # setfacl builds a missing default ACL from the folder's own access
+            # entries. A bare mkdtemp is 0700, which made that `group::---
+            # other::---`: every file born there afterwards was closed to the
+            # folder's own team and to the indexer. Give it the folder's entries.
+            os.chmod(tmpd, mode_in)
+            if acc_in is not None:
+                os.setxattr(tmpd, ACL_XATTR, acc_in)
+        subprocess.run(["setfacl", "-d", *args, "--", tmpd], check=True, capture_output=True, timeout=5)
+        try:
+            dfl_out = os.getxattr(tmpd, ACL_DEFAULT_XATTR)
+        except OSError:
+            dfl_out = None
+    finally:
+        os.rmdir(tmpd)
+    return acc_out, mode_out, dfl_out, True
 
 def acl_entries(target, follow: bool = False) -> list[tuple[int, int, int]] | None:
     """Parsed `system.posix_acl_access` xattr as [(tag, perms, qualifier)], or

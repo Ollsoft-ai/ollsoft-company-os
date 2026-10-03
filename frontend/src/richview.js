@@ -1121,7 +1121,11 @@ function livePreview(dir) {
         const url = linkTarget(view.state, u);
         if (isExternalUrl(url)) {
           if (url.startsWith("#")) return true;   // an in-page anchor goes nowhere
-          window.open(url, "_blank");
+          // isExternalUrl matches ANY scheme, javascript: included, and a
+          // javascript: URL opened from here runs on the app's origin. Only
+          // what a cell link may be, plus our own raw-file endpoints.
+          const h = safeHref(url) || (/^(\/\/|\/api\/)/.test(url) ? url : null);
+          if (h) window.open(h, "_blank", "noopener");
           return true;
         }
         // A link into the knowledgebase opens the way the tree opens it: a

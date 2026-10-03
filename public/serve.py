@@ -177,7 +177,14 @@ def safe_join(root: Path, rel: str) -> Path | None:
     link planted in a shared folder cannot reach out of it."""
     p = (root / rel.lstrip("/")).resolve()
     root = root.resolve()
-    return p if p == root or root in p.parents else None
+    if p != root and root not in p.parents:
+        return None
+    # Never into credentials or the trash, whatever the ACLs say: a `_secrets`
+    # made inside a shared folder after the link inherits the folder's access
+    # until the host's sweep takes it away again.
+    if any(part in ("_secrets", ".trash") for part in p.relative_to(root).parts):
+        return None
+    return p
 
 
 # ---- rendering --------------------------------------------------------------
@@ -520,8 +527,8 @@ class Handler(BaseHTTPRequestHandler):
             up = str(rel.parent) if str(rel.parent) != "." else ""
             rows.append(f"<li><a href='{base}/{urllib.parse.quote(up)}'>← up</a></li>")
         for p in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-            if p.name.startswith("."):
-                continue                        # .trash and friends are machinery
+            if p.name.startswith(".") or p.name == "_secrets":
+                continue                        # .trash and friends are machinery; keys are never listed
             href = f"{base}/{urllib.parse.quote(str(p.relative_to(root)))}"
             size = "" if p.is_dir() else f"{p.stat().st_size:,} bytes"
             rows.append(f"<li><a href='{html.escape(href)}'>{'📁 ' if p.is_dir() else ''}"

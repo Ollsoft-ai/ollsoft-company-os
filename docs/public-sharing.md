@@ -58,6 +58,9 @@ The hub (root) then, in this order:
    default ACL) for an editable one, on exactly that subtree. Mode bits alone
    would not do — a `0640` document is unreadable to the container, and a
    public link must not depend on a file happening to be world-readable.
+   The walk is fd-pinned, follows no link, and **skips `_secrets/` and
+   `.trash/`**; the sweep strips any `_secrets` made inside later, and the
+   container refuses both names itself (2026-10-03).
 3. `mkdir /srv/kb-public/data/<id>` and `mount --bind` onto it: a folder
    share binds the folder; a single-file share binds **the folder the file
    lives in**, and the conf names the one file inside it that may be served.

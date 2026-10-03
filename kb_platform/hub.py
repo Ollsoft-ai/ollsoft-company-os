@@ -440,56 +440,9 @@ def _reap_forever() -> None:
             _reap_procs[:] = [p for p in _reap_procs if p.poll() is None]
 
 
-def _acl_apply_fd(tfd: int, is_dir: bool, args: list[str]) -> None:
-    """Apply an ACL change (`args` e.g. ['-m','u:bob:r'] or ['-x','u:bob']) to
-    the file behind the pinned fd, race-free: run setfacl on a private root-only
-    temp (reusing its mask/ordering logic), then copy the resulting ACL onto the
-    fd via setxattr. Never operates on a re-traversable path, so a swapped symlink
-    cannot redirect it to /etc/*."""
-    import tempfile
-    tmpfd, tmpf = tempfile.mkstemp(dir=str(common.RUN_DIR))
-    os.close(tmpfd)
-    try:
-        try:
-            os.setxattr(tmpf, _ACL_ACCESS, os.getxattr(tfd, _ACL_ACCESS))
-        except OSError:
-            os.chmod(tmpf, stat.S_IMODE(os.fstat(tfd).st_mode))
-        subprocess.run(["setfacl", *args, "--", tmpf], check=True, capture_output=True, timeout=5)
-        try:
-            acl = os.getxattr(tmpf, _ACL_ACCESS)
-        except OSError:
-            # No extended ACL left — the args only touched base entries (u::/g::/o::)
-            # or stripped the last named one. That is a real result, not a failure:
-            # take the plain mode setfacl computed and drop any ACL still on the
-            # target. Raising here 500'd every "share this folder with people who
-            # can all edit", the most ordinary case there is.
-            try:
-                os.removexattr(tfd, _ACL_ACCESS)
-            except OSError:
-                pass
-            os.fchmod(tfd, stat.S_IMODE(os.stat(tmpf).st_mode))
-        else:
-            os.setxattr(tfd, _ACL_ACCESS, acl)
-    finally:
-        os.unlink(tmpf)
-    if is_dir:
-        tmpd = tempfile.mkdtemp(dir=str(common.RUN_DIR))
-        try:
-            try:
-                os.setxattr(tmpd, _ACL_DEFAULT, os.getxattr(tfd, _ACL_DEFAULT))
-            except OSError:
-                pass
-            subprocess.run(["setfacl", "-d", *args, "--", tmpd], check=True, capture_output=True, timeout=5)
-            try:
-                os.setxattr(tfd, _ACL_DEFAULT, os.getxattr(tmpd, _ACL_DEFAULT))
-            except OSError:
-                try:
-                    os.removexattr(tfd, _ACL_DEFAULT)
-                except OSError:
-                    pass
-        finally:
-            os.rmdir(tmpd)
-
+# Moved to common so the public-link sweep (its own process) pins inodes the
+# same way; every call site here keeps the old name.
+_acl_apply_fd = common.acl_apply_fd
 
 # ---- people-centric sharing -------------------------------------------------
 # The share panel speaks PEOPLE ("who can open this, view or edit"); the
@@ -2405,7 +2358,8 @@ class Hub:
         # existed). Put it back at once rather than waiting for the sweep.
         try:
             for row in publicshare.covering(rel):
-                if publicshare.regrant(row):
+                # a re-grant walks the folder: never on the event loop
+                if await asyncio.to_thread(publicshare.regrant, row):
                     log.info("public share %s re-granted after a share change on %s",
                              row["id"], rel)
         except Exception:   # noqa: BLE001 — never fail a grant that landed
@@ -2458,13 +2412,24 @@ class Hub:
         if not _owns_or_admin(p, user):
             return web.json_response(
                 {"error": "only the owner (or an admin) can publish this"}, status=403)
+        admin = _is_admin(user)
         try:
+            uid = pwd.getpwnam(user).pw_uid
+        except KeyError:
+            return web.json_response({"error": "forbidden"}, status=403)
+        try:
+            # the check above read a path; this one is asked again about the
+            # very inode create() grants and mounts, so a component swapped
+            # for a link in between cannot change what goes on the internet
             share = await asyncio.to_thread(
                 publicshare.create, data.get("path", ""), by=user,
                 mode=str(data.get("mode") or "view"),
                 days=int(data.get("days") or publicshare.DEFAULT_DAYS),
                 password=str(data.get("password") or ""),
-                title=str(data.get("title") or ""))
+                title=str(data.get("title") or ""),
+                may_publish=lambda st: admin or st.st_uid == uid)
+        except publicshare.NotAllowed as e:
+            return web.json_response({"error": str(e)}, status=403)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         except (OSError, subprocess.SubprocessError) as e:

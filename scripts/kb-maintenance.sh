@@ -104,6 +104,12 @@ trap 'rm -rf "$WORK"' EXIT
     fi
     printf '%-14s %-10s NRestarts=%s%s\n' "$u" "$active" "$nr" "$delta"
   done
+  # The hub's front door, probed here as root so the agent needs no network
+  # tool: its old `curl … -w *` allow rule let the -w value carry curl's
+  # %output{FILE}, i.e. write any file the operator can.
+  code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$HUB_PORT/" 2>/dev/null)
+  case "$code" in ""|000) code="no answer" ;; esac
+  printf '%-14s HTTP GET / → %s (302 = up and redirecting to /login)\n' "kb-hub" "$code"
   echo '```'
   echo
   echo "### Failed units"
@@ -332,20 +338,31 @@ PY
 # to create a file, and a tool it does not have is a tool it cannot misuse.
 # kb-hub and kb-syncd are deliberately absent — restarting the hub kills every
 # open web terminal, and syncd can lose unflushed edits.
+# Exact files, never `sudo cat /var/log/kb/*`: a rule is a prefix, so that one
+# also matched `sudo cat /var/log/kb/../../<anything>` — any file, read as root.
+LOG_READS=()
+for f in alerts maintenance egress stt; do
+  LOG_READS+=("Bash(sudo cat $LOG_DIR/$f.log)")
+done
 TOOLS=(
   "Read" "Grep" "Glob"
   "Bash(systemctl status:*)" "Bash(systemctl show:*)" "Bash(systemctl is-active:*)"
   "Bash(systemctl list-timers:*)" "Bash(systemctl --failed:*)"
-  "Bash(sudo journalctl:*)" "Bash(journalctl:*)"
+  # journalctl WITHOUT sudo: as root `--vacuum-time=1s` would erase the audit
+  # trail. The agent reads the system journal through systemd-journal, which
+  # it is given for this run only (see SUPP below).
+  "Bash(journalctl:*)"
   "Bash(df:*)" "Bash(free:*)" "Bash(ps:*)" "Bash(ss -ltn)" "Bash(uptime:*)"
   "Bash(ls:*)" "Bash(head:*)" "Bash(tail:*)"
   # find/grep removed 2026-08-24: `find -exec` (and grep's pager/-f tricks) are
   # general command-execution primitives, and this agent is fed attacker-writable
   # text (health.md, filenames, journal lines). Read/Grep/Glob cover the same need
   # without a shell. Do not re-add them.
-  "Bash(wc:*)" "Bash(stat:*)" "Bash(cat /var/log/kb/*)" "Bash(sudo cat /var/log/kb/*)"
-  "Bash(git log:*)" "Bash(git status:*)" "Bash(git diff:*)"
-  "Bash(curl -s -o /dev/null -w * http://127.0.0.1:$HUB_PORT/)"
+  "Bash(wc:*)" "Bash(stat:*)" "${LOG_READS[@]}"
+  # git log/diff/status removed 2026-10-03: both take --output=<file>.
+  # curl removed 2026-10-03: a `*` anywhere but at the end of a rule matches
+  # whole argument lists, and curl's -w can write files. The bundle carries the
+  # hub's HTTP status instead. Keep every `*` in this list trailing.
   "Bash(sudo systemctl restart kb-convert)"
   "Bash(sudo systemctl restart kb-indexer)"
   "Bash(sudo logrotate --force /etc/logrotate.d/kb)"
@@ -354,7 +371,7 @@ BANNED=(
   "Write" "Edit" "NotebookEdit" "WebFetch" "WebSearch" "Task" "Agent"
   "Bash(sudo systemctl restart kb-hub)" "Bash(sudo systemctl restart kb-syncd)"
   "Bash(sudo systemctl restart postgresql)" "Bash(sudo bash:*)" "Bash(sudo sh:*)"
-  "Bash(sudo rm:*)" "Bash(rm:*)" "Bash(sudo tee:*)" "Bash(sudo apt:*)"
+  "Bash(sudo journalctl:*)" "Bash(sudo rm:*)" "Bash(rm:*)" "Bash(sudo tee:*)" "Bash(sudo apt:*)"
   "Bash(pip:*)" "Bash(npm:*)" "Bash(git commit:*)" "Bash(git push:*)"
   "Bash(git checkout:*)" "Bash(git reset:*)"
 )
@@ -371,9 +388,9 @@ $( [ "$DRY_RUN" = 1 ] && echo "DRY RUN: do not CHANGE anything — no restarts, 
 
 if [ "$DRY_RUN" = 1 ]; then
   ALLOWED=("Read" "Grep" "Glob" "Bash(systemctl status:*)" "Bash(systemctl show:*)"
-           "Bash(systemctl is-active:*)" "Bash(journalctl:*)" "Bash(sudo journalctl:*)"
+           "Bash(systemctl is-active:*)" "Bash(journalctl:*)"
            "Bash(df:*)" "Bash(free:*)" "Bash(ls:*)"
-           "Bash(head:*)" "Bash(tail:*)" "Bash(cat /var/log/kb/*)" "Bash(sudo cat /var/log/kb/*)")
+           "Bash(head:*)" "Bash(tail:*)" "${LOG_READS[@]}")
 else
   ALLOWED=("${TOOLS[@]}")
 fi
@@ -386,7 +403,14 @@ if [ -z "$CLAUDE_BIN" ]; then
     "$([ -n "$OPERATOR" ] && echo "the \`claude\` CLI was not found for user $OPERATOR" || echo "no maintenance user is set (KB_MAINT_USER)")" > "$REPORT"
   rc=127
 else
-  runuser -u "$OPERATOR" -- env \
+  # Its own groups plus systemd-journal, for this process only: read access to
+  # the system journal without sudo. runuser -G REPLACES the supplementary
+  # groups, so every one the operator has is passed along with it.
+  SUPP=()
+  for g in $(id -Gn "$OPERATOR") $(getent group systemd-journal >/dev/null && echo systemd-journal); do
+    SUPP+=(-G "$g")
+  done
+  runuser -u "$OPERATOR" -g "$(id -gn "$OPERATOR")" "${SUPP[@]}" -- env \
       HOME="$(getent passwd "$OPERATOR" | cut -d: -f6)" \
       KB_MAINT=1 \
       timeout "$BUDGET" "$CLAUDE_BIN" -p "$PROMPT" \

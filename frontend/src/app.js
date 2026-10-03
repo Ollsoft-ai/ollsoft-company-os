@@ -4871,6 +4871,8 @@ window.addEventListener("message", async (ev) => {
   if (!tab) return;
   const msg = ev.data || {};
   let result;
+  // The file verbs carry `artifact: tab.path` (from the TAB, never the frame):
+  // the backend keeps them inside that page's folder on the file it opened.
   try {
     if (msg.type === "kb-query") {
       const r = await fetch("/api/artifact/query", {
@@ -4895,7 +4897,7 @@ window.addEventListener("message", async (ev) => {
       } else {
         const r = await fetch("/api/artifact/read", {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: msg.path }),
+          body: JSON.stringify({ artifact: tab.path, path: msg.path }),
         });
         result = await r.json();
       }
@@ -4909,7 +4911,8 @@ window.addEventListener("message", async (ev) => {
       if (!inArtifactScope(tab, msg.path)) {
         result = { error: "path outside this artifact's folder" };
       } else {
-        const r = await fetch("/api/attachment?path=" + encodeURIComponent(msg.path));
+        const r = await fetch("/api/artifact/bytes?artifact=" + encodeURIComponent(tab.path) +
+                              "&path=" + encodeURIComponent(msg.path));
         if (!r.ok) {
           result = { error: r.status === 403 ? "forbidden" : "not found" };
         } else {
@@ -4935,7 +4938,7 @@ window.addEventListener("message", async (ev) => {
       } else {
         const r = await fetch("/api/artifact/write", {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: msg.path, content: msg.content }),
+          body: JSON.stringify({ artifact: tab.path, path: msg.path, content: msg.content }),
         });
         result = await r.json();
         // a write can also CREATE, so a new file shows up in the tree at once
@@ -4999,7 +5002,8 @@ window.addEventListener("message", async (ev) => {
         const bin = Uint8Array.from(atob(msg.b64), (c) => c.charCodeAt(0));
         const fd = new FormData();
         fd.append("file", new Blob([bin]), msg.name.replace(/[/\\]/g, "_"));
-        const r = await fetch("/api/upload?dir=" + encodeURIComponent(dirName(tab.path)),
+        const r = await fetch("/api/upload?dir=" + encodeURIComponent(dirName(tab.path)) +
+                              "&artifact=" + encodeURIComponent(tab.path),
                               { method: "POST", body: fd });
         result = await r.json().catch(() => ({ error: "upload failed" }));
       }

@@ -1387,6 +1387,18 @@ class SyncDaemon:
         rc = 0 if data else (proc.returncode or 1)
         return rc, data[:cap].decode(errors="replace"), truncated
 
+    def _commit_of(self, rev: str) -> str | None:
+        """The full id of the COMMIT `rev` names, or None. The read gate checks
+        a path, so every history read must go through a commit AND that path,
+        never a bare object id: `git show <blob>` prints the blob whatever
+        pathspec follows it, and `<tree>:<path>` reads a path inside any
+        subtree — a directory of someone else's private files, say. Either
+        would hand out content the gate never looked at."""
+        r = self._git_ro(["rev-parse", "--verify", "--quiet", "--end-of-options",
+                          f"{rev}^{{commit}}"])
+        sha = r.stdout.strip()
+        return sha if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
+
     def _vc_path(self, request: web.Request):
         """Validate ?path= for history queries: in-repo, versioned, no secrets,
         and not a git pathspec-magic string."""
@@ -1445,9 +1457,12 @@ class SyncDaemon:
         if not self._REV_RE.match(rev):
             return web.json_response({"error": "bad rev"}, status=400)
         loop = asyncio.get_event_loop()
+        commit = await loop.run_in_executor(None, self._commit_of, rev)
+        if commit is None:
+            return web.json_response({"error": "no such version of this file"}, status=404)
         cap = 5 * 1024 * 1024
         rc, content, truncated = await loop.run_in_executor(
-            None, self._git_capped, ["show", f"{rev}:{rel}"], cap)
+            None, self._git_capped, ["show", f"{commit}:{rel}"], cap)
         if rc != 0:
             return web.json_response({"error": "no such version of this file"}, status=404)
         if truncated:
@@ -1462,9 +1477,12 @@ class SyncDaemon:
         if not self._REV_RE.match(rev):
             return web.json_response({"error": "bad rev"}, status=400)
         loop = asyncio.get_event_loop()
+        commit = await loop.run_in_executor(None, self._commit_of, rev)
+        if commit is None:
+            return web.json_response({"error": "no such version"}, status=404)
         cap = 2 * 1024 * 1024
         rc, patch, truncated = await loop.run_in_executor(
-            None, self._git_capped, ["show", rev, "--format=", "--patch", "--", rel], cap)
+            None, self._git_capped, ["show", commit, "--format=", "--patch", "--", rel], cap)
         if rc != 0:
             return web.json_response({"error": "no such version"}, status=404)
         if truncated:

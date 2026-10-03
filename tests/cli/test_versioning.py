@@ -219,6 +219,34 @@ def test_pathspec_magic_cannot_dump_other_files(k):
         j.post("/api/fs/delete", json={"path": decoy})
 
 
+def test_a_bare_object_id_is_not_a_version(k):
+    """?rev= must name a COMMIT. `git show <blob>` prints that blob whatever
+    pathspec follows it, and `<tree>:<path>` reads inside any subtree, so a bare
+    object id let anyone who could read ONE document read every object in the
+    repo — and an abbreviated id is as short as four hex digits, so the whole
+    store was enumerable. A blob's id is computable from its content without the
+    repo, which is what this test uses."""
+    j = cl("bob")
+    secret = f"{DIR}/blob_secret.md"
+    body = f"CONFIDENTIAL_BLOB_{TAG}\n"
+    assert k.post("/api/file", json={"path": secret}).status_code == 200
+    write(k, secret, body)
+    assert k.post("/fs/props", json={"path": secret, "visibility": "private"}).status_code == 200
+    wait_for_rev(k, secret, 1)
+    blob = subprocess.run(["git", "hash-object", "--stdin"], input=body,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    readable = f"{DIR}/blob_readable.md"
+    assert k.post("/api/file", json={"path": readable}).status_code == 200
+    write(k, readable, "team-readable\n")
+    wait_for_rev(k, readable, 1)
+    assert j.get("/api/vc/log", params={"path": readable}).status_code == 200   # bob passes the gate
+    for op in ("diff", "show"):
+        for rev in (blob, blob[:7]):
+            r = j.get(f"/api/vc/{op}", params={"path": readable, "rev": rev})
+            assert r.status_code == 404, (op, rev, r.status_code)
+            assert f"CONFIDENTIAL_BLOB_{TAG}" not in r.text
+
+
 # A repo-wide "30 days ago" window meant paging every commit in the live
 # knowledgebase — 5406 of them in the 30 days to 2026-08-29 — which took ~29s
 # and blew the client timeout, failing this test on its own BASELINE rather

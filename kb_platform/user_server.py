@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import grp
 import pty
@@ -91,7 +92,7 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 36   # hybrid /api/search (vectors, final=1 reranks), /api/search/status
+BACKEND_V = 37   # kb-read/kb-write/bytes/upload/delete checked on the opened fd, /api/artifact/bytes
 
 
 def _name_key(name: str):
@@ -1056,15 +1057,33 @@ async def upload(request: web.Request) -> web.Response:
     dest_dir = common.resolve_repo_path(dest_rel)
     if dest_dir is None or not dest_dir.is_dir():
         return web.json_response({"error": "bad dir"}, status=400)
+    if request.query.get("artifact") is not None:
+        # kb-upload: into the page's own folder only
+        art = _artifact_path(request.query.get("artifact"))
+        if art is None or dest_dir != art.parent:
+            return web.json_response({"error": "path outside this artifact's folder"}, status=403)
     files_dir = dest_dir / "_files"
     filename = os.path.basename(field.filename or "upload.bin")
+    if filename in ("", ".", ".."):
+        return web.json_response({"error": "bad file name"}, status=400)
     try:
+        # Never through a link: a colleague who can write this folder could
+        # plant `_files` or `_files/<name>` pointing anywhere the uploader can
+        # write, and the bytes would land there as the uploader.
+        if os.path.islink(files_dir):
+            return web.json_response({"error": "_files is a link"}, status=400)
         if not files_dir.exists():
             common.mkdir_with_mode(files_dir)
         target = files_dir / filename
-        existed = target.exists()
+        existed = os.path.lexists(target)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                     0o666)
+        if _fd_path(fd) != files_dir / filename or not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return web.json_response({"error": "bad upload target"}, status=400)
         size = 0
-        with open(target, "wb") as f:
+        with os.fdopen(fd, "wb") as f:
+            f.truncate(0)
             while True:
                 chunk = await field.read_chunk()
                 if not chunk:
@@ -1077,7 +1096,11 @@ async def upload(request: web.Request) -> web.Response:
         # unconditionally turned a completed upload into a 403.
         if not existed:
             try:
-                os.chmod(target, common.birth_mode(files_dir, False, str(target)))
+                fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                try:
+                    os.fchmod(fd, common.birth_mode(files_dir, False, str(target)))
+                finally:
+                    os.close(fd)
             except OSError:
                 pass
     except PermissionError:
@@ -1109,6 +1132,10 @@ def _upload_dest(rel_dir: str, into_files: bool) -> tuple[Path | None, web.Respo
     if not into_files:
         return d, None
     files_dir = d / "_files"
+    if os.path.islink(files_dir):
+        # planted by a colleague who can write the folder: the spool, and then
+        # the published file, would land wherever it points, as the uploader
+        return None, web.json_response({"error": "_files is a link"}, status=400)
     try:
         if not files_dir.exists():
             common.mkdir_with_mode(files_dir)
@@ -1167,6 +1194,9 @@ async def upload_begin(request: web.Request) -> web.Response:
         return web.json_response({"error": "forbidden"}, status=403)
     except OSError as e:
         return web.json_response({"error": str(e)}, status=400)
+    if _fd_path(fd) != spool:                  # the folder was swapped for a link meanwhile
+        os.close(fd)
+        return web.json_response({"error": "the upload folder changed"}, status=409)
     sess = _UPLOADS.add(user=None, dir_rel=str(d.relative_to(common.REPO_ROOT.resolve())),
                         name=name, spool=spool, size=size, fd=fd)
     out = uploads.begin_payload(sess)
@@ -1197,18 +1227,31 @@ async def upload_finish(request: web.Request) -> web.Response:
     err = uploads.complete_error(sess)
     if err:
         return err
-    target = common.REPO_ROOT / sess.dir_rel / sess.name
+    folder = common.REPO_ROOT.resolve() / sess.dir_rel
     try:
+        dfd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        _UPLOADS.drop(sid)
+        return web.json_response({"error": str(e)}, status=400)
+    try:
+        # Published through the folder as opened now, which must be the folder
+        # the upload began in, and only if the spool is still the inode written
+        # — anyone who can write here can play with names, not with the fd.
+        if _fd_path(dfd) != folder or not uploads.same_inode(sess.fd, sess.spool.name, dfd):
+            _UPLOADS.drop(sid)
+            return web.json_response({"error": "the upload's folder or file changed"}, status=409)
         # Rename, not copy: the bytes are already on the right filesystem, so
         # publishing a 4 GB file costs one atomic syscall and no second write.
         # Like `mv` in the user's own terminal, this replaces the destination
         # inode — so an overwritten attachment is reborn with this user's
         # ownership and the folder's audience, which is what the folder's write
         # permission already allowed them to do by hand.
-        os.replace(sess.spool, target)
+        os.replace(sess.spool.name, sess.name, src_dir_fd=dfd, dst_dir_fd=dfd)
     except OSError as e:
         _UPLOADS.drop(sid)
         return web.json_response({"error": str(e)}, status=400)
+    finally:
+        os.close(dfd)
     _UPLOADS.drop(sid, unlink=False)    # the spool IS the file now
     return web.json_response(_upload_result(sess))
 
@@ -1779,6 +1822,21 @@ async def artifact_read(request: web.Request) -> web.Response:
     """Read a file for an artifact, AS THIS USER — the kernel enforces access, so
     an artifact can only read what its viewer could read. Bounded by FS perms."""
     data = await request.json()
+    if data.get("artifact") is not None:
+        # for a page: its own folder only, and never through a link — the
+        # host's string check alone let a symlink in the folder reach anything
+        scoped = _scoped_target(data)
+        if isinstance(scoped, web.Response):
+            return scoped
+        p, base, _art = scoped
+        try:
+            with os.fdopen(_open_scoped(p, base, os.O_RDONLY | os.O_NONBLOCK), "rb") as f:
+                content = f.read().decode(errors="replace")
+        except PermissionError:
+            return web.json_response({"error": "forbidden"}, status=403)
+        except OSError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        return web.json_response({"ok": True, "content": content})
     p = common.resolve_repo_path(data.get("path", ""))
     if p is None:
         return web.json_response({"error": "bad path"}, status=400)
@@ -1801,6 +1859,8 @@ async def artifact_write(request: web.Request) -> web.Response:
     content = data.get("content", "")
     if not isinstance(content, str):
         return web.json_response({"error": "content must be text"}, status=400)
+    if data.get("artifact") is not None:
+        return _artifact_write_scoped(data, content)
     p = common.resolve_repo_path(rel)
     if p is None:
         return web.json_response({"error": "bad path"}, status=400)
@@ -1819,6 +1879,41 @@ async def artifact_write(request: web.Request) -> web.Response:
     common.write_attrib_hint("edit", str(p.relative_to(common.REPO_ROOT)))
     return web.json_response({"ok": True, "path": str(p.relative_to(common.REPO_ROOT)),
                              "bytes": len(content.encode())})
+
+
+def _artifact_write_scoped(data: dict, content: str) -> web.Response:
+    """kb-write for a page: inside its own folder, never through a link. An
+    existing file is opened without following, checked, THEN truncated; a new
+    one is created O_EXCL, so a link planted at the name is refused."""
+    scoped = _scoped_target(data)
+    if isinstance(scoped, web.Response):
+        return scoped
+    p, base, _art = scoped
+    body = content.encode()
+    try:
+        if os.path.lexists(p):
+            fd = _open_scoped(p, base, os.O_WRONLY | os.O_NONBLOCK)   # a FIFO there: ENXIO, not a hang
+        else:
+            if not p.parent.is_dir():
+                return web.json_response({"error": "parent folder does not exist"}, status=400)
+            fd = common.open_with_mode(p, exclusive=True)
+            if not _fd_in(fd, base):
+                os.close(fd)
+                return web.json_response({"error": "path outside this artifact's folder"}, status=403)
+        try:
+            os.ftruncate(fd, 0)
+            view = memoryview(body)
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    rel = str(p.relative_to(common.REPO_ROOT.resolve()))
+    common.write_attrib_hint("edit", rel)
+    return web.json_response({"ok": True, "path": rel, "bytes": len(body)})
 
 
 # ---- artifact folder tools (list / mkdir / delete), all AS the viewer -------
@@ -1854,6 +1949,83 @@ def _artifact_scope(data: dict):
     if p != base and base not in p.parents:
         return web.json_response({"error": "path outside this artifact's folder"}, status=403)
     return p, base, art
+
+
+# ---- the artifact's own folder, enforced here ------------------------------
+# The host page checks a bridge path as a string; the backend checks it again
+# on the file it actually opened, so a symlink a colleague planted in the
+# folder cannot take kb-read/kb-write/kb-read-bytes/kb-upload/kb-delete out.
+def _artifact_path(raw) -> Path | None:
+    art = common.resolve_repo_path(str(raw or ""))
+    if art is None or not str(art).endswith(".html"):
+        return None
+    return art
+
+
+def _fd_path(fd: int) -> Path | None:
+    try:
+        return Path(os.readlink(f"/proc/self/fd/{fd}"))
+    except OSError:
+        return None
+
+
+def _fd_in(fd: int, base: Path) -> bool:
+    """Is the open file really inside `base`? Asked of the fd, after the open,
+    because a check on the name can be raced by anyone who may write into the
+    folder: swap a component for a link between the check and the open."""
+    real = _fd_path(fd)
+    return real is not None and (real == base or base in real.parents)
+
+
+def _open_scoped(p: Path, base: Path, flags: int) -> int:
+    fd = os.open(p, flags | os.O_NOFOLLOW | os.O_CLOEXEC)
+    if not _fd_in(fd, base) or not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise PermissionError("outside this artifact's folder")
+    return fd
+
+
+def _scoped_target(data: dict):
+    """_artifact_scope plus the rule every artifact verb shares: never a secret."""
+    scoped = _artifact_scope(data)
+    if isinstance(scoped, web.Response):
+        return scoped
+    p = scoped[0]
+    if common.is_secret_path(str(p.relative_to(common.REPO_ROOT.resolve()))):
+        return web.json_response({"error": "secrets are not readable by artifacts"}, status=403)
+    return scoped
+
+
+async def artifact_bytes(request: web.Request) -> web.StreamResponse:
+    """kb-read-bytes: a file's bytes, for an artifact, from its own folder only.
+    Served as a download with the attachment CSP, so opening this URL directly
+    renders nothing on the app's origin."""
+    data = {"artifact": request.query.get("artifact"), "path": request.query.get("path", "")}
+    if data["artifact"] is None:
+        return web.json_response({"error": "artifact required"}, status=400)
+    scoped = _scoped_target(data)
+    if isinstance(scoped, web.Response):
+        return scoped
+    p, base, _art = scoped
+    try:
+        fd = _open_scoped(p, base, os.O_RDONLY | os.O_NONBLOCK)
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError:
+        return web.json_response({"error": "not found"}, status=404)
+    ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    resp = web.StreamResponse(headers={
+        "Content-Type": ctype,
+        "Content-Disposition": _content_disposition(p.name, True),
+        "Content-Security-Policy": ATTACHMENT_CSP,
+        "X-Content-Type-Options": "nosniff",
+    })
+    with os.fdopen(fd, "rb") as f:
+        await resp.prepare(request)
+        while chunk := f.read(1 << 20):
+            await resp.write(chunk)
+    await resp.write_eof()
+    return resp
 
 
 async def artifact_list(request: web.Request) -> web.Response:
@@ -1993,10 +2165,19 @@ async def artifact_delete(request: web.Request) -> web.Response:
                 {"error": "folder is not empty — pass recursive: true to delete it"}, status=400)
     touched = _versioned_under(p, rel)   # collect BEFORE they're gone
     try:
-        if is_dir:
-            shutil.rmtree(p)
-        else:
-            os.unlink(p)
+        # through the parent as opened now, checked to still be inside the
+        # artifact's folder: a middle folder swapped for a link meanwhile must
+        # not turn this into a delete somewhere else
+        pfd = os.open(p.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            if _fd_path(pfd) != p.parent or not _fd_in(pfd, base):
+                return web.json_response({"error": "path outside this artifact's folder"}, status=403)
+            if is_dir:
+                shutil.rmtree(p.name, dir_fd=pfd)
+            else:
+                os.unlink(p.name, dir_fd=pfd)
+        finally:
+            os.close(pfd)
     except PermissionError:
         return web.json_response({"error": "permission denied"}, status=403)
     except OSError as e:
@@ -2609,6 +2790,7 @@ def make_app() -> web.Application:
     app.router.add_post("/api/artifact/list", artifact_list)
     app.router.add_post("/api/artifact/mkdir", artifact_mkdir)
     app.router.add_post("/api/artifact/delete", artifact_delete)
+    app.router.add_get("/api/artifact/bytes", artifact_bytes)
     app.router.add_post("/api/fs/move-preview", fs_move_preview)
     app.router.add_get("/api/principals", principals)
     app.router.add_get("/api/launchers", launchers_get)

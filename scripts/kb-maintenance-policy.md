@@ -156,8 +156,9 @@ you do must be idempotent and safe to repeat on the next run.
 - **Read anything** readable: logs, journal, source, config (never print secrets
   into the report).
 - **Run read-only diagnostics**: `systemctl status/show/is-active`, `journalctl`,
-  `df`, `free`, `ps`, `ss -ltn`, `psql` `SELECT`s, `git log/status/diff`,
-  `find`, `grep`, `curl` against `127.0.0.1`.
+  `df`, `free`, `ps`, `ss -ltn`, `psql` `SELECT`s.
+  The hub's HTTP status is already in the bundle's Services section; there
+  is no `curl`, `find`, `grep` or `git` tool.
 - **Restart `kb-convert` or `kb-indexer`** — and only these two — when they are
   dead or wedged. Both hold *derived, disposable* state (sidecars, the search
   index); both rebuild it on start. Restart at most once per run, and say why.

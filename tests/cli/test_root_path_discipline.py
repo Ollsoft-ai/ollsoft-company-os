@@ -33,7 +33,7 @@ ALLOWED = {
     "common.VC_SOCK", "common.SYNCD_SOCK", "common.ATTRIB_DIR",
     "common.REPO_ROOT", "git_dir",
     # names this process just created itself, in a directory it controls
-    "tmpf", "tmp", "sock",
+    "tmpf", "tmpd", "tmp", "sock",
     # /run/kb/users/<u>: parent is root-owned 0755, not group-writable
     "udir",
     # common.mkdir_with_mode, immediately after its own successful os.mkdir,
