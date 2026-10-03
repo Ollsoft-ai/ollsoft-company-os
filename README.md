@@ -250,9 +250,53 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
 
 ## Architecture
 
-One diagram, in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the hub that
-authenticates and spawns, the per-user backend that runs as you, the CRDT file
-daemon, and the index whose row-level security is the same Unix permissions.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{
+  "fontFamily":"ui-sans-serif, system-ui, sans-serif","fontSize":"15px",
+  "lineColor":"#8a9099","textColor":"#1f2328",
+  "clusterBkg":"#eef1f5","clusterBorder":"#aab2bd",
+  "edgeLabelBackground":"#eef1f5"
+}}}%%
+flowchart LR
+    B["🌐 <b>Browser</b><br/>signed session cookie · websocket"]
+
+    subgraph ROOT ["as root"]
+        direction TB
+        HUB["🚪 <b>kb-hub</b><br/>PAM login · spawns · reverse-proxies"]
+        SYNC["🔄 <b>kb-syncd</b><br/>CRDT relay · writes files back,<br/>preserving owner, group and mode"]
+    end
+
+    subgraph YOU ["as you · the kernel decides what this may touch"]
+        direction TB
+        BE["👤 <b>your backend</b><br/>files · shell · SQL · artifacts"]
+        AG["🤖 <b>your agent</b><br/>Claude · Codex"]
+    end
+
+    FILES[("📄 <b>/srv/kb</b> · git-versioned markdown<br/><i>the source of truth</i>")]
+    IDX["🔎 <b>kb-indexer</b><br/>markdown → rows, carrying the Unix permissions across"]
+    PG[("🐘 <b>Postgres</b> · row-level security <b>is</b> the Unix permissions<br/><i>disposable, rebuildable from the files</i>")]
+
+    B -->|https| HUB
+    HUB -->|runuser -u you| BE
+    HUB --> SYNC
+    BE --> FILES
+    AG --> FILES
+    BE --> PG
+    SYNC <-->|inotify ⇄ Yjs| FILES
+    FILES --> IDX --> PG
+
+    classDef svc  fill:#1E6FE0,stroke:#164FA8,color:#ffffff
+    classDef mine fill:#2E7D5B,stroke:#1F5940,color:#ffffff
+    classDef data fill:#5B4B8A,stroke:#3F3461,color:#ffffff
+    classDef edge fill:#ffffff,stroke:#aab2bd,color:#1f2328
+    class HUB,SYNC svc
+    class BE,AG mine
+    class FILES,PG,IDX data
+    class B edge
+```
+
+Component by component, and why each one is where it is:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 

@@ -20,15 +20,15 @@ flowchart LR
         SYNC["🔄 <b>kb-syncd</b><br/>CRDT relay · writes files back,<br/>preserving owner, group and mode"]
     end
 
-    subgraph YOU ["as you — the kernel decides what this may touch"]
+    subgraph YOU ["as you · the kernel decides what this may touch"]
         direction TB
         BE["👤 <b>your backend</b><br/>files · shell · SQL · artifacts"]
         AG["🤖 <b>your agent</b><br/>Claude · Codex"]
     end
 
-    FILES[("📄 <b>/srv/kb</b> — git-versioned markdown<br/><i>the source of truth</i>")]
+    FILES[("📄 <b>/srv/kb</b> · git-versioned markdown<br/><i>the source of truth</i>")]
     IDX["🔎 <b>kb-indexer</b><br/>markdown → rows, carrying the Unix permissions across"]
-    PG[("🐘 <b>Postgres</b> — row-level security <b>is</b> the Unix permissions<br/><i>disposable, rebuildable from the files</i>")]
+    PG[("🐘 <b>Postgres</b> · row-level security <b>is</b> the Unix permissions<br/><i>disposable, rebuildable from the files</i>")]
 
     B -->|https| HUB
     HUB -->|runuser -u you| BE
