@@ -1,16 +1,16 @@
 # Ollsoft Company OS
 
 An AI-native company workspace where **the Linux kernel is the permission
-system**. Documents and tasks as plain markdown files on your own server, with
-agents that work in them as the person who asked, seeing exactly what that
+system**. Documents and tasks live as plain markdown files on your own server,
+and the internal tools your team builds live beside them as HTML artifacts.
+Agents work in all of it as the person who asked, seeing exactly what that
 person sees.
 
 Your data is never in somebody else's cloud, and an agent reaches it the way a
 colleague does rather than through an API.
 
-Think Notion, but the permissions go all the way down to the file, the small
-tools are ones your team builds inside it rather than buys, and agents work
-there beside you. It is an actual operating system, so it is also where the work
+Think Notion, but the permissions go all the way down to the file, the tools
+are ones your team builds rather than buys, and agents work there beside you. It is an actual operating system, so it is also where the work
 gets done, not only where it gets written down.
 
 ![A delivery board beside the markdown file it is stored in](docs/images/board-and-markdown.png)
