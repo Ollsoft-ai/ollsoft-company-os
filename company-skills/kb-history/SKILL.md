@@ -36,6 +36,17 @@ budget is spent on that person's commits instead of everyone's.
 Other flags: `--until`, `--limit`, `--json`, and per-file `--rev <id>` with `--diff` (default),
 `--show` (full content at that revision), `--restore` (write it back, as you).
 
+## Who wrote this line
+
+```bash
+/usr/local/bin/kb-history company/notes.md --blame      # rev, time, author per line
+```
+
+- **Last touch, not first write**: one edited word re-credits the whole line — and here a line is a whole paragraph.
+- **`(machine)`** = an author that is not a login account, i.e. `kb-syncd`: the change reached the file outside the editor — an agent, a script, a sync. Not proof of AI; proof of "not typed in the editor".
+- **Moves are followed** (below): a line keeps its real author, not whoever moved the file.
+- The editor shows the same thing as a stripe per line (setting `editor.blame`).
+
 ## Read the output right
 
 - **Commits are autosaves, not units of work.** The editor snapshots every few seconds — 21
@@ -59,25 +70,15 @@ Other flags: `--until`, `--limit`, `--json`, and per-file `--rev <id>` with `--d
 Real example: `company/T-Systems compliance/ci-cd.md` is owned by `krystof` and every
 filesystem probe said so — `kb-history` shows `tomas_vargosko` typed the entire file.
 
-## A moved file loses its history (open defect)
+## History follows a moved file
 
-**When a file is renamed or moved, every past commit becomes invisible — to everyone.**
-The permission filter runs `test -r` on the path *as recorded in the commit*; once that path is
-gone, the check fails and the row is dropped. The commits still exist in git; nothing reaches them.
+**A renamed or moved document keeps its past**: its version list, diffs, restore, `--blame` and the `--author` feed all reach back to before the move. `kb-syncd` records each move in a ledger (`.git/kb-moves.jsonl`) and every history read follows it.
 
-`kb-syncd` commits **one path per commit**, so a move lands as a delete-commit plus an
-add-commit. Git only detects a rename when both sides are in the same commit — so it never does
-here, and `--follow` cannot rescue it either. The new path starts life with a single
-`sync: auto-snapshot` commit and no past.
-
-Real case: on 2026-08-03 `company/T-Systems compliance/` moved to
-`projects/🔝 T-Systems Code Compliance Copilot/`. Before the move,
-`kb-history --author tomas_vargosko --since "8 days ago"` returned 21 commits. After it, the same
-query returns **"no visible changes"**, and the old path answers `forbidden`.
-
-**So: before reporting that someone did nothing, check whether the folder moved.** `git log`-level
-truth still exists; only the path-keyed door closed. Say "their history was orphaned by a move",
-never "they did nothing".
+- **Who sees the old versions**: anyone who can read the document **now** — the same rule as a file shared in place.
+- **Who sees the old name**: only someone who can list the folder it was in. Everyone else gets `(before a move)` / `an earlier location`. A folder that no longer exists cannot be checked, so its names are hidden from everybody.
+- **The feed lists pre-move work under the document's current path**; the move itself shows as `renamed`.
+- **What counts as a move**: a rename git sees inside one commit (≥ 90% similar), or a delete and an add of **identical** content within 10 s. Copy, then delete the original later = a fresh start without the past.
+- **Moves made before the ledger existed were backfilled** from history: a folder moved months ago gets its authors' earlier work back.
 
 ## State the blind spot
 

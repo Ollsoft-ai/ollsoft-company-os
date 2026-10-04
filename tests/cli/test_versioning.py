@@ -11,7 +11,7 @@ import time
 
 import httpx
 import pytest
-from kbenv import BASE, CREDS, L, U, doc, backend_v
+from kbenv import BASE, CREDS, L, U, doc, home, backend_v
 
 TAG = str(int(time.time()))
 DIR = doc(f"vc_{TAG}")
@@ -361,3 +361,124 @@ def test_activity_sees_non_ascii_folders(k):
     cli_paths = [pp for c in json.loads(out.stdout)["commits"]
                  for f in c["files"] for pp in f["paths"]]
     assert p in cli_paths, f"kb-history hid the emoji path: {cli_paths[:10]}"
+
+
+def test_blame_credits_people_and_machines(k):
+    """The editor's authorship stripe: a line typed through the product is its
+    author's; a file that changed outside the editor (here: a plain write by
+    the test runner, which leaves no attribution hint) is kb-syncd's, flagged
+    as a machine. Gated like every other history read."""
+    p = f"{DIR}/blame.md"
+    assert k.post("/api/file", json={"path": p}).status_code == 200
+    write(k, p, f"# by alice {TAG}\n\nsecond line\n")
+    wait_for_rev(k, p, 1)
+    r = k.get("/api/vc/blame", params={"path": p})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert [t for _ci, t in j["lines"]] == [f"# by alice {TAG}", "", "second line"]
+    c = j["commits"][j["lines"][0][0]]
+    assert L(c["author"]) == "alice" and c["machine"] is False, c
+    assert len(c["rev"]) == 12 and c["ts"] > 0
+    assert set(c) == {"rev", "author", "ts", "machine"}, "no subject: it can name a moved file's old path"
+
+    m = f"{DIR}/blame_machine.md"
+    with open(f"/srv/kb/{m}", "w") as f:
+        f.write(f"written outside the editor {TAG}\n")
+    wait_for_rev(k, m, 1)
+    j = k.get("/api/vc/blame", params={"path": m}).json()
+    c = j["commits"][j["lines"][0][0]]
+    assert c["author"] == "kb-syncd" and c["machine"] is True, c
+
+    priv = f"{DIR}/blame_priv.md"
+    assert k.post("/api/file", json={"path": priv}).status_code == 200
+    write(k, priv, "alice only\n")
+    assert k.post("/fs/props", json={"path": priv, "visibility": "private"}).status_code == 200
+    wait_for_rev(k, priv, 1)
+    assert cl("bob").get("/api/vc/blame", params={"path": priv}).status_code == 403
+
+
+def test_blame_of_an_uncommitted_file_is_empty_not_an_error(k):
+    p = f"{DIR}/never_committed_{TAG}.md"
+    r = k.get("/api/vc/blame", params={"path": p})
+    # absent file: the read gate refuses it like any other unreadable path
+    assert r.status_code in (200, 403), r.text
+    if r.status_code == 200:
+        assert r.json()["lines"] == []
+
+
+def _moved_doc(k):
+    """alice drafts in her PRIVATE folder (v1, v2), then moves it into the
+    shared area in the app. Returns (old, new, pre-move revs newest first)."""
+    old = home("alice", f"draft_{TAG}/plan.md")
+    assert k.post("/api/fs/mkdir", json={"path": old.rsplit("/", 1)[0]}).status_code == 200
+    assert k.post("/api/file", json={"path": old}).status_code == 200
+    write(k, old, f"# Plan {TAG}\n\nv1 by alice\n")
+    wait_for_rev(k, old, 1)
+    write(k, old, f"# Plan {TAG}\n\nv2 by alice\n")
+    revs = [e["rev"] for e in wait_for_rev(k, old, 2)]
+    new = f"{DIR}/moved_plan_{TAG}.md"
+    r = k.post("/api/fs/rename", json={"src": old, "dst": new})
+    assert r.status_code == 200, r.text
+    deadline = time.time() + 40
+    while time.time() < deadline:     # the move is ledgered once BOTH halves are committed
+        j = k.get("/api/vc/log", params={"path": new}).json()
+        if any(e.get("moved") for e in j.get("entries", [])):
+            return old, new, revs
+        time.sleep(1)
+    raise AssertionError(f"history never followed the move: {j}")
+
+
+@pytest.fixture(scope="module")
+def moved(k):
+    return _moved_doc(k)
+
+
+def test_history_follows_a_move_made_in_the_app(k, moved):
+    old, new, revs = moved
+    j = k.get("/api/vc/log", params={"path": new}).json()
+    before = [e for e in j["entries"] if e.get("moved")]
+    assert [e["rev"] for e in before][:2] == revs[:2], j
+    assert all(e.get("path") == old for e in before), "the mover may see where it came from"
+    d = k.get("/api/vc/diff", params={"path": new, "rev": revs[0]}).json()
+    assert "+v2 by alice" in d["patch"], d
+    assert k.get("/api/vc/show", params={"path": new, "rev": revs[1]}).json()["content"].endswith("v1 by alice\n")
+    # the version that arrived: a move, not a document typed from scratch
+    arrived = j["entries"][len(j["entries"]) - len(before) - 1]["rev"]
+    d = k.get("/api/vc/diff", params={"path": new, "rev": arrived}).json()
+    assert d["patch"].startswith("moved here from") and "did not change" in d["patch"], d
+
+
+def test_a_moved_documents_old_name_is_redacted_for_others(k, moved):
+    """bob can read the document where it lives now, so its past is his to
+    read too (the same rule as a file shared in place) — but alice's private
+    folder is not his to list, so its old name never reaches him."""
+    old, new, revs = moved
+    b = cl("bob")
+    folder = old.rsplit("/", 1)[0]
+    r = b.get("/api/vc/log", params={"path": new})
+    assert r.status_code == 200
+    before = [e for e in r.json()["entries"] if e.get("moved")]
+    assert len(before) >= 2 and not any("path" in e for e in before)
+    for q in ({"rev": revs[0]}, {"rev": revs[1]}):
+        d = b.get("/api/vc/diff", params={"path": new, **q})
+        assert d.status_code == 200 and "v" in d.json()["patch"]
+        assert folder not in d.text, d.text
+    assert folder not in r.text
+    act = b.get("/api/vc/activity", params={"since": "10 minutes ago", "author": U("alice"), "limit": 1000})
+    assert folder not in act.text
+    assert old not in b.get("/api/vc/log", params={"path": new}).text
+
+
+def test_activity_lists_pre_move_work_under_the_new_name(k, moved):
+    old, new, revs = moved
+    j = wait_for_activity(k, new, U("alice"))
+    rows = [c for c in j["commits"] if any(new in f["paths"] for f in c["files"])]
+    assert {c["rev"] for c in rows} >= set(revs[:2]), "edits made before the move count where it lives now"
+    assert any(f["status"] == "R" for c in rows for f in c["files"] if new in f["paths"]), "the move reads as one rename"
+
+
+def test_blame_credits_lines_written_before_the_move(k, moved):
+    old, new, revs = moved
+    j = k.get("/api/vc/blame", params={"path": new}).json()
+    by_text = {t: j["commits"][ci] for ci, t in j["lines"]}
+    assert by_text["v2 by alice"]["rev"] == revs[0], "not the move: the edit that wrote it"

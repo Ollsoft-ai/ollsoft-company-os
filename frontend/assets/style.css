@@ -61,6 +61,10 @@
   /* and being tagged YOURSELF — the one mention you must not scroll past */
   --mention-me: #FFD34E;
   --mention-me-wash: color-mix(in srgb, var(--mention-me) 16%, transparent);
+  /* who wrote a line (editor.blame): you, a colleague, a machine */
+  --blame-me: #4D9DFF;
+  --blame-other: #B79BFF;
+  --blame-machine: #F0995A;
   --code-bg: #081020;          /* fenced code blocks in the rich editor */
   --code-ink: #CFE0F5;
   --diff-add: #7FE3BC;         /* version history */
@@ -167,6 +171,9 @@
   --personal-deep: #9A6DD7;
   --mention: #9A6DD7;
   --mention-me: #FFDC49;
+  --blame-me: #529CCA;
+  --blame-other: #9A6DD7;
+  --blame-machine: #FFA344;
   --code-bg: #252525;
   --code-ink: #E3E2E0;
   --diff-add: #4DAB9A;
@@ -261,6 +268,9 @@
   --personal-deep: #9065B0;
   --mention: #9065B0;
   --mention-me: #CB912F;
+  --blame-me: #2383E2;
+  --blame-other: #9065B0;
+  --blame-machine: #D9730D;
   --code-bg: #F7F6F3;
   --code-ink: #37352F;
   --diff-add: #448361;
@@ -1122,6 +1132,33 @@ body.touch-drag .pane-drop-ind { transition: none; }
 .cm-editor .cm-line.cm-codeblock ::selection {
   background: color-mix(in srgb, var(--accent) 32%, transparent) !important; }
 
+/* Who wrote each line (editor.blame, blame.js): a 3px stripe inside the
+   line's own left padding, painted only in the middle of a wider box — a
+   target a finger can hit, a mark the eye can skip. Source view: hard by the
+   line numbers, where an editor's change bar lives (CodeMirror's 6px line
+   padding is what applies there). Rich view: just left of the words, so it
+   stays with a centred Notion column, where a CodeMirror gutter would stand
+   at the pane's edge — at the same x on every kind of line (a quotation's box
+   starts after its border, a code card's at its inset). */
+.cm-line.cm-blame { position: relative; }
+.cm-line.cm-blame::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0;
+  width: 3px; padding: 0 1px; background-clip: content-box; background-color: var(--blame-c);
+  border-radius: 2px; opacity: .5; cursor: pointer; transition: opacity .12s ease; }
+.cm-line.cm-blame:hover::before { opacity: .95; }
+.cm-rich .cm-line.cm-blame::before { left: calc(var(--gutter) - 13px); padding: 0 4px; }
+.cm-rich .cm-line.cm-quoteline.cm-blame::before { left: -16px; }
+.cm-rich .cm-line.cm-codeblock.cm-blame::before { left: calc(var(--gutter) - var(--block-inset) - 13px); }
+.cm-blame-me { --blame-c: var(--blame-me); }
+.cm-blame-other { --blame-c: var(--blame-other); }
+.cm-blame-machine { --blame-c: var(--blame-machine); }
+/* its card: who, when, what — a context menu's frame */
+.blame-pop { max-width: min(340px, 92vw); font-family: var(--sans); }
+.blame-pop .bp-head { display: flex; flex-direction: column; gap: .15rem; padding: .4rem .55rem .35rem; }
+.blame-pop .bp-who { display: flex; align-items: center; gap: .45rem; font-size: .84rem; font-weight: 600; color: var(--ink); }
+.blame-pop .bp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blame-c); flex: none; }
+.blame-pop .bp-when { font-size: .76rem; color: var(--muted); }
+.blame-pop .bp-what { font-size: .74rem; color: var(--faint); overflow-wrap: anywhere; }
+
 /* ── Terminal panel ───────────────────────────────────────────────────────── */
 .terminal-panel { position: relative; flex: 1 1 0; min-height: 110px; background: var(--term-bg);
   display: flex; flex-direction: column; min-width: 0; }
@@ -1478,6 +1515,9 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .vh-when { font-family: var(--mono); font-size: .7rem; white-space: nowrap; }
 .vh-author { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .vh-cur { font-family: var(--mono); font-size: .6rem; color: var(--ok); }
+/* a version from before the document was moved here (its old name, when you may see it) */
+.vh-moved { font-family: var(--mono); font-size: .6rem; color: var(--muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 .vh-none { padding: .5rem; font-size: .8rem; }
 .vh-detail { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
 .vh-diff { flex: 1 1 auto; overflow: auto; background: var(--chassis); border: 1px solid var(--border);

@@ -1002,6 +1002,14 @@ immediately.
 `.git` is `0700 root`, so history cannot be used to read around file
 permissions.
 
+History follows a document across moves. One-file-per-commit splits a move made
+in the app into a delete and an add that git never pairs, so `kb-syncd` keeps a
+move ledger (`.git/kb-moves.jsonl`, `moves.py`) built only from evidence in the
+commits — a rename inside one commit (>= 90% similar) or a delete and an add of
+identical content within 10 s — never from hints, which anyone can write. Log,
+show, diff, blame and the activity feed walk it back from the current, readable
+path; an earlier name is shown only to someone who can list its folder.
+
 **Privileged-action audit** — who changed who can see what. `kb-history` tracks
 content and is silent on permissions, which is the question that matters after
 an incident. The hub logs six events to journald as

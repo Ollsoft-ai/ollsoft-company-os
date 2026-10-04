@@ -40,7 +40,7 @@ from pycrdt import Text, write_var_uint
 from pycrdt.websocket import WebsocketServer
 from watchfiles import awatch
 
-from . import common
+from . import common, moves
 
 FLUSH_DEBOUNCE = 0.25   # seconds of quiet before writing a doc to disk
 _ACL_ACCESS = "system.posix_acl_access"   # a file's audience, in one xattr
@@ -350,6 +350,8 @@ class SyncDaemon:
         self._deferred: set[str] = set()      # flushes backed off (log once, not per tick)
         self.tasks: list[asyncio.Task] = []
         self._loop_deaths: dict[str, float] = {}
+        # The moves history follows (moves.py): root-only, beside the objects.
+        self.moves = moves.Ledger(common.REPO_ROOT / ".git" / "kb-moves.jsonl")
 
     def note_edit(self, name: str, user: str) -> None:
         self.recent_editors.setdefault(name, {})[user] = time.time()
@@ -1132,7 +1134,46 @@ class SyncDaemon:
                                 "commit", "-q", "-m", "sync: auto-snapshot"], check=True)
         except (OSError, subprocess.CalledProcessError):
             pass
+        self._record_moves()
         self._write_git_state()
+
+    # A split move's halves can land in two passes; each pass re-reads this
+    # much recent history so the second pass still sees the first half.
+    _MOVE_LOOKBACK_S = 60
+
+    def _record_moves(self) -> None:
+        """Ledger the moves the newest commits show (moves.py) — the step that
+        lets a document's history follow it. Never breaks a commit pass."""
+        since = time.strftime("%Y-%m-%dT%H:%M:%S%z",
+                              time.localtime(time.time() - self._MOVE_LOOKBACK_S))
+        try:
+            n = self.moves.add(moves.find_moves(self._git_text, common.is_versioned_path, since))
+            if n:
+                log.info("history: recorded %d move(s)", n)
+        except Exception:                                    # noqa: BLE001
+            log.warning("history: recording moves failed", exc_info=True)
+
+    def _backfill_moves(self) -> None:
+        """Once per repository: ledger the moves made before the ledger existed
+        — every move made in the app until then had been split in two and its
+        document had lost its past. Done is marked in .git/kb-moves.state; a
+        failed scan is not marked, so the next start tries again."""
+        state = common.REPO_ROOT / ".git" / "kb-moves.state"
+        if state.exists():
+            return
+        t0 = time.monotonic()
+
+        def run(args: list) -> str:
+            r = self._git_ro(args, timeout=900)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.strip()[:200])
+            return r.stdout
+        try:
+            n = self.moves.add(moves.find_moves(run, common.is_versioned_path))
+            state.write_text(json.dumps({"backfilled": int(time.time()), "moves": n}) + "\n")
+            log.info("history: backfilled %d move(s) in %.1fs", n, time.monotonic() - t0)
+        except Exception:                                    # noqa: BLE001
+            log.warning("history: move backfill failed — retried at the next start", exc_info=True)
 
     def _write_git_state(self) -> None:
         """Publish repo stats to /run/kb/git-state.json (world-readable tmpfs).
@@ -1341,7 +1382,7 @@ class SyncDaemon:
             cache[rel] = ok
         return ok
 
-    def _git_ro(self, args: list[str]) -> subprocess.CompletedProcess:
+    def _git_ro(self, args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
         # GIT_LITERAL_PATHSPECS=1: a caller-supplied path is ALWAYS a literal
         # file path, never git "pathspec magic" (:(exclude), :(glob), :/, …).
         # Without this, an attacker who creates a decoy file literally named
@@ -1354,7 +1395,16 @@ class SyncDaemon:
         # the machine-parsed path list relies on -z, never on this.
         return subprocess.run(["git", "-C", str(common.REPO_ROOT),
                                "-c", "core.quotePath=false", *args],
-                              capture_output=True, text=True, timeout=30, env=env)
+                              capture_output=True, text=True, timeout=timeout, env=env)
+
+    def _git_text(self, args: list[str]) -> str:
+        """stdout of a read-only git command, "" when it fails — the runner
+        moves.py walks history with."""
+        try:
+            r = self._git_ro(args)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return r.stdout if r.returncode == 0 else ""
 
     def _git_capped(self, args: list[str], cap: int) -> tuple[int, str, bool]:
         """Run a read-only git command but read at most cap+1 bytes of stdout,
@@ -1430,8 +1480,59 @@ class SyncDaemon:
             return None, None, web.json_response({"error": "forbidden"}, status=403)
         return user, rel, None
 
+    # ---- a moved document's past (moves.py) ----------------------------------
+    # History follows a document across moves: whoever may read it NOW sees
+    # its versions from before, wherever it lived — the same rule as a file
+    # shared in place, whose old versions were always visible. What does NOT
+    # follow is the old NAME: shown only to someone who can list the folder it
+    # was in, "(before a move)" to everyone else.
+
+    def _lineage(self, rel: str, limit: int | None = None) -> list[dict] | None:
+        """The document's segments under each earlier name, or None when it
+        never arrived by a move — the common case, where its path's log IS its
+        history and nothing below changes."""
+        if rel not in self.moves.by_new:
+            return None
+        return moves.lineage(self._git_text, self.moves, rel, limit)
+
+    def _name_at(self, rel: str, commit: str) -> tuple[str, dict | None]:
+        """(the name the document had in `commit`, the move that brought it
+        to `rel` if `commit` IS that move). A commit outside its lineage keeps
+        `rel` — exactly what show/diff did before moves were followed."""
+        segs = self._lineage(rel)
+        if not segs:
+            return rel, None
+        for s in segs:
+            if s["link"] and s["link"]["add"] == commit and s["entries"] and s["entries"][-1]["sha"] == commit:
+                return s["path"], s["link"]
+        return moves.path_at(segs, commit) or rel, None
+
+    def _can_list_as(self, user: str, rel_dir: str) -> bool:
+        """Can this person list that folder right now — i.e. would a file's
+        name there be visible to them anyway?"""
+        if user == "root":
+            return True
+        d = str(common.REPO_ROOT / rel_dir)
+        try:
+            r = subprocess.run(["/usr/sbin/runuser", "-u", user, "--",
+                                "/usr/bin/test", "-r", d, "-a", "-x", d],
+                               capture_output=True, timeout=10)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def _shown_name(self, user: str, old: str, cache: dict) -> str | None:
+        """An earlier name as this reader may see it: itself, or None (redact)."""
+        if old not in cache:
+            cache[old] = old if self._can_list_as(user, os.path.dirname(old)) else None
+        return cache[old]
+
+    @staticmethod
+    def _unname(text: str, old: str, shown: str | None) -> str:
+        return text if shown else text.replace(old, "an earlier location")
+
     async def vc_log(self, request: web.Request) -> web.Response:
-        _user, rel, err = await self._vc_gate(request)
+        user, rel, err = await self._vc_gate(request)
         if err is not None:
             return err
         try:
@@ -1439,14 +1540,31 @@ class SyncDaemon:
         except ValueError:
             limit = 50
         loop = asyncio.get_event_loop()
-        r = await loop.run_in_executor(None, self._git_ro,
-            ["log", "-n", str(limit), "--format=%H%x1f%an%x1f%at%x1f%s", "--", rel])
+        segs = await loop.run_in_executor(None, self._lineage, rel, limit)
+        if segs is None:
+            r = await loop.run_in_executor(None, self._git_ro,
+                ["log", "-n", str(limit), "--format=%H%x1f%an%x1f%at%x1f%s", "--", rel])
+            entries = []
+            for line in r.stdout.splitlines():
+                parts = line.split("\x1f")
+                if len(parts) == 4:
+                    entries.append({"rev": parts[0][:12], "author": parts[1],
+                                    "ts": int(parts[2]), "subject": parts[3]})
+            return web.json_response({"path": rel, "entries": entries})
+        names: dict = {}
         entries = []
-        for line in r.stdout.splitlines():
-            parts = line.split("\x1f")
-            if len(parts) == 4:
-                entries.append({"rev": parts[0][:12], "author": parts[1],
-                                "ts": int(parts[2]), "subject": parts[3]})
+        for i, seg in enumerate(segs):
+            shown = None
+            if i:
+                shown = await loop.run_in_executor(None, self._shown_name, user, seg["path"], names)
+            for e in seg["entries"]:
+                row = {"rev": e["sha"][:12], "author": e["author"], "ts": e["ts"], "subject": e["subject"]}
+                if i:
+                    row["moved"] = True
+                    row["subject"] = self._unname(e["subject"], seg["path"], shown)
+                    if shown:
+                        row["path"] = shown
+                entries.append(row)
         return web.json_response({"path": rel, "entries": entries})
 
     async def vc_show(self, request: web.Request) -> web.Response:
@@ -1460,9 +1578,10 @@ class SyncDaemon:
         commit = await loop.run_in_executor(None, self._commit_of, rev)
         if commit is None:
             return web.json_response({"error": "no such version of this file"}, status=404)
+        at, _move = await loop.run_in_executor(None, self._name_at, rel, commit)
         cap = 5 * 1024 * 1024
         rc, content, truncated = await loop.run_in_executor(
-            None, self._git_capped, ["show", f"{commit}:{rel}"], cap)
+            None, self._git_capped, ["show", f"{commit}:{at}"], cap)
         if rc != 0:
             return web.json_response({"error": "no such version of this file"}, status=404)
         if truncated:
@@ -1470,7 +1589,7 @@ class SyncDaemon:
         return web.json_response({"path": rel, "rev": rev, "content": content})
 
     async def vc_diff(self, request: web.Request) -> web.Response:
-        _user, rel, err = await self._vc_gate(request)
+        user, rel, err = await self._vc_gate(request)
         if err is not None:
             return err
         rev = request.query.get("rev", "")
@@ -1480,14 +1599,144 @@ class SyncDaemon:
         commit = await loop.run_in_executor(None, self._commit_of, rev)
         if commit is None:
             return web.json_response({"error": "no such version"}, status=404)
+        at, move = await loop.run_in_executor(None, self._name_at, rel, commit)
         cap = 2 * 1024 * 1024
-        rc, patch, truncated = await loop.run_in_executor(
-            None, self._git_capped, ["show", commit, "--format=", "--patch", "--", rel], cap)
+        if move is not None:
+            # the version that arrived under this name: where from, and any
+            # edit made on the way. Hunks only — git's header names both paths.
+            shown = await loop.run_in_executor(None, self._shown_name, user, move["old"], {})
+            rc, patch, truncated = await loop.run_in_executor(
+                None, self._git_capped,
+                ["diff", f"{move['del']}^:{move['old']}", f"{commit}:{at}"], cap)
+            rc = 0
+            _hdr, sep, body = patch.partition("@@")
+            head = f"moved here from {shown or 'an earlier location'}"
+            patch = head + ("\n" + sep + body if sep else " — the text did not change\n")
+        else:
+            rc, patch, truncated = await loop.run_in_executor(
+                None, self._git_capped, ["show", commit, "--format=", "--patch", "--", at], cap)
+            if rc == 0 and at != rel:
+                shown = await loop.run_in_executor(None, self._shown_name, user, at, {})
+                if not shown:   # the old name sits in the header lines, before the first hunk
+                    head, sep, body = patch.partition("\n@@")
+                    patch = head.replace(at, rel) + sep + body
         if rc != 0:
             return web.json_response({"error": "no such version"}, status=404)
         if truncated:
             patch += "\n… (diff truncated — too large to display in full)\n"
         return web.json_response({"path": rel, "rev": rev, "patch": patch})
+
+    _BLAME_HDR_RE = re.compile(r"^([0-9a-f]{40,64}) (\d+) \d+")
+
+    @classmethod
+    def _parse_blame(cls, out: str) -> tuple[list[dict], list[list]]:
+        """Parse `git blame --porcelain` into (commits, lines): each line is
+        [index into commits, its text, its line number in that commit's
+        version]. A commit's author and time arrive only the first time it
+        appears, so they are kept per sha (full in "sha", internal).
+
+        Deliberately NOT kept: the summary, `filename` and `previous`. Blame
+        follows a file across a move (git cannot be told not to), and on the
+        far side of one those name the OLD path — "edit: users/x/secret-plans/
+        salary-review.md" handed to everyone who can read where it lives now.
+        The read gate vouched for the current path only."""
+        commits: list[dict] = []
+        index: dict[str, int] = {}
+        lines: list[list] = []
+        cur, orig = None, 0
+        for raw in out.split("\n"):
+            if raw.startswith("\t"):
+                if cur is not None:
+                    lines.append([index[cur], raw[1:], orig])
+                continue
+            m = cls._BLAME_HDR_RE.match(raw)
+            if m:
+                cur, orig = m.group(1), int(m.group(2))
+                if cur not in index:
+                    index[cur] = len(commits)
+                    commits.append({"sha": cur, "rev": cur[:12], "author": "", "ts": 0})
+                continue
+            if cur is None:
+                continue
+            key, _, val = raw.partition(" ")
+            c = commits[index[cur]]
+            if key == "author":
+                c["author"] = val
+            elif key == "author-time" and val.isdigit():
+                c["ts"] = int(val)
+        return commits, lines
+
+    @staticmethod
+    def _is_person(name: str, cache: dict) -> bool:
+        """A git author is a person when it is a login account (the uid range
+        _vc_identity admits). kb-syncd is no account at all — the name the
+        sweep commits under when a change reached the file outside the editor —
+        so it, and anything else that is not a person, counts as a machine."""
+        if name not in cache:
+            try:
+                cache[name] = 1000 <= pwd.getpwnam(name).pw_uid < 65000
+            except KeyError:
+                cache[name] = False
+        return cache[name]
+
+    async def vc_blame(self, request: web.Request) -> web.Response:
+        """Who last touched each line of the committed file — the editor's
+        authorship stripe. HEAD, never the working tree: the editor matches
+        these lines against its live text itself, and a working-tree blame
+        would invent a "Not Committed Yet" author for the few seconds a flush
+        waits for its commit. -M keeps a moved paragraph with whoever wrote it."""
+        _user, rel, err = await self._vc_gate(request)
+        if err is not None:
+            return err
+        loop = asyncio.get_event_loop()
+        cap = 8 * 1024 * 1024
+        rc, out, truncated = await loop.run_in_executor(
+            None, self._git_capped, ["blame", "--porcelain", "-M", "HEAD", "--", rel], cap)
+        if truncated:
+            return web.json_response({"error": "file too large to annotate"}, status=413)
+        if rc != 0:   # not committed yet: nobody to credit, not an error
+            return web.json_response({"path": rel, "commits": [], "lines": []})
+        commits, lines = self._parse_blame(out)
+        await loop.run_in_executor(None, self._blame_across_moves, rel, commits, lines, cap)
+        people: dict = {}
+        for c in commits:
+            c["machine"] = not self._is_person(c["author"], people)
+            del c["sha"]
+        return web.json_response({"path": rel, "commits": commits,
+                                  "lines": [[ci, text] for ci, text, _o in lines]})
+
+    def _blame_across_moves(self, rel: str, commits: list, lines: list, cap: int) -> None:
+        """Git follows a rename made inside one commit by itself; a move split
+        over two commits (a "pair", moves.py) it sees as a brand-new file, and
+        credits every line to the move. For those lines, ask the OLD name, as
+        it was just before its delete, who wrote them — the content is
+        identical, so line n there is line n here. In place; chained moves
+        resolve newest first, each feeding the next."""
+        segs = self._lineage(rel)
+        if not segs:
+            return
+        where = {c["sha"]: i for i, c in enumerate(commits)}
+        for seg in segs:
+            move = seg["link"]
+            if not move or move["via"] != "pair":
+                continue
+            todo = [i for i, line in enumerate(lines) if commits[line[0]]["sha"] == move["add"]]
+            if not todo:
+                continue
+            rc, out, truncated = self._git_capped(
+                ["blame", "--porcelain", "-M", f"{move['del']}^", "--", move["old"]], cap)
+            if rc != 0 or truncated:
+                continue
+            old_commits, old_lines = self._parse_blame(out)
+            for i in todo:
+                o = lines[i][2]
+                if not 1 <= o <= len(old_lines) or old_lines[o - 1][1] != lines[i][1]:
+                    continue                       # not the same text: leave it with the move
+                src = old_commits[old_lines[o - 1][0]]
+                if src["sha"] not in where:
+                    where[src["sha"]] = len(commits)
+                    commits.append(src)
+                lines[i] = [where[src["sha"]], lines[i][1], old_lines[o - 1][2]]
 
     _HDR_RE = re.compile(r"^\x01[0-9a-f]{40}\x1f")
 
@@ -1516,7 +1765,7 @@ class SyncDaemon:
             if cls._HDR_RE.match(t):
                 # maxsplit=3 keeps a subject containing \x1f from shifting fields.
                 parts = t[1:].split("\x1f", 3)
-                cur = {"rev": parts[0][:12], "author": parts[1], "ts": int(parts[2]),
+                cur = {"sha": parts[0], "rev": parts[0][:12], "author": parts[1], "ts": int(parts[2]),
                        "subject": parts[3] if len(parts) > 3 else "", "files": []}
                 commits.append(cur)
                 i += 1
@@ -1531,6 +1780,41 @@ class SyncDaemon:
                 cur["files"].append({"status": status[:1], "paths": paths})
             i += 1 + want
         return commits
+
+    def _forward(self, path: str, ts: int, sha: str) -> str:
+        """Where the document `path` named in commit `sha` (at `ts`) lives now:
+        follow every later recorded move of it. The move whose delete IS this
+        commit does not count — that row is the move itself."""
+        cur, t, first = path, ts, True
+        for _ in range(moves.MAX_CHAIN):
+            later = [m for m in self.moves.by_old.get(cur, ())
+                     if m["ts"] >= t and not (first and m["del"] == sha)]
+            if not later:
+                break
+            m = min(later, key=lambda m: m["ts"])
+            cur, t, first = m["new"], m["ts"], False
+        return cur
+
+    def _follow_moves(self, c: dict) -> None:
+        """One activity row, in place: work done under an old name is listed
+        under the name the document has now (and checked against THAT file's
+        readability); the two halves of a split move become one "renamed"."""
+        files = []
+        for f in c["files"]:
+            p = f["paths"][0]
+            if f["status"] == "D" and any(m["del"] == c["sha"] and m["via"] == "pair"
+                                          for m in self.moves.by_old.get(p, ())):
+                continue                                  # the delete half: its add half says it
+            if f["status"] == "A" and any(m["add"] == c["sha"] and m["via"] == "pair"
+                                          for m in self.moves.by_new.get(p, ())):
+                f = {**f, "status": "R"}
+            # a deletion ends that document: a later file of the same name is another one
+            now = f["paths"] if f["status"] == "D" else [self._forward(q, c["ts"], c["sha"]) for q in f["paths"]]
+            for q, n in zip(f["paths"], now):
+                if n != q:
+                    c["subject"] = c["subject"].replace(q, n)
+            files.append({**f, "paths": now})
+        c["files"] = files
 
     async def vc_activity(self, request: web.Request) -> web.Response:
         """Who changed what, when — across every file the CALLER can read.
@@ -1588,6 +1872,9 @@ class SyncDaemon:
             if not commits:
                 break
             scanned += len(commits)
+            if len(self.moves):
+                for c in commits:
+                    self._follow_moves(c)
             # Resolve this batch's UNSEEN paths concurrently. Each check is a
             # runuser+test process (~25ms); doing them one after another is what
             # made a one-day window take 11s. Same kernel checks, same
@@ -1616,7 +1903,7 @@ class SyncDaemon:
                     if vis:
                         files.append({**f, "paths": vis})
                 if files:
-                    out.append({**c, "files": files})
+                    out.append({k: v for k, v in c.items() if k != "sha"} | {"files": files})
                     if len(out) >= limit:
                         # more only if this batch still had rows, or was full
                         truncated = i + 1 < len(commits) or len(commits) == self._VC_BATCH
@@ -1646,6 +1933,7 @@ def make_app() -> web.Application:
     app.router.add_get("/vc/show", daemon.vc_show)
     app.router.add_get("/vc/diff", daemon.vc_diff)
     app.router.add_get("/vc/activity", daemon.vc_activity)
+    app.router.add_get("/vc/blame", daemon.vc_blame)
 
     async def on_startup(app: web.Application):
         stack = AsyncExitStack()
@@ -1660,6 +1948,7 @@ def make_app() -> web.Application:
         vc_app.router.add_get("/vc/show", daemon.vc_show)
         vc_app.router.add_get("/vc/diff", daemon.vc_diff)
         vc_app.router.add_get("/vc/activity", daemon.vc_activity)
+        vc_app.router.add_get("/vc/blame", daemon.vc_blame)
         # presence too: a user's backend pushes it to their browser over
         # /api/events, identified by peer credentials like the /vc reads
         vc_app.router.add_get("/presence", daemon.presence_handler)
@@ -1677,6 +1966,9 @@ def make_app() -> web.Application:
         # _lock_socket is not supervised: it is a one-shot that RETURNS, and its
         # only failure mode (chmod) is already caught inside it.
         daemon.tasks.append(asyncio.create_task(_lock_socket()))
+        # one-shot too, and off the event loop: a whole-history scan, once ever
+        daemon.tasks.append(asyncio.ensure_future(
+            asyncio.get_event_loop().run_in_executor(None, daemon._backfill_moves)))
         app["tasks"] = daemon.tasks
 
     async def _lock_socket():

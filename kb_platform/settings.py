@@ -45,6 +45,7 @@ THEME_TOKENS = {
     "bg": HEX, "chassis": HEX, "panel": HEX, "panel2": HEX, "border": HEX, "ink": HEX, "muted": HEX,
     "faint": HEX, "heading": HEX, "accent": HEX, "accent-deep": HEX, "ok": HEX, "warn": HEX,
     "danger": HEX, "code-bg": HEX, "code-ink": HEX, "term-bg": HEX, "term-fg": HEX,
+    "blame-me": HEX, "blame-other": HEX, "blame-machine": HEX,
     "sans": FONT, "mono": FONT,
     "font-size": r"(1[0-9]|2[0-4])px", "editor-size": LEN,
     "editor-lh": r"[12](\.\d{1,2})?", "rich-lh": r"[12](\.\d{1,2})?",
@@ -72,6 +73,11 @@ REGISTRY: list[dict] = [
      "default": "claude", "scopes": ("company", "user"), "group": "Agents", "label": "Agent for new chats",
      "help": "Which agent a new chat opens with. Every installed agent stays one click away in the "
              "chat's picker; signing in is per person (docs/agent-chat.md)."},
+    {"key": "editor.blame", "type": "bool", "default": True,
+     "scopes": ("company", "user"), "group": "Editor", "label": "Who wrote each line",
+     "help": "A thin stripe beside every line: you, a colleague, or a machine (an agent, a script "
+             "or a sync — anything that changed the file outside the editor). Click it for who, "
+             "when and the change. Colours: blame-me, blame-other, blame-machine in the theme."},
     {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
      "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",

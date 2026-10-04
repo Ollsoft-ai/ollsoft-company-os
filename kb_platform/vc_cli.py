@@ -12,6 +12,7 @@ Usage:
   kb-history company/notes.md --rev a1b2c3    what that version changed (diff)
   kb-history company/notes.md --rev a1b2c3 --show      full content back then
   kb-history company/notes.md --rev a1b2c3 --restore   write that version back (as you)
+  kb-history company/notes.md --blame         who last touched each line (person or machine)
   kb-history ... --json                       machine-readable output
 """
 from __future__ import annotations
@@ -84,11 +85,30 @@ def main() -> None:
     ap.add_argument("--show", action="store_true", help="print the file's full content at --rev")
     ap.add_argument("--diff", action="store_true", help="print the patch introduced by --rev (default with --rev)")
     ap.add_argument("--restore", action="store_true", help="write the --rev version back to the file, as you")
+    ap.add_argument("--blame", action="store_true",
+                    help="who last touched each line of the file (kb-syncd = a machine: an agent, a script, a sync)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
 
     if a.rev and not a.path:
         sys.exit("kb-history: --rev needs a file path")
+    if a.blame and not a.path:
+        sys.exit("kb-history: --blame needs a file path")
+
+    if a.blame:
+        data = _get("blame", path=a.path)
+        if a.json:
+            print(json.dumps(data))
+            return
+        if not data["lines"]:
+            print(f"nothing committed yet for {data['path']}")
+            return
+        commits = data["commits"]
+        for n, (ci, text) in enumerate(data["lines"], 1):
+            c = commits[ci]
+            who = c["author"] + (" (machine)" if c["machine"] else "")
+            print(f"{c['rev'][:8]}  {_when(c['ts'])}  {who:<22} {n:>5}| {text}")
+        return
 
     if a.path and a.rev:
         if a.restore:
@@ -119,7 +139,8 @@ def main() -> None:
             return
         print(f"versions of {data['path']} (newest first):")
         for e in data["entries"]:
-            print(f"  {e['rev']}  {_when(e['ts'])}  {e['author']:<18} {e['subject']}")
+            moved = (f"  (was {e['path']})" if e.get("path") else "  (before a move)") if e.get("moved") else ""
+            print(f"  {e['rev']}  {_when(e['ts'])}  {e['author']:<18} {e['subject']}{moved}")
         print("\nsee one:  kb-history "
               f"{data['path']} --rev <id>   (--show for content, --restore to bring it back)")
         return

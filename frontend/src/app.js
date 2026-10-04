@@ -23,6 +23,7 @@ import { initDictation, toggleDictation, dictationReady, retryDictation,
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
+import { blame } from "./blame.js";
 import { connectEvents } from "./events.js";
 import { parse as parseLayout, serialize as serializeLayout, findGroup as findLayoutGroup,
          canAddColumn, canAddGroup, newGroupId, MIN_COL_PX, MIN_GROUP_PX } from "./layout.js";
@@ -269,6 +270,20 @@ function modeExts(tab) {
     ? [livePreview(dirName(tab.path)), tableField(dirName(tab.path))]
     : [lineNumbers(), highlightActiveLine()];
 }
+
+// Who wrote each line (editor.blame) — a stripe per line, see blame.js. Off
+// is no extension at all: no fetches, no decorations.
+function blameExts(t) {
+  return settings.get("editor.blame")
+    ? blame({ path: () => t.path, me: () => window.__kbuser || "",
+              showChange: (rev) => openHistory(t.path, rev) })
+    : [];
+}
+settings.subscribe("editor.blame", () => {
+  for (const t of tabs) {
+    if (t.kind === "doc" && t.view && t.blameComp) t.view.dispatch({ effects: t.blameComp.reconfigure(blameExts(t)) });
+  }
+});
 
 function setMode(m) {
   if (!active || active.kind !== "doc") return;
@@ -4648,6 +4663,7 @@ async function mountDoc(t) {
   const undoManager = new Y.UndoManager(ytext);
 
   t.modeComp = new Compartment();
+  t.blameComp = new Compartment();
   const extensions = [
     history(),
     keymap.of([
@@ -4675,6 +4691,7 @@ async function mountDoc(t) {
     dropCursor(),
     mediaExtension(t),
     t.modeComp.of(modeExts(t)),
+    t.blameComp.of(blameExts(t)),
     // a note that grows past WHOLE_MAX (or shrinks back under it) changes
     // how it is drawn; after the update, since drawWhole may dispatch
     EditorView.updateListener.of((u) => {
@@ -5991,10 +6008,12 @@ function renderPatch(host, patch) {
   }
 }
 
-async function openHistory(path) {
+// `rev` opens straight onto that version's change (a click on a line's
+// authorship stripe); one older than the list is still shown, unlisted.
+async function openHistory(path, rev) {
   let data;
   try {
-    const r = await fetch("/api/vc/log?path=" + encodeURIComponent(path));
+    const r = await fetch("/api/vc/log?path=" + encodeURIComponent(path) + (rev ? "&limit=200" : ""));
     data = await r.json();
     if (!r.ok) { kbToast(data.error || "history unavailable", "err"); return; }
   } catch (e) { kbToast("history unavailable", "err"); return; }
@@ -6037,8 +6056,10 @@ async function openHistory(path) {
     row.setAttribute("data-testid", "vh-item");
     const when = new Date(e.ts * 1000);
     row.innerHTML = `<span class="vh-when">${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-      <span class="vh-author"></span><span class="vh-cur">${i === 0 ? "current" : ""}</span>`;
+      <span class="vh-author"></span><span class="vh-moved"></span><span class="vh-cur">${i === 0 ? "current" : ""}</span>`;
     row.querySelector(".vh-author").textContent = e.author;
+    // history follows a moved document; its old name only when you may see it
+    if (e.moved) row.querySelector(".vh-moved").textContent = e.path ? "was " + e.path : "before a move";
     row.title = e.subject;
     row.addEventListener("click", async () => {
       list.querySelectorAll(".vh-item").forEach((x) => x.classList.remove("active"));
@@ -6054,7 +6075,15 @@ async function openHistory(path) {
       restoreBtn.hidden = i === 0;   // restoring "current" is a no-op
     });
     list.appendChild(row);
+    if (rev && e.rev === rev) { row.click(); row.scrollIntoView({ block: "nearest" }); }
   });
+  if (rev && !data.entries.some((e) => e.rev === rev)) {
+    try {
+      const rr = await fetch("/api/vc/diff?path=" + encodeURIComponent(path) + "&rev=" + rev);
+      const dj = await rr.json();
+      if (rr.ok) renderPatch(diffHost, dj.patch || "");
+    } catch (err) { /* the list is still there to pick from */ }
+  }
 
   restoreBtn.addEventListener("click", async () => {
     if (!picked) return;
@@ -6890,6 +6919,9 @@ const BINDINGS = [
     label: "Find in this document", run: findInDoc },
   { id: "history", keys: ["Alt+H"], group: "Documents", when: hasTab,
     label: "Version history", run: () => { if (active) openHistory(active.path); } },
+  { id: "blame", group: "Documents", when: hasDoc,
+    label: "Show / hide who wrote each line",
+    run: () => settings.set("editor.blame", !settings.get("editor.blame")) },
   { id: "perms", keys: ["Alt+S"], group: "Documents", when: hasTab,
     label: "Share — who can open this", run: () => { if (active) openPerms(active.path); } },
   { id: "link", keys: ["Mod+Shift+K"], group: "Documents", when: hasDoc,

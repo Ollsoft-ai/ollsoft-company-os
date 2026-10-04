@@ -1547,14 +1547,14 @@ class Hub:
         raise web.HTTPFound(target)
 
     async def vc_proxy(self, request: web.Request) -> web.Response:
-        """Version-history reads (log/show/diff/activity) — proxied to syncd
+        """Version-history reads (log/show/diff/activity/blame) — proxied to syncd
         with the caller's hub-verified identity; syncd re-checks per file that
         the caller can READ it right now (kernel-evaluated, as them)."""
         user = self.current_user(request)
         if not user:
             return web.json_response({"error": "unauthenticated"}, status=401)
         op = request.match_info["op"]
-        if op not in ("log", "show", "diff", "activity"):
+        if op not in ("log", "show", "diff", "activity", "blame"):
             return web.json_response({"error": "unknown history operation"}, status=404)
         token = common.make_token(self.key, {"user": user}, ttl=60)
         url = f"http://kb/vc/{op}"

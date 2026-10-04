@@ -200,7 +200,10 @@ What it does NOT cover, and should not be relied on for:
 
 Content history is a separate mechanism: `kb-history` reads the git trail of
 what documents said and who wrote them, gated per request against the kernel so
-it can only show what the caller could already open.
+it can only show what the caller could already open. A document's history
+follows it across moves: whoever can open it now sees its earlier versions,
+including from a folder they could not read (as with a file shared in place);
+the earlier NAME is shown only to readers who can list the folder it was in.
 
 ## Semantic search — what leaves the box
 
