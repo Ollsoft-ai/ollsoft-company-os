@@ -35,7 +35,7 @@ jobs:
           command -v runuser >/dev/null || { echo "no runuser"; exit 1; }
 
       - name: Run the installer
-        run: sudo bash scripts/install.sh --admin ciadmin --admin-pass 'ci-test-password-01'
+        run: sudo bash scripts/install.sh --admin ciadmin --admin-pass 'ci-test-password-01' --no-telemetry
 
       - name: Services came up
         run: |
@@ -57,7 +57,7 @@ jobs:
         run: node --test tests/js/*.test.mjs
 
       - name: Installer is idempotent (second run must succeed)
-        run: sudo bash scripts/install.sh --admin ciadmin
+        run: sudo bash scripts/install.sh --admin ciadmin --no-telemetry
 
       - name: Upgrade path — the hub moves a pre-2026-09 .claude/*.json into .os/
         run: |

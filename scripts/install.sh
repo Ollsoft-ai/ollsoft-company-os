@@ -117,6 +117,10 @@ TM_URL="${KB_TELEMETRY_URL:-https://companyos-support.ollsoft.org/t}"
 tm() {
   [ "${TELEMETRY_OFF:-0}" -eq 1 ] && return 0
   [ "${KB_TELEMETRY:-on}" = off ] && return 0
+  # A CI run is a fresh machine every time, so it would register as a brand new
+  # installation on every push and drown the real ones. GitHub, GitLab, CircleCI
+  # and Travis all set CI=true; a fork's pipeline is excluded by the same line.
+  [ -n "${CI:-}" ] && return 0
   [ -d /etc/kb ] || return 0
   # the kernel's uuid source is always there; uuidgen is a package
   [ -s /etc/kb/install-id ] \

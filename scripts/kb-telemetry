@@ -43,6 +43,10 @@ TIMEOUT = 5
 
 
 def _enabled() -> bool:
+    """A CI run is a throwaway machine, so it is not an installation: counting it
+    would add a new one on every push and bury the real ones."""
+    if os.environ.get("CI", "").strip():
+        return False
     return os.environ.get("KB_TELEMETRY", "on").strip().lower() not in ("off", "0", "no", "false")
 
 
@@ -130,7 +134,13 @@ def main(argv: list[str]) -> int:
         print(json.dumps(payload("ping"), indent=2, sort_keys=True))
         print(f"\nwould POST to: {os.environ.get('KB_TELEMETRY_URL', DEFAULT_URL)}",
               file=sys.stderr)
-        print(f"enabled: {'yes' if _enabled() else 'no (KB_TELEMETRY=off)'}", file=sys.stderr)
+        if _enabled():
+            why = "yes"
+        elif os.environ.get("CI", "").strip():
+            why = "no (CI is set; a throwaway machine is not an installation)"
+        else:
+            why = "no (KB_TELEMETRY=off)"
+        print(f"enabled: {why}", file=sys.stderr)
         return 0
     if not _enabled():
         return 0

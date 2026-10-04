@@ -41,6 +41,14 @@ sudo kb-telemetry show
 Prints the exact JSON that would be posted, the URL, and whether sending is on.
 Not a description of the payload — the payload.
 
+## It never runs in CI
+
+`CI=true` is set by GitHub Actions, GitLab, CircleCI and Travis, and this sender
+treats it as a hard off. A pipeline builds a fresh machine for every push, so
+each run would otherwise make a new install id and register as a brand new
+installation, burying the real ones. `kb-telemetry show` says so when that is
+why it is quiet.
+
 ## Turn it off
 
 ```sh
