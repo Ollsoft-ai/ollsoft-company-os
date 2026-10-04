@@ -73,6 +73,45 @@ jobs:
             echo "::error::no 'config migration: moved' line in the hub journal"
             sudo journalctl -u kb-hub -n 80 --no-pager; exit 1; }
 
+      - name: Upgrade path — deploy moves a pre-2026-10 .claude/ agent context onto .agents/
+        run: |
+          K=/srv/kb
+          # the old layout: skills in .claude/skills, the file at .claude/CLAUDE.md
+          # (with an operator's edit), AGENTS.md a link to it, no root CLAUDE.md
+          sudo rm "$K/.claude/skills" "$K/CLAUDE.md"
+          sudo mv "$K/.agents/skills" "$K/.claude/skills"
+          sudo rmdir "$K/.agents"
+          sudo mv "$K/AGENTS.md" "$K/.claude/CLAUDE.md"
+          echo '- an operator edit' | sudo tee -a "$K/.claude/CLAUDE.md" >/dev/null
+          sudo ln -s .claude/CLAUDE.md "$K/AGENTS.md"
+          sudo bash scripts/deploy.sh --no-restart
+          [ "$(readlink "$K/.claude/skills")" = ../.agents/skills ]
+          [ "$(stat -c '%a %U' "$K/.agents/skills")" = "3775 root" ]
+          [ "$(stat -c '%U' "$K/.agents/skills/kb-orientation/SKILL.md")" = root ]
+          test -f "$K/AGENTS.md" && ! test -L "$K/AGENTS.md"
+          grep -qxF -- '- an operator edit' "$K/AGENTS.md"
+          ! test -e "$K/.claude/CLAUDE.md"
+          [ "$(readlink "$K/CLAUDE.md")" = AGENTS.md ]
+
+      - name: Deploy writes nothing as root through a name a member took first
+        run: |
+          K=/srv/kb
+          # a member's folder under a platform skill's name is left alone, loudly
+          sudo rm -r "$K/.agents/skills/kb-todos"
+          sudo -u ciadmin mkdir "$K/.agents/skills/kb-todos"
+          sudo bash scripts/deploy.sh --no-restart 2>&1 | tee /tmp/deploy.log
+          grep -q 'kb-todos is a member' /tmp/deploy.log
+          [ "$(stat -c %U "$K/.agents/skills/kb-todos")" = ciadmin ]
+          sudo rmdir "$K/.agents/skills/kb-todos"
+          # a member's root CLAUDE.md (which Claude Code would read) stops the deploy
+          sudo rm "$K/CLAUDE.md"
+          sudo -u ciadmin touch "$K/CLAUDE.md"
+          ! sudo bash scripts/deploy.sh --no-restart
+          sudo rm "$K/CLAUDE.md"
+          sudo bash scripts/deploy.sh --no-restart
+          [ "$(stat -c %U "$K/.agents/skills/kb-todos")" = root ]
+          [ "$(readlink "$K/CLAUDE.md")" = AGENTS.md ]
+
       - name: Seed the test fixtures
         # A fixed namespace rather than letting conftest pick one: pytest runs as
         # a demo account with no passwordless sudo, so it cannot seed for itself.

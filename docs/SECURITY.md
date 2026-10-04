@@ -270,7 +270,11 @@ Only with provider keys installed ([semantic-search.md](semantic-search.md)).
   from the folder it starts in and above, and ACP mode has no trust prompt. The
   KB root and `company/` are writable by every employee, so a colleague can put
   hooks or an MCP server there that runs as whoever opens a chat — root, for an
-  admin with passwordless sudo. Accepted for a trusted team (2026-10-03).
+  admin with passwordless sudo. Accepted for a trusted team (2026-10-03). The
+  same goes for skills: any member can add one to `.agents/skills/` that every
+  agent then loads. What deploy keeps root's is the platform's part — the root
+  `AGENTS.md` and `CLAUDE.md`, `.agents/`, `.claude/` and the `kb-*` skills — and
+  the sticky bit stops a member swapping any of it out (2026-10-04).
 - **Private-dir files aren't globally indexed.** `kbindexer` can't read a `0700`
   `users/<u>/` dir, so those files aren't searchable (by design; a per-user
   indexer would be needed).

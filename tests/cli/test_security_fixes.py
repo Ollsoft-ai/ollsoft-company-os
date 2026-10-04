@@ -56,8 +56,8 @@ def test_toggle_rejects_non_md():
 
 
 def test_toggle_rejects_index_excluded_config():
-    # .claude is excluded from the index -> not a toggleable task
-    assert toggle("alice", ".claude/CLAUDE.md", 1).status_code == 400
+    # .agents is excluded from the index -> not a toggleable task
+    assert toggle("alice", ".agents/skills/kb-orientation/SKILL.md", 1).status_code == 400
 
 
 def test_toggle_rejects_non_task_line():

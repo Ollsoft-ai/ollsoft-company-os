@@ -38,10 +38,14 @@ cd /srv/kb
 codex   # or: claude
 ```
 
-- Claude Code discovers `.claude/CLAUDE.md` and `.claude/skills/`.
-- Codex discovers root `AGENTS.md`, a protected symlink to the same context.
-  Tell it to inspect `.claude/skills/` before database, artifact or automation
-  work.
+- Codex discovers `AGENTS.md` and `.agents/skills/` — the context and the
+  skills, one copy each.
+- Claude Code discovers the same two through root-owned links: `CLAUDE.md` ->
+  `AGENTS.md` and `.claude/skills` -> `.agents/skills`.
+- Hermes reads skills from its own folder; add the company's with
+  `skills.external_dirs: [/srv/kb/.agents/skills]` in `~/.hermes/config.yaml`.
+- Anyone can add a skill: a folder with a `SKILL.md` in `.agents/skills/`, no
+  sudo. The `kb-*` skills are the platform's — root-owned and read-only.
 - The installer never replaces an existing `AGENTS.md`; operator customization
   remains intact.
 - Both are told to search with **`kb-search "question"`** (meaning + words,

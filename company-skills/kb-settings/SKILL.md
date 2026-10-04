@@ -76,8 +76,8 @@ live effect. Then, in the same change:
 1. a row in the table above — **this skill is the agents' reference and must
    list every key**; `tests/cli/test_settings.py` fails when it does not;
 2. the same row in `docs/settings.md`;
-3. redeploy the skill to `/srv/kb/.claude/skills/kb-settings/SKILL.md`
-   (`scripts/install.sh` does it; on a running box copy it as root:kb-users 0644).
+3. redeploy the skill to `/srv/kb/.agents/skills/kb-settings/SKILL.md`
+   (`scripts/deploy.sh` does it; on a running box copy it as root:kb-users 0644).
 
 A new theme is a `:root[data-theme="<name>"]` block in
 `frontend/assets/style.css` setting every colour token plus the name in

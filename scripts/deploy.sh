@@ -123,17 +123,111 @@ exec "$PREFIX/scripts/kb-telemetry" "\$@"
 WRAP
 chmod 0755 /usr/local/bin/kb-telemetry
 
-# The platform's skills (company-skills/) are platform code: install them on
-# every deploy, like the CLI wrappers, or a fix never reaches an existing box.
-# Only the platform's own — a skill the company wrote itself is left alone.
+# --- agent context: one layout every agent CLI reads -----------------------
+#   AGENTS.md                            the instructions (Codex reads it)
+#   CLAUDE.md -> AGENTS.md               the same file for Claude Code
+#   .agents/skills/                      every skill (Codex; Hermes via external_dirs)
+#   .claude/skills -> ../.agents/skills  the same folder for Claude Code
+# .agents/skills belongs to the company: any member adds a skill folder and
+# edits any skill a member wrote. It is sticky, so only a folder's creator (or
+# root) renames or deletes it — which is what keeps the platform's root-owned
+# skills from being swapped out. Claude Code reads only the top level of a
+# skills folder, so the platform's skills cannot sit in a subfolder: the kb-*
+# names mark them instead.
+#
+# Laid out on every deploy, not only at install, so a pre-2026-10 box (skills
+# in .claude/skills, the file at .claude/CLAUDE.md) moves onto it by itself.
+# The repo root is group-writable, so a member could have pre-planted any of
+# these names: refuse what is not root's rather than write through it (the
+# root's sticky bit stops a swap afterwards).
 REPO_DIR="${KB_REPO:-/srv/kb}"
-if [ -d "$REPO_DIR/.claude/skills" ]; then
-  echo "== skills -> $REPO_DIR/.claude/skills =="
-  for d in "$SRC"/company-skills/*/; do
-    name="$(basename "$d")"
-    install -d -m 0755 -o root -g kb-users "$REPO_DIR/.claude/skills/$name"
-    install -m 0644 -o root -g kb-users "$d/SKILL.md" "$REPO_DIR/.claude/skills/$name/SKILL.md"
+if [ -d "$REPO_DIR" ]; then
+  echo "== agent context -> $REPO_DIR/AGENTS.md, $REPO_DIR/.agents/skills =="
+  # A root-owned real directory with mode $2, or stop.
+  root_dir() {
+    if [ -L "$1" ]; then echo "refusing: $1 is a symlink — remove it and re-run" >&2; exit 1; fi
+    [ -e "$1" ] || mkdir "$1" 2>/dev/null || true
+    if [ -L "$1" ] || [ ! -d "$1" ] || [ "$(stat -c %u "$1")" != 0 ]; then
+      echo "refusing: $1 is not a root-owned directory — remove it and re-run" >&2; exit 1
+    fi
+    chown root:kb-users "$1"; chmod "$2" "$1"
+  }
+  root_dir "$REPO_DIR/.claude" 2755
+  root_dir "$REPO_DIR/.agents" 2755
+  root_dir "$REPO_DIR/.agents/skills" 3775
+  SK="$REPO_DIR/.agents/skills"
+  # a member's files come out group-writable whatever their umask, as in company/
+  setfacl -d -m u::rwx,g::rwx,o::rx "$SK"
+
+  # Pre-2026-10 skills lived in .claude/skills: move them over (links into
+  # company/ keep resolving — same depth) and leave a link in their place.
+  # .claude/ is root-only, so everything in it is root's to move.
+  OLD="$REPO_DIR/.claude/skills"
+  if [ -d "$OLD" ] && [ ! -L "$OLD" ]; then
+    for e in "$OLD"/* "$OLD"/.[!.]*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      n="${e##*/}"
+      if [ -e "$SK/$n" ] || [ -L "$SK/$n" ]; then
+        echo "  WARNING: $n is in both .claude/skills and .agents/skills — kept .agents/skills/$n; merge $e by hand" >&2
+      else
+        mv -T "$e" "$SK/$n"
+      fi
+    done
+    rmdir "$OLD" 2>/dev/null || echo "  WARNING: $OLD is not empty (see above), so it is not a link yet" >&2
+  fi
+  if [ ! -d "$OLD" ] || [ -L "$OLD" ]; then
+    ln -sfn ../.agents/skills "$OLD"; chown -h root:kb-users "$OLD"
+  fi
+
+  # The instructions: AGENTS.md is the file, CLAUDE.md a link to it. Until
+  # 2026-10 it was the other way round, and the root CLAUDE.md name — which
+  # Claude Code also reads — was free for any member to take.
+  for f in AGENTS.md CLAUDE.md; do
+    if { [ -e "$REPO_DIR/$f" ] || [ -L "$REPO_DIR/$f" ]; } && [ "$(stat -c %u "$REPO_DIR/$f")" != 0 ]; then
+      echo "refusing: $REPO_DIR/$f is not root-owned — a member put it there; move it aside and re-run" >&2; exit 1
+    fi
   done
+  OLDMD="$REPO_DIR/.claude/CLAUDE.md"
+  if [ -L "$REPO_DIR/AGENTS.md" ] || [ ! -e "$REPO_DIR/AGENTS.md" ]; then
+    # never clobber a live system's edits: the old file becomes AGENTS.md
+    src="$SRC/defaults/AGENTS.md"
+    if [ -f "$OLDMD" ] && [ ! -L "$OLDMD" ]; then src="$OLDMD"; fi
+    # written in root-only .agents/ and renamed into place: nothing to race
+    tmp="$(mktemp -p "$REPO_DIR/.agents" .AGENTS.md.XXXXXX)"
+    cat "$src" > "$tmp"; chown root:kb-users "$tmp"; chmod 0644 "$tmp"
+    mv -Tf "$tmp" "$REPO_DIR/AGENTS.md"
+  fi
+  if [ -f "$OLDMD" ] && [ ! -L "$OLDMD" ]; then
+    if cmp -s "$OLDMD" "$REPO_DIR/AGENTS.md"; then
+      rm -f "$OLDMD"
+    else
+      echo "  WARNING: $OLDMD differs from AGENTS.md and Claude Code reads both — merge it into AGENTS.md and delete it" >&2
+    fi
+  fi
+  if [ ! -e "$REPO_DIR/CLAUDE.md" ] && [ ! -L "$REPO_DIR/CLAUDE.md" ]; then
+    ln -s AGENTS.md "$REPO_DIR/CLAUDE.md"; chown -h root:kb-users "$REPO_DIR/CLAUDE.md"
+  fi
+
+  # The platform's own skills (company-skills/) are platform code: refreshed
+  # on every deploy, or a fix never reaches an existing box. Root-owned and
+  # read-only to members. A member's folder that took a platform name before
+  # the platform shipped it is left alone, loudly; a link of that name is not
+  # anybody's work and is simply replaced.
+  for d in "$SRC"/company-skills/*/; do
+    name="$(basename "$d")"; dst="$SK/$name"
+    if [ -L "$dst" ]; then rm -f "$dst"; fi
+    [ -e "$dst" ] || mkdir "$dst" 2>/dev/null || true
+    if [ -L "$dst" ] || [ ! -d "$dst" ] || [ "$(stat -c %u "$dst")" != 0 ]; then
+      echo "  WARNING: .agents/skills/$name is a member's folder, not the platform's — not updated; move it aside and re-run" >&2
+      continue
+    fi
+    setfacl -b "$dst"; chown root:kb-users "$dst"; chmod 0755 "$dst"
+    install -m 0644 -o root -g kb-users "$d/SKILL.md" "$dst/SKILL.md"
+  done
+  # how the folder works, for whoever opens it (root's: refreshed like the skills)
+  tmp="$(mktemp -p "$REPO_DIR/.agents" .README.md.XXXXXX)"
+  cat "$SRC/defaults/skills-README.md" > "$tmp"; chown root:kb-users "$tmp"; chmod 0644 "$tmp"
+  mv -Tf "$tmp" "$SK/README.md" || { rm -f "$tmp"; echo "  WARNING: could not place $SK/README.md" >&2; }
 fi
 
 # schema.sql is idempotent (CREATE ... IF NOT EXISTS, CREATE OR REPLACE), so a

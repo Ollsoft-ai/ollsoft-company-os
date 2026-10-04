@@ -67,7 +67,7 @@ def test_kernel_denies_outside_your_authority():
     assert mkdir(carol, proj("sneaky")).status_code == 403
     assert delete(carol, proj("plan.md")).status_code == 403
     # nobody can delete root-owned agent config through the UI path either
-    assert delete(carol, ".claude/skills/kb-orientation/SKILL.md").status_code == 403
+    assert delete(carol, ".agents/skills/kb-orientation/SKILL.md").status_code == 403
 
 
 def test_top_level_and_traversal_guards():

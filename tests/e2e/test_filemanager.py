@@ -1,4 +1,4 @@
-"""File-manager UI: collapsible tree, .claude visibility, access badge, create
+"""File-manager UI: collapsible tree, dot-folder visibility, access badge, create
 via the folder button, the permissions modal (add an ACL end to end), and
 downloading a whole folder as a zip."""
 import io
@@ -18,19 +18,19 @@ def props(user, path):
     return c.get("/fs/props", params={"path": path}).json()
 
 
-def test_claude_visible_and_folders_collapse(browser):
+def test_dot_folders_hidden_and_collapsed(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     # dot-entries are HIDDEN by default; the sidebar `.*` toggle reveals them
-    assert page.locator('.tree-item[data-path=".claude"]').count() == 0
+    assert page.locator('.tree-item[data-path=".agents"]').count() == 0
     page.click('[data-testid="hidden-toggle"]')
-    page.wait_for_selector('.tree-item[data-path=".claude"]')
-    child = '.tree-item[data-path=".claude/skills"]'
+    page.wait_for_selector('.tree-item[data-path=".agents"]')
+    child = '.tree-item[data-path=".agents/skills"]'
     # machinery folders (names starting with . or _) start COLLAPSED by default
     assert not page.locator(child).is_visible()
-    page.locator('.tree-item[data-path=".claude"] .tlabel').first.click()   # expand
+    page.locator('.tree-item[data-path=".agents"] .tlabel').first.click()   # expand
     assert page.locator(child).is_visible()
-    page.locator('.tree-item[data-path=".claude"] .tlabel').first.click()   # collapse again
+    page.locator('.tree-item[data-path=".agents"] .tlabel').first.click()   # collapse again
     assert not page.locator(child).is_visible()
     ctx.close()
 
@@ -110,7 +110,7 @@ def test_permissions_modal_adds_acl(browser):
 
 def test_machinery_folders_collapsed_by_default(browser):
     """Folders whose name starts with '_' or '.' (attachments' _files/,
-    _secrets/, .claude/) hold machinery, not notes — they open collapsed so the
+    _secrets/, .agents/) hold machinery, not notes — they open collapsed so the
     tree stays about your files. Expanding one sticks (the poll won't refold it)."""
     import time as _t
     import httpx

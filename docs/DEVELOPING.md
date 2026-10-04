@@ -37,8 +37,8 @@ ollsoft-company-os/
 │   └── demo_cron_pulse.py  example: a crontab feeding a live artifact
 ├── systemd/                kb-hub / kb-syncd / kb-indexer / kb-embedd / kb-convert units, the
 │                           kb-heartbeat + kb-maintenance + kb-gitgc timers, tmpfiles, logrotate
-├── defaults/               shipped into <repo>/.os/ (config), <repo>/.claude/ (agent context) and company/ on install
-├── company-skills/         agent skills, deployed to /srv/kb/.claude/skills/
+├── defaults/               shipped into <repo>/.os/ (config), <repo>/AGENTS.md (agent context), .agents/skills/ and company/
+├── company-skills/         the platform's agent skills, deployed to /srv/kb/.agents/skills/
 ├── .claude/skills/install-company-os/  the agent-guided installer (run from your own computer)
 ├── tests/                  pytest: cli/ (httpx) + e2e/ (Playwright)
 └── docs/                   ARCHITECTURE · SECURITY · SETUP · DEVELOPING · settings · unified-views · agent-chat · public-sharing · monitoring · dictation · remote-access · agent-cli · converted-documents · windows-drive
@@ -222,7 +222,8 @@ CI runs them right after the installer. Everything else is Python, below.
   changes. The same test refuses a new `#hex` or `rgba()` outside the token blocks.
 - **A company skill**: add a folder under `company-skills/<name>/SKILL.md` (YAML
   frontmatter `name` + `description`, then markdown); `deploy.sh` installs it
-  into `/srv/kb/.claude/skills/` (root-owned, 644). Agents discover it automatically.
+  into `/srv/kb/.agents/skills/` (root-owned, 644), which Claude Code sees as
+  `.claude/skills/`. Agents discover it automatically.
 - **A semantic-search provider**: a class in `kb_platform/embedding.py` with
   `async embed(session, texts) -> EmbedResult(vectors, tokens)` (or `rerank(...)
   -> RerankResult(scores, units)`) that raises `ProviderError` with a `kind`,

@@ -39,6 +39,7 @@ def test_is_derived_sidecar(rel, expected):
 
 @pytest.mark.parametrize("rel,hidden", [
     (".claude/skills/x/SKILL.md", True),   # dot-dir trees stay machinery
+    (".agents/skills/x/SKILL.md", True),
     (".git/config", True),
     (doc(".claude/x.md"), True),
     (doc(".notes.md"), True),           # plain dot-files stay hidden

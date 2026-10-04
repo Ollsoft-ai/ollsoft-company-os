@@ -19,9 +19,10 @@ This repo is the company brain. Markdown files are the source of truth.
   `.report.docx.md`. Read the sidecar, not the binary. Note that `rg`/Grep
   skip dotfiles unless you pass `--hidden`; the sidecars ARE indexed in
   `kb.blocks`. Never edit a sidecar — it is regenerated from its source.
-- Read the skills in `.claude/skills/` before using the database, writing an
-  artifact, or scheduling automation. They describe how this platform works and
-  what the conventions are.
+- Read the skills in `.agents/skills/` (Claude Code sees the same folder as
+  `.claude/skills/`) before using the database, writing an artifact, or
+  scheduling automation. They describe how this platform works and what the
+  conventions are.
 
 ## How to write markdown here — short, dense, scannable
 

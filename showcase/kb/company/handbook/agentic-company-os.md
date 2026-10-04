@@ -55,10 +55,10 @@ keys into company documents, prompts or shell history.
 
 ## 3. Let Company OS orient the agent
 
-- Claude Code reads `.claude/CLAUDE.md` and discovers company skills under
-  `.claude/skills/`.
-- Codex reads `AGENTS.md`, which points to the same governed context. Ask it to
-  inspect `.claude/skills/` before database, artifact or automation work.
+- Claude Code reads `CLAUDE.md` and discovers company skills under
+  `.claude/skills/` — links to `AGENTS.md` and `.agents/skills/`.
+- Codex reads `AGENTS.md` and the skills in `.agents/skills/` directly — one
+  copy of each, shared by both.
 - Start the client from `/srv/kb`, not from your home directory, so it discovers
   these instructions.
 

@@ -8,10 +8,10 @@ from a read-only join even if the client bypasses the editor.
 import time
 
 import httpx
-from conftest import BASE, CREDS, expand_folder, login
+from conftest import BASE, CREDS, login
 from kbenv import AREA, U, doc
 
-RO_DOC = ".claude/CLAUDE.md"   # owned root:kb-users 644 -> read-only to everyone
+RO_DOC = "AGENTS.md"   # owned root:kb-users 644 -> read-only to everyone
 
 
 def get_file(user, path):
@@ -23,8 +23,6 @@ def get_file(user, path):
 def test_readonly_file_opens_and_shows_content(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
-    page.click('[data-testid="hidden-toggle"]')   # dot-entries hidden by default
-    expand_folder(page, ".claude")                # .claude auto-collapses
     page.click(f'.tree-item[data-path="{RO_DOC}"]')
     page.wait_for_function("() => window.__kbview && window.__kbview.state.doc.length > 0", timeout=10000)
     text = page.evaluate("() => window.__kbview.state.doc.toString()")
@@ -39,8 +37,6 @@ def test_readonly_edit_is_not_persisted(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     before = get_file("alice", RO_DOC)["content"]
-    page.click('[data-testid="hidden-toggle"]')   # dot-entries hidden by default
-    expand_folder(page, ".claude")                # .claude auto-collapses
     page.click(f'.tree-item[data-path="{RO_DOC}"]')
     page.wait_for_function("() => window.__kbydoc && window.__kbview.state.doc.length > 0", timeout=10000)
     # Bypass the read-only editor and mutate the CRDT text directly, as a hostile

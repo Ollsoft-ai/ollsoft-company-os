@@ -261,8 +261,9 @@ def validate_launchers(data) -> tuple[list | None, str | None]:
 # (.gitignore: !.os/*.json) — config changes are auditable history.
 #
 # Until 2026-09 these files sat in .claude/, which is Claude Code's discovery
-# path. CLAUDE.md and skills/ stay there — that is what Claude Code reads; the
-# platform's own state does not belong to one agent. migrate_company_config
+# path; the platform's own state does not belong to one agent. (Since 2026-10
+# the agent context is agent-neutral too: AGENTS.md and .agents/skills, which
+# Claude Code reaches through links — scripts/deploy.sh.) migrate_company_config
 # (root, at hub start) and migrate_user_config (as the user, lazily) move what
 # an older install left behind.
 CONFIG_DIRNAME = ".os"

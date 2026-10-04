@@ -6,7 +6,7 @@ overwritten by a re-run or an upgrade.
 
 | File | Installed at | Purpose |
 |---|---|---|
-| `CLAUDE.md` | `<repo>/.claude/CLAUDE.md` | Agent context: what this repo is and how to behave in it. `.claude/` is Claude Code's discovery path and holds agent context only. |
+| `AGENTS.md` | `<repo>/AGENTS.md` | Agent context: what this repo is and how to behave in it. Codex reads it; `<repo>/CLAUDE.md` is a root-owned link to it for Claude Code. |
 | `egress.json` | `<repo>/.os/egress.json` | Per-artifact network allow-list. Empty (deny-all) by default; the only way an artifact reaches the network. |
 | `launchers.json` | `<repo>/.os/launchers.json` | The company's pinned items, listed in every sidebar's Pinned section. Default: one terminal pin that runs `claude`. |
 
@@ -24,10 +24,18 @@ To-dos view is a shipped feature, not agent config. The other files under
 `artifacts/` are demo and test fixtures; `scripts/seed-demo.sh` places those, and
 a plain install does not.
 
-The agent skills in `company-skills/` are installed alongside these, at
-`<repo>/.claude/skills/`. Those *are* refreshed on every install, since they
-document the platform and should track the code.
+`AGENTS.md`, the skills and `skills-README.md` are placed by
+`scripts/deploy.sh`, which every install ends with, so an upgraded box gets the
+same layout as a new one:
 
-The installer also creates `<repo>/AGENTS.md` as a protected symlink to
-`.claude/CLAUDE.md`, so Codex and Claude Code receive the same maintained
-instructions without a second copy drifting.
+- `<repo>/.agents/skills/` holds every skill — Codex reads it, and
+  `<repo>/.claude/skills` is a link to it for Claude Code. Members add and edit
+  skills there; it is sticky, so a folder is renamed or deleted only by its
+  creator.
+- The agent skills in `company-skills/` are installed into it root-owned and
+  read-only, and *are* refreshed on every deploy, since they document the
+  platform and should track the code.
+- `skills-README.md` becomes `<repo>/.agents/skills/README.md`, also refreshed.
+- `AGENTS.md` is installed only if absent. A box from before 2026-10 kept this
+  file at `.claude/CLAUDE.md` with `AGENTS.md` a link to it; deploy turns that
+  file into `AGENTS.md` (edits kept) and moves `.claude/skills/*` across.

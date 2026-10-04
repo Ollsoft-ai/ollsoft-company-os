@@ -16,7 +16,7 @@
    - Office files and PDFs that are documents in their own right stay as they are: Company OS makes them searchable through their sidecars.
    - Attachments and images go into a `_files/` folder next to the page that uses them; rewrite the references.
    - Internal links become relative Markdown links. **`[[wikilinks]]` must be rewritten** — Company OS does not render them. Notion's `Page Title 1a2b…(32 hex).md` names lose their hash, and their links are fixed to match.
-   - Checklists become `- [ ] … @user` per `/srv/kb/.claude/skills/kb-todos/SKILL.md`, with people mapped to Company OS usernames; ask about names you cannot map.
+   - Checklists become `- [ ] … @user` per `/srv/kb/.agents/skills/kb-todos/SKILL.md`, with people mapped to Company OS usernames; ask about names you cannot map.
    - Databases and tables: a small one (up to ~50 rows) becomes a Markdown table; a bigger one stays CSV, and a status column can become a Kanban like phase 7's.
    - Keep where it came from in a short line at the top: source, original URL, last edited.
 6. **Propose the structure and wait for an OK.** Show the tree two levels deep with counts, and who will see what:

@@ -330,10 +330,8 @@ def test_readonly_doc_has_no_toolbar_and_locked_checkboxes(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     try:
-        # .claude/CLAUDE.md is root:kb-users 644 -> read-only to everyone
-        page.click('[data-testid="hidden-toggle"]')   # dot-entries hidden by default
-        expand_folder(page, ".claude")                # .claude auto-collapses
-        page.click('.tree-item[data-path=".claude/CLAUDE.md"]')
+        # AGENTS.md is root:kb-users 644 -> read-only to everyone
+        page.click('.tree-item[data-path="AGENTS.md"]')
         page.wait_for_function("() => window.__kbview && window.__kbview.state.doc.length > 0", timeout=10000)
         page.wait_for_timeout(300)
         assert page.locator("#mdbar").is_hidden(), "no editing toolbar on a read-only doc"

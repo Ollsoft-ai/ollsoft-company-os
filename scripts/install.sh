@@ -283,7 +283,7 @@ setfacl -d -m u::rwx,g::rwx,o::rx "$REPO/company"
 # Sticky bit: group members create freely but may only rename/delete what they
 # OWN. Needed on the containers that hold OTHER PEOPLE'S DIRECTORIES, because
 # without it any member could rename another user's home aside and put their own
-# directory in its place — users/<admin>/.claude/skills/ is loaded by that
+# directory in its place — users/<admin>/.agents/skills/ is loaded by that
 # admin's agent, so that was a path from "ordinary KB account" to "code runs as
 # the admin". The same primitive hijacked any projects/<name>.
 #
@@ -298,13 +298,9 @@ chmod +t "$REPO" "$REPO/users" "$REPO/projects"
 
 install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "$REPO/users/$ADMIN_USER"
 
-# --- agent context, platform config, skills --------------------------------
-# .claude/ is Claude Code's discovery path and holds ONLY agent context:
-# CLAUDE.md (below) and skills/ (further down). Root-owned, world-readable.
-install -d -m 0755 -o root -g kb-users "$REPO/.claude"
-# never clobber a live system's edits
-[ -e "$REPO/.claude/CLAUDE.md" ] || \
-  install -m 0644 -o root -g kb-users "$SRC/defaults/CLAUDE.md" "$REPO/.claude/CLAUDE.md"
+# --- platform config --------------------------------------------------------
+# The agent context — AGENTS.md, CLAUDE.md, .agents/skills, .claude/skills —
+# is laid out by deploy.sh, below, so an upgrade gets exactly the same layout.
 
 # .os/ is the platform's own config dir (launcher buttons, the artifact egress
 # allowlist, settings): everyone reads it, root writes it. The hub reaches it
@@ -327,12 +323,6 @@ for f in egress.json launchers.json; do
   [ -e "$REPO/.os/$f" ] || [ -e "$REPO/.claude/$f" ] || \
     install -m 0644 -o root -g kb-users "$SRC/defaults/$f" "$REPO/.os/$f"
 done
-# Codex discovers AGENTS.md from the working directory upward. Keep one source
-# of truth by pointing it at the same governed context Claude Code reads.
-if [[ ! -e "$REPO/AGENTS.md" && ! -L "$REPO/AGENTS.md" ]]; then
-  ln -s .claude/CLAUDE.md "$REPO/AGENTS.md"
-  chown -h root:kb-users "$REPO/AGENTS.md"
-fi
 # The To-dos aggregator is a platform default, not demo content: the docs
 # present it as a shipped feature, so install it if the operator has not
 # replaced it with their own.
@@ -340,9 +330,6 @@ if [ ! -e "$REPO/company/todos.html" ]; then
   install -m 0664 -o root -g kb-users "$SRC/defaults/artifacts/todos.html" \
           "$REPO/company/todos.html"
 fi
-
-# The platform's skills are installed (and refreshed) by deploy.sh, below.
-install -d -m 0755 -o root -g kb-users "$REPO/.claude/skills"
 
 # ---------------------------------------------------------------------------
 say "python venv"

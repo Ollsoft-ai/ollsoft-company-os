@@ -54,6 +54,7 @@ ssh companyos 'sudo loginctl enable-linger <user>'      # its scheduler keeps ru
 ```
 
 - **Per person by design** (`~/.hermes`); once installed it also appears in that person's agent-chat picker.
+- **Give it the company's skills:** in that person's `~/.hermes/config.yaml`, set `skills:` → `external_dirs: [/srv/kb/.agents/skills]`. Hermes reads only its own `~/.hermes/skills/` otherwise, and loads a repo's `.agents/skills` only after `hermes skills trust` — never trust `/srv/kb`, whose root any member can write to.
 - **Model and messaging are theirs to set**, in a web terminal: `hermes setup` (model provider), then `hermes gateway setup` (Telegram bot or other channel) and `hermes gateway install`.
 - Verify: `ssh companyos 'sudo -iu <user> bash -lc "hermes --version; hermes gateway status"'`.
 - The scheduled jobs themselves are created in **phase 8**, once people and sensitive folders exist.

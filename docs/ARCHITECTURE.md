@@ -222,7 +222,7 @@ there is no permission code here to get wrong.
   (so a file locked to owner and shared with one user via ACL doesn't look
   group-readable), and records named read/traverse grants in
   `acl_users`/`acl_groups`/`acl_x_users`/`acl_x_groups`.
-- Skips symlinks and dot-dirs (`.git`, `.claude`, `.os`) — config is not knowledge.
+- Skips symlinks and dot-dirs (`.git`, `.agents`, `.os`) — config is not knowledge.
 - Refreshes `kb.user_groups` from `getent` every 5s (so new users / group changes
   reach RLS), and reconciles perms with a cheap ctime/mode signature cache (only
   re-reads ACLs for files that actually changed).
@@ -982,10 +982,13 @@ company's `brand.name` substituted on the way out.
 Agents run as the user (`claude` / any harness) — an SSH/PTY shell or a headless
 `claude -p`. They edit files, which flow through `kb-syncd` into live browser
 sessions; they query Postgres as themselves; they schedule work with their own
-`crontab`. Company **skills** in `/srv/kb/.claude/skills/` (root-owned,
-world-readable, admin-write-only) teach them the platform:
+`crontab`. **Skills** live in one folder, `/srv/kb/.agents/skills/`, which
+Codex reads directly and Claude Code through the `.claude/skills` link. The
+platform's own (root-owned, admin-write-only) teach them the platform:
 `kb-orientation`, `kb-database`, `kb-automation`, `kb-artifacts`, `kb-todos`,
-`kb-history`, `kb-audit`, `kb-settings`.
+`kb-history`, `kb-audit`, `kb-settings`. Members add the company's own beside
+them; the folder is sticky, so nobody renames or deletes a skill folder they
+do not own.
 
 ## 11. The two trails
 

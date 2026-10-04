@@ -1,6 +1,6 @@
 # Phase 7 — People, projects, starter content
 
-`admin` and the session are from phase 3 §5. Read `/srv/kb/.claude/skills/kb-todos/SKILL.md` on the server before writing any task line.
+`admin` and the session are from phase 3 §5. Read `/srv/kb/.agents/skills/kb-todos/SKILL.md` on the server before writing any task line.
 
 ## People
 
@@ -50,7 +50,7 @@ ssh companyos 'G=proj-<slug>; D="/srv/kb/projects/<Folder name>"
 | **Example artifacts** | Live apps copied into their `company/`, sample data included: Kanban board, sales pipeline, invoice generator, risk heatmap. Combine with the starter pack. |
 | **Demo company** | A complete fictional engineering firm (handbook, ISO quality records, pipeline, Kanban, cockpit) to explore, removable with one command. |
 
-**Starter pack.** Ask what the company does, the team and their roles, the main recurring processes, tools in use, and the three things a new hire must know. `company/onboarding.md` also carries the SSH-key and network-drive steps for colleagues, with this server's IP and port (see the end of `reference/network-drive.md`). Write as the admin (`ssh companyos 'cat > "/srv/kb/company/…"'`) so history shows them as author. Follow `/srv/kb/.claude/CLAUDE.md` on the server: bullets over prose, one fact per line, no hard-wrapped lines. Tasks are `- [ ] … @user`.
+**Starter pack.** Ask what the company does, the team and their roles, the main recurring processes, tools in use, and the three things a new hire must know. `company/onboarding.md` also carries the SSH-key and network-drive steps for colleagues, with this server's IP and port (see the end of `reference/network-drive.md`). Write as the admin (`ssh companyos 'cat > "/srv/kb/company/…"'`) so history shows them as author. Follow `/srv/kb/AGENTS.md` on the server: bullets over prose, one fact per line, no hard-wrapped lines. Tasks are `- [ ] … @user`.
 
 **Example artifacts.** Copy `~/ollsoft-company-os/showcase/kb/<path>` → `/srv/kb/<path>` as the admin, **keeping the paths** — the pipeline, invoice and risk apps read their data from fixed locations. The Kanban is the exception: it reads `kanban.md` next to itself, so any folder works. The templates name people as `{{admin}}`/`{{member}}` (logins) and `{{Admin}}`/`{{Member}}` (first names): replace them with real people in every copied `.md`/`.html`/`.json`.
 

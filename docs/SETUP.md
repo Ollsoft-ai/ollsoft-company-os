@@ -80,9 +80,13 @@ file after your first login.
 /srv/kb              3775 root:kb-users, sticky   the knowledgebase (a git repo)
 ├── .git             0700 root                     history — root-only, always
 ├── .gitignore       0644 root:kb-users            .md, .html and .os/*.json only
-├── .claude/         0755 root:kb-users            agent context (CLAUDE.md) and skills/
+├── .agents/         2755 root:kb-users
+│   └── skills/      3775 root:kb-users, sticky    every agent skill; members add their own
+├── .claude/         2755 root:kb-users
+│   └── skills       -> ../.agents/skills           what Claude Code discovers
 ├── .os/             2755 root:kb-users            platform config: launchers, egress, settings
-├── AGENTS.md        -> .claude/CLAUDE.md           Codex discovers the same context
+├── AGENTS.md        0644 root:kb-users            agent context; Codex discovers it
+├── CLAUDE.md        -> AGENTS.md                   what Claude Code discovers
 ├── company/         2775 root:kb-users + default ACL   everyone reads and writes
 ├── projects/        3775 root:kb-users, sticky    restricted folders go here
 └── users/           3775 root:kb-users, sticky    one 0700 <name>:<name> dir per person
@@ -160,10 +164,10 @@ Then verify the core promises:
   on it returns 403, and `SELECT * FROM kb.blocks` returns none of its rows. All
   three are the kernel and the RLS policy, not application code.
 - The in-browser terminal runs `whoami` as the logged-in user.
-- From that terminal, start Claude Code or Codex in `/srv/kb`. Claude reads
-  `.claude/CLAUDE.md`; Codex follows the root `AGENTS.md` symlink to the same
-  context. Both can use the platform skills in `.claude/skills/`; see
-  [agent-cli.md](agent-cli.md) for installation, first prompts and guardrails.
+- From that terminal, start Claude Code or Codex in `/srv/kb`. Codex reads
+  `AGENTS.md` and `.agents/skills/`; Claude reads the same two through the
+  `CLAUDE.md` and `.claude/skills` links. See [agent-cli.md](agent-cli.md) for
+  installation, first prompts and guardrails.
 
 For a presentation-ready fictional company instead of the compact test fixture,
 seed the English-language German GmbH showcase:
@@ -218,9 +222,17 @@ git pull
 sudo bash scripts/install.sh --admin <your-username>
 ```
 
-Existing accounts, repo content, the agent context in `.claude/` and the
-platform config in `.os/` are left alone. Agent skills *are* refreshed, since
-they document the platform.
+Existing accounts, repo content, `AGENTS.md`, the skills members wrote and the
+platform config in `.os/` are left alone. The platform's own skills *are*
+refreshed, since they document the platform.
+
+**Upgrading from before 2026-10:** the agent context used to live in `.claude/`
+(`.claude/CLAUDE.md`, with `AGENTS.md` a link to it, and the skills in
+`.claude/skills/`). Every deploy moves it onto the layout above by itself: that
+file becomes `AGENTS.md` with your edits, `CLAUDE.md` and `.claude/skills`
+become links, and every skill moves to `.agents/skills/`. A `CLAUDE.md` or
+`AGENTS.md` at the repo root that a member owns stops the deploy — move it
+aside and re-run.
 
 **Upgrading from before 2026-09:** the launcher list and the egress allow-list
 used to live in `.claude/`. The hub moves `.claude/{launchers,egress}.json` into

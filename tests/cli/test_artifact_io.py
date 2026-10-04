@@ -42,8 +42,10 @@ def test_write_bounded_by_kernel_permissions():
 
 
 def test_cannot_write_readonly_config():
-    # .claude/CLAUDE.md is root-owned 644 -> nobody but an admin can write it
-    assert write(cl("alice"), ".claude/CLAUDE.md", "hacked").status_code == 403
+    # AGENTS.md and the platform's skills are root-owned 644 -> nobody but an
+    # admin can write them (the repo root and .agents/skills are sticky)
+    assert write(cl("alice"), "AGENTS.md", "hacked").status_code == 403
+    assert write(cl("alice"), ".agents/skills/kb-orientation/SKILL.md", "hacked").status_code == 403
 
 
 def test_write_requires_existing_parent_and_stays_in_repo():
