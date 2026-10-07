@@ -1581,28 +1581,33 @@ function applyTree(j, force) {
 }
 
 // collapse/expand ALL folders, VS-Code explorer style: one smart button —
-// collapses while anything is open, expands once everything is folded
-function allDirPaths(nodes, out) {
-  for (const n of nodes || []) {
-    if (n.dir) { out.push(n.path); allDirPaths(n.children, out); }
+// collapses while anything below the top-level areas is open, else expands.
+// Collapse leaves the top-level areas as they are, so their folders stay
+// listed; expand opens only folders that hold folders, so no leaf folder
+// spills its files into the tree. Hidden dot-folders count for neither.
+const shownDirs = (nodes) => (nodes || []).filter((n) => n.dir && (showHidden || !n.name.startsWith(".")));
+function allDirs(nodes, top, out) {
+  for (const n of shownDirs(nodes)) {
+    out.push({ path: n.path, top, nested: shownDirs(n.children).length > 0 });
+    allDirs(n.children, false, out);
   }
   return out;
 }
+const foldCollapses = (dirs) => dirs.some((d) => !d.top && !collapsed.has(d.path));
 
 function updateFoldButton() {
   const b = $("#tree-fold");
   if (!b || !_lastTreeData) return;
-  const dirs = allDirPaths(_lastTreeData, []);
-  const anyOpen = dirs.some((p) => !collapsed.has(p));
+  const anyOpen = foldCollapses(allDirs(_lastTreeData, true, []));
   b.textContent = anyOpen ? "⊟" : "⊞";
   b.title = anyOpen ? "Collapse all folders" : "Expand all folders";
 }
 
 function toggleFoldAll() {
   if (!_lastTreeData) return;
-  const dirs = allDirPaths(_lastTreeData, []);
-  if (dirs.some((p) => !collapsed.has(p))) dirs.forEach((p) => collapsed.add(p));
-  else collapsed.clear();
+  const dirs = allDirs(_lastTreeData, true, []);
+  if (foldCollapses(dirs)) { for (const d of dirs) if (!d.top) collapsed.add(d.path); }
+  else for (const d of dirs) if (d.nested) collapsed.delete(d.path);
   rerenderTree();
 }
 function cssEsc(s) { return s.replace(/["\\]/g, "\\$&"); }

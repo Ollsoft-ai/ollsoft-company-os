@@ -39,12 +39,16 @@ def test_collapse_and_expand_all(browser):
     ctx = browser.new_context()
     page = login(ctx, "alice")
     inner = f'.tree-item[data-path="{doc("overview.md")}"]'
+    leaf = f'.tree-item[data-path="{doc("dashboards/randoms.html")}"]'
     assert page.locator(inner).is_visible()               # expanded by default
     page.click('[data-testid="tree-fold"]')               # collapse all
     assert not page.locator(inner).is_visible()
-    assert page.locator(f'.tree-item[data-path="{AREA.split("/")[0]}"]').is_visible()
+    # …but the top-level area stays open, listing its folders
+    assert page.locator(f'.tree-item[data-path="{AREA}"]').is_visible()
     page.click('[data-testid="tree-fold"]')               # now it expands all
-    assert page.locator(inner).is_visible()
+    assert page.locator(inner).is_visible()               # the area holds folders: opened
+    assert page.locator(f'.tree-item[data-path="{doc("dashboards")}"]').is_visible()
+    assert not page.locator(leaf).is_visible()            # dashboards/ holds none: stays shut
     ctx.close()
 
 
