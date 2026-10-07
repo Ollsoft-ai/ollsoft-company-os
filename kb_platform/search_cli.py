@@ -49,7 +49,13 @@ def _fmt_status(st: dict) -> str:
     return "\n".join(lines)
 
 
+NOTE = ("Note for agents: this searches only the indexed .md files, including the hidden .md text "
+        "copies of .docx/.pptx/.xlsx/.pdf files. It does not search html or any other filetype.")
+
+
 async def _run(args) -> int:
+    # stderr under --json so the stdout stays parseable
+    print(NOTE, file=sys.stderr if args.json else sys.stdout, flush=True)
     if args.status:
         st, why = await hybrid.sock_call("GET", "/status", None, 5.0)
         if st is None:
