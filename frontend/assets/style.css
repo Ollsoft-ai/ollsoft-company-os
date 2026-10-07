@@ -1563,6 +1563,10 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .set-row input[type=number], .set-row input[type=text], .set-row select { background: var(--panel2);
   border: 1px solid var(--border); color: var(--ink); border-radius: calc(var(--r) - 2px); padding: .3rem .45rem;
   font-family: var(--mono); font-size: .8rem; }
+/* left to the default: what applies, greyed — the shipped value, not a blank */
+.set-row input::placeholder, .set-row select.ghost { color: var(--faint); }
+.set-row select.ghost option { color: var(--ink); }
+.set-row select.ghost option[value=""] { color: var(--faint); }
 .set-row input[type=number] { width: 4.5rem; }
 .set-row input[type=text] { width: 8rem; }
 .set-row input[type=checkbox] { width: 1rem; height: 1rem; accent-color: var(--accent); }

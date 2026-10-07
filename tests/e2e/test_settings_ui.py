@@ -90,12 +90,16 @@ def test_admin_company_tab_sets_the_shared_default(browser):
         user_menu(page); page.click('[data-testid="settings-btn"]')
         page.click('[data-testid="settings-tab-company"]')
         page.wait_for_selector(f'[data-testid="{ROW}-co"]')
-        assert pill(page, f"{ROW}-co-src") == "not set"
+        assert pill(page, f"{ROW}-co-src") == "default"
+        # left to the default, the control shows that default as a ghost — never "not set"
+        sel = page.locator(f'[data-testid="{ROW}-co"]')
+        assert "default" in sel.locator("option:checked").inner_text()
+        assert "ghost" in (sel.get_attribute("class") or "")
         page.select_option(f'[data-testid="{ROW}-co"]', VAL)
         wait_pill(page, f"{ROW}-co-src", "company default")
         assert api("bob").get("/api/settings").json()["source"][KEY] == "company"
         page.click(f'[data-testid="{ROW}-co-reset"]')
-        wait_pill(page, f"{ROW}-co-src", "not set")
+        wait_pill(page, f"{ROW}-co-src", "default")
         assert api("bob").get("/api/settings").json()["source"][KEY] == "default"
     finally:
         ctx.close()

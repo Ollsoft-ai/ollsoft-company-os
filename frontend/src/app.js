@@ -5404,23 +5404,34 @@ function openSettings() {
   const fail = (r) => { if (r && !r.ok) kbToast(r.error || "could not save the setting", "err"); };
 
   // The control for one entry. `onChange` receives a typed value — or undefined
-  // for "not set", which only the company tab offers.
+  // for "leave it to the default", which only the company tab offers. An entry
+  // left that way shows the shipped default as a ghost: greyed in a select, the
+  // placeholder of a field — what applies, never a bare "not set".
+  const enumLabel = (e, o) => (e.labels && e.labels[o]) || o;
+  const ghostOf = (e) => (e.type === "bool" ? (e.default ? "on" : "off")
+                          : e.type === "enum" ? enumLabel(e, e.default) : String(e.default ?? ""));
   function control(e, value, onChange, unsettable) {
     let el;
     const notSet = value === undefined;
+    const ghostSelect = (sel) => {
+      const sync = () => sel.classList.toggle("ghost", sel.value === "");
+      sync(); sel.addEventListener("change", sync);
+    };
     if (e.type === "bool" && unsettable) {
       el = document.createElement("select");
-      el.innerHTML = '<option value="">— not set —</option><option value="true">on</option><option value="false">off</option>';
+      el.append(new Option(ghostOf(e) + " · default", ""), new Option("on", "true"), new Option("off", "false"));
       el.value = notSet ? "" : String(value);
+      ghostSelect(el);
       el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value === "true"));
     } else if (e.type === "bool") {
       el = document.createElement("input"); el.type = "checkbox"; el.checked = !!value;
       el.addEventListener("change", () => onChange(el.checked));
     } else if (e.type === "enum") {
       el = document.createElement("select");
-      if (unsettable) el.appendChild(new Option("— not set —", ""));
-      for (const o of e.options) el.appendChild(new Option((e.labels && e.labels[o]) || o, o));
+      if (unsettable) el.appendChild(new Option(ghostOf(e) + " · default", ""));
+      for (const o of e.options) el.appendChild(new Option(enumLabel(e, o), o));
       el.value = notSet ? "" : value;
+      if (unsettable) ghostSelect(el);
       el.addEventListener("change", () => onChange(el.value === "" ? undefined : el.value));
     } else if (e.type === "map") {
       // one colour picker per token, starting from what the theme paints now;
@@ -5494,7 +5505,7 @@ function openSettings() {
       el = document.createElement("input"); el.type = "number";
       el.min = e.min; el.max = e.max; el.step = 1;
       el.value = notSet ? "" : value;
-      el.placeholder = unsettable ? "not set" : "";
+      el.placeholder = unsettable ? ghostOf(e) : "";
       el.addEventListener("change", () => {
         if (el.value === "" && unsettable) { onChange(undefined); return; }
         const n = Math.round(Number(el.value));
@@ -5507,7 +5518,7 @@ function openSettings() {
       el = document.createElement("input"); el.type = "text";
       if (e.maxlen) el.maxLength = e.maxlen;
       el.value = notSet ? "" : value;
-      el.placeholder = unsettable ? "not set" : "";
+      el.placeholder = unsettable ? ghostOf(e) : "";
       el.addEventListener("change", () => {
         const v = el.value.trim();
         if (v === "" && unsettable) { onChange(undefined); return; }
@@ -5540,7 +5551,7 @@ function openSettings() {
         ? settings.unset(e.key, "company") : settings.set(e.key, v, "company")).then(fail), true));
       pill.className = "set-src" + (cur === undefined ? "" : " company");
       pill.setAttribute("data-testid", `set-${tid(e.key)}-co-src`);
-      pill.textContent = cur === undefined ? "not set" : "company default";
+      pill.textContent = cur === undefined ? SET_SOURCE_LABEL.default : SET_SOURCE_LABEL.company;
       x.title = "Clear the company default";
       x.setAttribute("data-testid", `set-${tid(e.key)}-co-reset`);
       x.addEventListener("click", () => {
