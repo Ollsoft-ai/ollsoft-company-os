@@ -51,9 +51,15 @@ fi
 # off a tag reads exactly "1.0.0"; anything else carries its distance from the
 # last tag, so a support conversation can tell a release from a working copy.
 VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo 0.0.0)"
+# A clone without tags (CI's shallow checkout) has no distance to give: it
+# says the file's number plus the commit, not a bare hash nobody can place.
 if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
-  DESC="$(git -C "$SRC" describe --tags --always --dirty 2>/dev/null || true)"
-  [ -n "$DESC" ] && VERSION="${DESC#v}"
+  DESC="$(git -C "$SRC" describe --tags --dirty 2>/dev/null || true)"
+  if [ -n "$DESC" ]; then
+    VERSION="${DESC#v}"
+  elif HASH="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null)"; then
+    VERSION="$VERSION+g$HASH"
+  fi
 fi
 echo "== version $VERSION =="
 

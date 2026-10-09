@@ -5713,14 +5713,18 @@ function openSettings() {
     v.innerHTML = '<span class="muted">Ollsoft Company OS</span> <code data-testid="about-version"></code>';
     v.querySelector("code").textContent = about.version || "unknown";
     el.appendChild(v);
-    // 1.2.0-3-gabc1234[-dirty]: a working copy, not a release
-    const wc = /^(\d+\.\d+\.\d+)-\d+-g[0-9a-f]+(-dirty)?$/.exec(about.version || "");
-    const dirty = /-dirty$/.test(about.version || "");
-    if (wc || dirty) {
+    // 1.2.0-3-gabc1234[-dirty]: a working copy past a release;
+    // 1.2.0+gabc1234: one built from a clone that has no tags to measure from
+    const ver = about.version || "";
+    const wc = /^(\d+\.\d+\.\d+)-\d+-g[0-9a-f]+(-dirty)?$/.exec(ver);
+    const notag = /^\d+\.\d+\.\d+\+g([0-9a-f]+)$/.exec(ver);
+    const dirty = /-dirty$/.test(ver);
+    if (wc || notag || dirty) {
       const n = document.createElement("div");
       n.className = "muted small";
-      n.textContent = (wc ? `Built from the source past release ${wc[1]}` : "Built from the source")
-        + (dirty ? ", with changes not committed yet." : ".");
+      n.textContent = notag ? `Built from the source at commit ${notag[1]}.`
+        : (wc ? `Built from the source past release ${wc[1]}` : "Built from the source")
+          + (dirty ? ", with changes not committed yet." : ".");
       el.appendChild(n);
     }
     const unrel = (about.unreleased || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
