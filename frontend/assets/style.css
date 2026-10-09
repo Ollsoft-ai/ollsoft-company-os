@@ -1152,17 +1152,18 @@ body.touch-drag .pane-drop-ind { transition: none; }
 .cm-blame-other { --blame-c: var(--blame-other); }
 .cm-blame-machine { --blame-c: var(--blame-machine); }
 /* Text that arrived from outside the editor (extchanges.js): a wash and an
-   underline in the history's "added" colour, a glow while it blooms in. --f
-   (bloom, 1→0) and --a (hold, then fade 1→0) are set per arrival from JS.
-   A removal is a thin tick in the "removed" colour on the same clock. */
+   underline in the machine colour the blame stripe gives the same edit once
+   it is committed, a glow while it blooms in. --f (bloom, 1→0) and --a
+   (hold, then fade 1→0) are set per arrival from JS. A removal is a thin
+   tick on the same clock. */
 .cm-ext { border-radius: 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone;
-  background-color: color-mix(in srgb, var(--diff-add) calc(12% * var(--a) + 30% * var(--f)), transparent);
-  background-image: linear-gradient(color-mix(in srgb, var(--diff-add) calc(75% * var(--a)), transparent) 0 0);
+  background-color: color-mix(in srgb, var(--blame-machine) calc(12% * var(--a) + 30% * var(--f)), transparent);
+  background-image: linear-gradient(color-mix(in srgb, var(--blame-machine) calc(75% * var(--a)), transparent) 0 0);
   background-repeat: no-repeat; background-position: 0 100%; background-size: 100% 2px;
-  box-shadow: 0 0 calc(10px * var(--f)) color-mix(in srgb, var(--diff-add) calc(55% * var(--f)), transparent); }
+  box-shadow: 0 0 calc(10px * var(--f)) color-mix(in srgb, var(--blame-machine) calc(55% * var(--f)), transparent); }
 .cm-ext-cut { display: inline-block; width: 2px; height: 1.15em; margin: 0 1px; vertical-align: text-bottom;
-  border-radius: 1px; background: color-mix(in srgb, var(--diff-del) calc(85% * var(--a)), transparent);
-  box-shadow: 0 0 calc(3px * var(--a) + 9px * var(--f)) color-mix(in srgb, var(--diff-del) calc(30% * var(--a) + 40% * var(--f)), transparent); }
+  border-radius: 1px; background: color-mix(in srgb, var(--blame-machine) calc(85% * var(--a)), transparent);
+  box-shadow: 0 0 calc(3px * var(--a) + 9px * var(--f)) color-mix(in srgb, var(--blame-machine) calc(30% * var(--a) + 40% * var(--f)), transparent); }
 /* its card: who, when, what — a context menu's frame */
 .blame-pop { max-width: min(340px, 92vw); font-family: var(--sans); }
 .blame-pop .bp-head { display: flex; flex-direction: column; gap: .15rem; padding: .4rem .55rem .35rem; }
