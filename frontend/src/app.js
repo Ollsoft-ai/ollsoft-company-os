@@ -24,6 +24,7 @@ import { initDictation, toggleDictation, dictationReady, retryDictation,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
 import { blame } from "./blame.js";
+import { externalChanges, watchExternal } from "./extchanges.js";
 import { connectEvents } from "./events.js";
 import { parse as parseLayout, serialize as serializeLayout, findGroup as findLayoutGroup,
          canAddColumn, canAddGroup, newGroupId, MIN_COL_PX, MIN_GROUP_PX } from "./layout.js";
@@ -4697,6 +4698,7 @@ async function mountDoc(t) {
     mediaExtension(t),
     t.modeComp.of(modeExts(t)),
     t.blameComp.of(blameExts(t)),
+    externalChanges(),
     // a note that grows past WHOLE_MAX (or shrinks back under it) changes
     // how it is drawn; after the update, since drawWhole may dispatch
     EditorView.updateListener.of((u) => {
@@ -4715,6 +4717,10 @@ async function mountDoc(t) {
     parent: t.el,
   });
   calibrateListMetrics(t.view.contentDOM);
+  // What an agent, vim or a script writes into the file blooms in and glows
+  // until you look (extchanges.js). After the view: yCollab's observer, added
+  // as it was built, has to have applied a change before this one reads it.
+  watchExternal(t.view, ytext, provider.awareness, () => t.everSynced);
   // Sync visibility: an editor that is NOT live-syncing must say so — the one
   // thing worse than a broken connection is a silently broken one (you type,
   // your colleague sees nothing). Also self-heal the stale-lineage case: if the
@@ -4756,7 +4762,7 @@ async function mountDoc(t) {
   });
   provider.on("sync", (isSynced) => {
     t.synced = isSynced;
-    if (isSynced) { clearTabLoading(t); syncWhole(t); }   // the text is really here now
+    if (isSynced) { clearTabLoading(t); syncWhole(t); t.everSynced = true; }   // the text is really here now
     if (active === t) { window.__kbsynced = isSynced; renderSyncBadge(); }
   });
   // Never spin forever. If the relay is unreachable the doc genuinely has no

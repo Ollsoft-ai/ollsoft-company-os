@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 // resolved against THIS file, so the test does not care where it is run from
 const SRC = fileURLToPath(new URL("../../frontend/src/", import.meta.url));
-const NAMES = ["app.js", "richview.js", "publicdoc.js", "chat.js", "layout.js",
+const NAMES = ["app.js", "richview.js", "publicdoc.js", "chat.js", "layout.js", "extchanges.js",
                "views.js", "settings.js", "events.js", "dictation.js"];
 const FILES = NAMES.map((f) => SRC + f);
 
