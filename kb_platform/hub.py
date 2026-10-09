@@ -2468,6 +2468,25 @@ class Hub:
         return web.json_response({"user": user, "admin": bool(user and _is_admin(user)),
                                   "licence": common.licence_state()})
 
+    async def about(self, request: web.Request) -> web.Response:
+        """Settings → About: the running version and the release history, read
+        from the files deploy.sh lays down on every request — so it is right
+        straight after a deploy that restarted nothing. Signed-in users only:
+        a version string is a gift to anyone matching it against advisories,
+        which is why this is not a file under /static."""
+        if not self.current_user(request):
+            return web.json_response({"error": "unauthenticated"}, status=401)
+
+        def read(name: str) -> str:
+            try:
+                return (common.PLATFORM_DIR / name).read_text(encoding="utf-8")
+            except OSError:
+                return ""
+        return web.json_response({"version": common.platform_version(),
+                                  "changelog": read("CHANGELOG.md"),
+                                  "unreleased": read("UNRELEASED.md")},
+                                 headers={"Cache-Control": "no-store"})
+
     async def admin_list(self, request: web.Request) -> web.Response:
         if not self._require_admin(request):
             return web.json_response({"error": "admin only"}, status=403)
@@ -3210,6 +3229,7 @@ def make_app() -> web.Application:
     app.router.add_post("/fs/share", hub.fs_share_set)
     # Admin (sudo-group only): user + group management, run as root.
     app.router.add_get("/admin/me", hub.admin_me)
+    app.router.add_get("/about", hub.about)
     app.router.add_get("/admin/list", hub.admin_list)
     app.router.add_post("/admin/users", hub.admin_create_user)
     app.router.add_post("/admin/users/delete", hub.admin_delete_user)

@@ -77,6 +77,21 @@ else
 fi
 cp "$SRC/requirements.txt" "$PREFIX/" 2>/dev/null || true
 
+# What Settings → About shows, read by the hub on every request (/about), so
+# a deploy that restarts nothing still reports itself truthfully: the version
+# above, the release history, and — for a working copy past its last tag — the
+# changes it runs that no release has carried yet. Same lines, same rules as
+# release.sh writes into CHANGELOG.md (scripts/changelog.sh).
+echo "$VERSION" > "$PREFIX/VERSION"
+cp "$SRC/CHANGELOG.md" "$PREFIX/" 2>/dev/null || true
+: > "$PREFIX/UNRELEASED.md"
+if git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
+  LAST="$(git -C "$SRC" describe --tags --abbrev=0 2>/dev/null || true)"
+  if [ -n "$LAST" ]; then
+    bash "$SRC/scripts/changelog.sh" "$LAST..HEAD" > "$PREFIX/UNRELEASED.md" 2>/dev/null || true
+  fi
+fi
+
 echo "== permissions (world-readable code; NOT the session key) =="
 # World-readable + executable: per-user backends run this code as their own uid.
 CVENV="${VENV%/*}/kb-convert-venv"

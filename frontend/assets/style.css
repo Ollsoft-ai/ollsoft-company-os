@@ -1569,6 +1569,17 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
 .settings-tabs button { background: var(--panel); color: var(--muted); border: 0; padding: .22rem .65rem;
   font-family: var(--sans); font-size: .76rem; font-weight: 500; cursor: pointer; }
 .settings-tabs button.active { background: var(--accent-deep); color: var(--on-accent); }
+/* About: the running version, then each release's changes, newest first */
+.about { font-size: .84rem; max-height: min(60vh, 520px); overflow-y: auto; padding: 0 .2rem; }
+.about-version { font-size: .9rem; margin: .2rem 0 .3rem; }
+.about-version code { font-family: var(--mono); color: var(--ink); font-weight: 600; }
+.about-rel { border-top: 1px solid var(--border); padding: .55rem 0 .2rem; margin-top: .5rem; }
+.about-rel-head { display: flex; gap: .6rem; align-items: baseline; }
+.about-rel-head b { font-family: var(--mono); font-size: .82rem; }
+.about-rel[data-testid="about-unreleased"] .about-rel-head b { font-family: var(--sans); font-size: .84rem; }
+.about-rel ul { margin: .35rem 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .2rem; }
+.about-rel li { line-height: 1.4; }
+.about-rel code { font-family: var(--mono); font-size: .78rem; background: var(--panel2); border-radius: 3px; padding: 0 .25rem; }
 .set-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: .6rem; align-items: center;
   padding: .5rem .2rem; border-bottom: 1px solid var(--border); font-size: .84rem; }
 .set-label { font-weight: 500; }

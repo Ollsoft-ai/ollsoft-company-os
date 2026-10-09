@@ -234,6 +234,12 @@ What matters when you use it:
 The design, the threat model and the Cloudflare side are in the platform repo
 at `docs/public-sharing.md`.
 
+# Which version runs here, and what changed
+
+- **Version:** `cat /opt/kb-platform/VERSION` — `1.2.0` is a release; `1.2.0-3-gabc1234` is three commits past it, `-dirty` adds uncommitted changes.
+- **What changed:** `/opt/kb-platform/CHANGELOG.md` (one section per release, newest first) and `/opt/kb-platform/UNRELEASED.md` (what this box runs beyond its last release).
+- People see the same thing in **Settings → About**. Answer "what's new" from these files, never from file dates or memory.
+
 # What else you can do (see the other skills)
 
 - **`kb-database`** — query the shared index (respects permissions automatically) and create your own private tables.

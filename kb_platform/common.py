@@ -83,9 +83,20 @@ def named_users() -> list[str]:
     return sorted(e.pw_name for e in pwd.getpwall() if is_named_user(e))
 
 
+# The deployed tree's own root: /opt/kb-platform on a box, the checkout in dev.
+PLATFORM_DIR = Path(__file__).resolve().parent.parent
+
+
 def platform_version() -> str:
-    """Written into /etc/kb/kb.env by scripts/deploy.sh from the tag or VERSION."""
-    return os.environ.get("KB_VERSION", "").strip()
+    """The VERSION file deploy.sh writes into the tree it deploys (the tag, or
+    the distance from it), read on every call. The KB_VERSION it also puts in
+    /etc/kb/kb.env reaches a process only when it starts, so a deploy that
+    restarted nothing left the hub reporting the release before — the env is
+    the fallback for a tree without the file, nothing more."""
+    try:
+        return (PLATFORM_DIR / "VERSION").read_text().strip()
+    except OSError:
+        return os.environ.get("KB_VERSION", "").strip()
 
 
 def licence_state() -> dict:

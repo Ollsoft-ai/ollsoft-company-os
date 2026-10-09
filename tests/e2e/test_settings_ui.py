@@ -114,3 +114,21 @@ def test_non_admin_has_no_company_tab(browser):
         assert page.locator('[data-testid="settings-tab-company"]').count() == 0
     finally:
         ctx.close()
+
+
+def test_about_shows_the_running_version_and_the_changelog(browser):
+    """Everyone, admin or not, can see what version runs and what changed —
+    exactly what the hub's /about serves from the deployed tree."""
+    about = api("bob").get("/about").json()
+    ctx = browser.new_context()
+    try:
+        page = login(ctx, "bob")
+        user_menu(page); page.click('[data-testid="settings-btn"]')
+        page.click('[data-testid="settings-tab-about"]')
+        page.wait_for_selector('[data-testid="about-version"]')
+        assert page.inner_text('[data-testid="about-version"]') == about["version"]
+        heads = [l[3:].split(" — ")[0] for l in about["changelog"].splitlines() if l.startswith("## ")]
+        shown = page.locator('[data-testid="about-release"] .about-rel-head b').all_inner_texts()
+        assert shown == heads and shown, "every release, newest first"
+    finally:
+        ctx.close()

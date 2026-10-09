@@ -80,3 +80,14 @@ sudo bash /opt/kb-platform/scripts/kb-update.sh --now       # don't wait for ter
   release reports exactly `1.0.0`.
 - **Each release carries its own Change Date under the licence** (see `LICENSE`),
   which is why releases are cut by `scripts/release.sh` rather than by hand.
+- **`CHANGELOG.md` is the release history.** `scripts/release.sh` writes each
+  release's section from the commit titles since the previous tag
+  (`scripts/changelog.sh`, which leaves out commits touching only the README,
+  docs, tests or CI). A section is written once — fix a badly worded line in
+  the file — so the title of every commit is written for the person reading
+  that list.
+- `scripts/deploy.sh` puts the resolved version in `<prefix>/VERSION`, copies
+  `CHANGELOG.md`, and writes `UNRELEASED.md` — what a working copy runs past
+  its last tag. The hub serves all three to signed-in users at `/about`, read
+  on every request, and **Settings → About** shows them: a deploy that
+  restarts nothing still reports the right version.

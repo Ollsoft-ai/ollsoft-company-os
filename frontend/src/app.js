@@ -5650,6 +5650,91 @@ function openSettings() {
     return el;
   }
 
+  // About: the version this box runs and what each release changed — the
+  // files deploy.sh lays down, served by the hub (/about) and read on every
+  // request, so a deploy that restarted nothing is shown truthfully. The
+  // lines are commit titles (scripts/changelog.sh). Fetched when the tab is
+  // first opened.
+  let about = null;
+  const loadAbout = () => fetch("/about")
+    .then((r) => (r.ok ? r.json() : { error: r.status === 404 ? "old-hub" : "HTTP " + r.status }))
+    .catch(() => ({ error: "unreachable" }))
+    .then((j) => { about = j; if (ov.isConnected) render(); });
+
+  // "## 1.2.0 — 2026-10-09" opens a release, "- title" is one change in it
+  function releases(md) {
+    const out = [];
+    for (const line of (md || "").split("\n")) {
+      const h = /^## (\S+)(?: — (.+))?$/.exec(line);
+      if (h) { out.push({ version: h[1], date: h[2] || "", items: [] }); continue; }
+      const li = /^- (.+)$/.exec(line);
+      if (li && out.length) out[out.length - 1].items.push(li[1]);
+    }
+    return out;
+  }
+  // a title may name a path or a command in `backticks`
+  function changeItem(text) {
+    const li = document.createElement("li");
+    text.split("`").forEach((part, i) => {
+      if (!part) return;
+      if (i % 2) { const c = document.createElement("code"); c.textContent = part; li.appendChild(c); }
+      else li.appendChild(document.createTextNode(part));
+    });
+    return li;
+  }
+  function releaseBlock(title, date, items, testid) {
+    const sec = document.createElement("section");
+    sec.className = "about-rel";
+    sec.setAttribute("data-testid", testid);
+    const h = document.createElement("div");
+    h.className = "about-rel-head";
+    const b = document.createElement("b"); b.textContent = title;
+    h.appendChild(b);
+    if (date) { const d = document.createElement("span"); d.className = "muted"; d.textContent = date; h.appendChild(d); }
+    const ul = document.createElement("ul");
+    for (const it of items) ul.appendChild(changeItem(it));
+    sec.append(h, ul);
+    return sec;
+  }
+  function aboutBlock() {
+    const el = document.createElement("div");
+    el.className = "about";
+    el.setAttribute("data-testid", "about");
+    if (!about) { el.classList.add("muted"); el.textContent = "loading…"; return el; }
+    if (about.error) {
+      el.classList.add("muted");
+      el.textContent = about.error === "old-hub"
+        ? "The server predates this view — it appears once the platform has been restarted after the update."
+        : "Could not load the version (" + about.error + ").";
+      return el;
+    }
+    const v = document.createElement("div");
+    v.className = "about-version";
+    v.innerHTML = '<span class="muted">Ollsoft Company OS</span> <code data-testid="about-version"></code>';
+    v.querySelector("code").textContent = about.version || "unknown";
+    el.appendChild(v);
+    // 1.2.0-3-gabc1234[-dirty]: a working copy, not a release
+    const wc = /^(\d+\.\d+\.\d+)-\d+-g[0-9a-f]+(-dirty)?$/.exec(about.version || "");
+    const dirty = /-dirty$/.test(about.version || "");
+    if (wc || dirty) {
+      const n = document.createElement("div");
+      n.className = "muted small";
+      n.textContent = (wc ? `Built from the source past release ${wc[1]}` : "Built from the source")
+        + (dirty ? ", with changes not committed yet." : ".");
+      el.appendChild(n);
+    }
+    const unrel = (about.unreleased || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    if (unrel.length) el.appendChild(releaseBlock("Not released yet", "", unrel, "about-unreleased"));
+    const rels = releases(about.changelog);
+    for (const r of rels) el.appendChild(releaseBlock(r.version, r.date, r.items, "about-release"));
+    if (!rels.length && !unrel.length) {
+      const p = document.createElement("div");
+      p.className = "muted"; p.textContent = "No changelog on this server.";
+      el.appendChild(p);
+    }
+    return el;
+  }
+
   function render() {
     const st = settings.state();
     card.innerHTML = `
@@ -5657,25 +5742,30 @@ function openSettings() {
         <span class="muted">yours override the company's, the company's override the defaults</span>
         <button class="modal-x" title="Close">×</button></div>`;
     card.querySelector(".modal-x").addEventListener("click", close);
-    if (!st) {
+    const tabs = document.createElement("div");
+    tabs.className = "settings-tabs";
+    for (const [id, label] of [["yours", "Yours"], ...(isAdmin ? [["company", "Company"]] : []), ["about", "About"]]) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label;
+      b.setAttribute("data-testid", `settings-tab-${id}`);
+      b.classList.toggle("active", tab === id);
+      b.addEventListener("click", () => {
+        tab = id;
+        if (id === "about" && !about) loadAbout();
+        render();
+      });
+      tabs.appendChild(b);
+    }
+    card.querySelector(".modal-head b").after(tabs);
+    card.querySelector(".modal-head .muted").hidden = tab === "about";
+    if (tab === "about") {
+      card.appendChild(aboutBlock());
+    } else if (!st) {
       const p = document.createElement("div");
       p.className = "muted";
       p.textContent = "Settings are not available: the backend predates them. Reload once it has been updated.";
       card.appendChild(p);
     } else {
-      if (isAdmin) {
-        const tabs = document.createElement("div");
-        tabs.className = "settings-tabs";
-        for (const [id, label] of [["yours", "Yours"], ["company", "Company"]]) {
-          const b = document.createElement("button");
-          b.type = "button"; b.textContent = label;
-          b.setAttribute("data-testid", `settings-tab-${id}`);
-          b.classList.toggle("active", tab === id);
-          b.addEventListener("click", () => { tab = id; render(); });
-          tabs.appendChild(b);
-        }
-        card.querySelector(".modal-head b").after(tabs);
-      }
       // a hand-edited file that went wrong is reported, never silently blanked
       const problems = [];
       if (st.company.error) problems.push("company file: " + st.company.error);

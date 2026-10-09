@@ -89,6 +89,12 @@ Match the surrounding code. The Python is standard library-heavy and comment-den
 where the *why* is non-obvious — keep that. The frontend is deliberately
 dependency-light vanilla JS; please don't introduce a framework.
 
+- **A commit title is a changelog line.** Releases list the titles since the
+  previous one in `CHANGELOG.md` and in Settings → About, so write a plain
+  sentence about what changed for the person using the platform ("Show who
+  wrote each line"), not the diff. Commits that touch only the README, docs,
+  tests or CI are left out.
+
 ## Reporting security issues
 
 Privately, not as a public issue. See [docs/SECURITY.md](docs/SECURITY.md).
