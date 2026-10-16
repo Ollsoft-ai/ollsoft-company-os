@@ -1787,8 +1787,9 @@ async function moveEntry(srcPath, dst) {
       "This moves it out of _secrets/ — from then on it WILL appear in git history and search. Move it anyway?",
       { title: "Leaving secrets", ok: "Move", danger: true })) return false;
   }
-  // keep affected editor tabs open, re-homed at the new path
-  const affected = tabs.filter((t) => t.path === srcPath || t.path.startsWith(srcPath + "/"));
+  // keep affected editor tabs open, re-homed at the new path — a terminal or
+  // an agent chat has no path, and must not stop the move
+  const affected = tabs.filter((t) => t.path && (t.path === srcPath || t.path.startsWith(srcPath + "/")));
   const keepPath = active ? active.path : null;
   const reopen = affected.map((t) => ({ old: t.path, pane: t.paneId }));
   affected.forEach((t) => _movingPaths.add(t.path));
@@ -3640,7 +3641,11 @@ function tabEl(t, dup) {
   el.draggable = mouseTabDrag();
   el.addEventListener("dragstart", (e) => {
     _dragTab = t;
-    document.body.classList.add("dragging-tab");
+    // The drop overlays cover the tab strip. Shown inside dragstart, they sit
+    // under the cursor when Chrome hit-tests the drag origin, and Chrome then
+    // refuses to start the drag at all — so they appear a tick later.
+    // (Playwright's synthetic drags skip that check; the e2e suite can't see it.)
+    setTimeout(() => { if (_dragTab === t) document.body.classList.add("dragging-tab"); }, 0);
     el.classList.add("dragging");
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("application/x-kb-tab", String(t.id)); } catch (err) { /* ok */ }
@@ -6751,7 +6756,7 @@ async function deleteEntry(n) {
     trashChanged();
   }
   // Retire any tabs that were showing the deleted path (or anything under it).
-  for (const t of tabs.filter((t) => t.path === n.path || t.path.startsWith(n.path + "/"))) {
+  for (const t of tabs.filter((t) => t.path && (t.path === n.path || t.path.startsWith(n.path + "/")))) {
     closeTab(t);
   }
   loadTree(true);
@@ -7035,7 +7040,7 @@ const BINDINGS = [
     label: "Find in this document", run: findInDoc },
   { id: "history", keys: ["Alt+H"], group: "Documents", when: hasTab,
     label: "Version history", run: () => { if (active) openHistory(active.path); } },
-  { id: "blame", group: "Documents", when: hasDoc,
+  { id: "blame", keys: [], group: "Documents", when: hasDoc,   // palette only — no key of its own
     label: "Show / hide who wrote each line",
     run: () => settings.set("editor.blame", !settings.get("editor.blame")) },
   { id: "perms", keys: ["Alt+S"], group: "Documents", when: hasTab,
