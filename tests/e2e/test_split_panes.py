@@ -49,6 +49,7 @@ DRAG_JS = """async ([path, targetSel, fx]) => {
   const ds = new DragEvent('dragstart', {bubbles: true, cancelable: true});
   Object.defineProperty(ds, 'dataTransfer', {value: dt});
   tab.dispatchEvent(ds);
+  await new Promise(res => setTimeout(res, 0));   // the overlays appear a tick after dragstart
   const target = document.querySelector(targetSel);
   if (!target) return {err: 'no drop target ' + targetSel};
   const r = target.getBoundingClientRect();

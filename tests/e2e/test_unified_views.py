@@ -7,12 +7,15 @@ import json
 from conftest import login, open_doc, wait_path, user_menu
 from kbenv import doc
 
-DRAG_JS = """([path, targetSel, fx, fy]) => {
+# The drop overlays appear a tick after dragstart (app.js: shown inside it,
+# they broke Chrome's drag-origin hit-test), so wait one before the dragover.
+DRAG_JS = """async ([path, targetSel, fx, fy]) => {
   const tab = document.querySelector('.tab[data-path="' + path + '"]') || document.querySelector('.tab[data-sid="' + path + '"]');
   const target = document.querySelector(targetSel);
   if (!tab || !target) return {ok: false, why: 'missing ' + (!tab ? 'tab' : 'target')};
   const dt = new DataTransfer();
   tab.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: dt}));
+  await new Promise(res => setTimeout(res, 0));
   const r = target.getBoundingClientRect();
   const x = r.left + r.width * fx, y = r.top + r.height * fy;
   target.dispatchEvent(new DragEvent('dragover', {bubbles: true, dataTransfer: dt, clientX: x, clientY: y}));
