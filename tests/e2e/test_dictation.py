@@ -359,20 +359,24 @@ def test_editor_insertion_is_one_undo_step(page, doc):
                            arg=before, timeout=8000)
 
 
+# The command line the cursor is on, every row of it: a prompt plus a phrase
+# wraps in a narrow terminal (the panel on the right is ~55 columns).
+CMD_LINE_JS = """() => { const b = window.__kbterm.buffer.active;
+  const end = b.baseY + b.cursorY; let y = end;
+  while (y > 0 && b.getLine(y).isWrapped) y--;
+  let s = '';
+  for (; y <= end; y++) s += b.getLine(y).translateToString(y === end);
+  return s; }"""
+
+
 def test_text_lands_in_the_terminal_without_a_newline(page):
     """Dictating a command must never run it: a mis-transcription has no undo."""
     show_terminal(page)
     dictate(page)
-    page.wait_for_function(
-        "t => { const b = window.__kbterm.buffer.active;"
-        "  return b.getLine(b.cursorY).translateToString(true).includes(t); }",
-        arg=SPOKEN, timeout=15000)
+    page.wait_for_function(f"t => ({CMD_LINE_JS})().includes(t)", arg=SPOKEN, timeout=15000)
     # The prompt has not advanced: the text sits on the command line, un-executed,
     # waiting for the human to press Return.
-    line = page.evaluate(
-        "(() => { const b = window.__kbterm.buffer.active;"
-        "  return b.getLine(b.cursorY).translateToString(true); })()")
-    assert SPOKEN in line
+    assert SPOKEN in page.evaluate(f"({CMD_LINE_JS})()")
 
 
 def test_control_characters_are_stripped_from_a_transcript(page):

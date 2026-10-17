@@ -974,7 +974,7 @@ function buildLayout(layout) {
     });
   });
   gmap.set("dock", dockPane);
-  dock.side = layout.dock.side; dock.size = layout.dock.size;
+  dock.side = termSide(); dock.size = layout.dock.size;   // the side is a setting, not the record's
   applyDockSide();
   dockPane.collapsed = layout.dock.collapsed;
   dockPane.el.hidden = layout.dock.collapsed;
@@ -2566,7 +2566,7 @@ let paneSeq = 0, colSeq = 0;
 let activePaneId = null;   // the pane whose visible tab is `active` — where documents open
 let focusedPaneId = null;  // the pane the keyboard is in, whatever it shows
 let dockPane = null;       // the pane that is #terminal-panel
-const dock = { side: "bottom", size: 0.38 };   // collapsed ⇔ #terminal-panel.hidden
+const dock = { side: termSide(), size: 0.38 };   // collapsed ⇔ #terminal-panel.hidden
 let maximizedPaneId = null;
 let _dragTab = null;     // the tab currently being dragged, if any
 
@@ -3396,9 +3396,14 @@ function focusNextPane(d) {
   else focusPane(p);
 }
 
-// The dock's side and size: a bottom band by default, a column on the right
-// or left for a wide monitor. Layout state, not a setting — it is a choice
-// per screen, and it travels with the session record of that browser.
+// The dock's side and size: a column on the right by default, or on the left,
+// or a band at the bottom. The side is the setting terminal.side (company-wide,
+// or your own); the size is layout state, kept in the session record of that
+// browser. A phone ignores both.
+function termSide() {
+  const s = settings.get("terminal.side");
+  return ["bottom", "right", "left"].includes(s) ? s : "right";
+}
 const _workspace = { el: null, grow: 1 };   // the editor area as one side of the dock's split
 function applyDockSide() {
   const mc = document.querySelector(".main-col");
@@ -3439,6 +3444,14 @@ function setDockSide(side) {
   applyDockSide();
   requestAnimationFrame(refitDisplayedTerminals);
   saveSession();
+}
+settings.subscribe("terminal.side", (side) => setDockSide(side));
+
+// The palette's "Terminal panel: …" is your own choice, kept in your settings
+// so every browser you sign in to opens the terminal there.
+function pickDockSide(side) {
+  setDockSide(side);
+  settings.set("terminal.side", side).then((r) => { if (!r.ok) kbToast(r.error, "err"); });
 }
 
 // ---- editor tabs (VS-Code style) ------------------------------------------
@@ -7130,9 +7143,9 @@ const EXTRA_COMMANDS = [
   { id: "focusnext", label: "Focus the next group", run: () => focusNextPane(1) },
   { id: "focusprev", label: "Focus the previous group", run: () => focusNextPane(-1) },
   // (a phone's dock is always the sheet at the bottom: no side to pick)
-  { id: "dockbottom", label: "Terminal panel: bottom", when: () => !isMobile() && dock.side !== "bottom", run: () => setDockSide("bottom") },
-  { id: "dockright", label: "Terminal panel: right", when: () => !isMobile() && dock.side !== "right", run: () => setDockSide("right") },
-  { id: "dockleft", label: "Terminal panel: left", when: () => !isMobile() && dock.side !== "left", run: () => setDockSide("left") },
+  { id: "dockbottom", label: "Terminal panel: bottom", when: () => !isMobile() && dock.side !== "bottom", run: () => pickDockSide("bottom") },
+  { id: "dockright", label: "Terminal panel: right", when: () => !isMobile() && dock.side !== "right", run: () => pickDockSide("right") },
+  { id: "dockleft", label: "Terminal panel: left", when: () => !isMobile() && dock.side !== "left", run: () => pickDockSide("left") },
   { id: "maximize2", label: "Maximize / restore the focused group", when: hasFocusedTab, run: () => toggleMaximize() },
   { id: "fold", label: "Fold / unfold the focused group", when: hasFocusedTab, run: () => togglePaneFold() },
   { id: "signout", label: "Sign out", run: () => { location.href = "/logout"; } },

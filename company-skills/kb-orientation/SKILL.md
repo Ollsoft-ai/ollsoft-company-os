@@ -256,11 +256,12 @@ at `docs/public-sharing.md`.
 ## The screen: groups, the dock, the agent chat
 
 Everything open is a tab in a group; groups stack in columns; the terminal
-panel at the bottom is the *dock*, a group like the others. A person can drag
+panel is the *dock*, a group like the others, on the right by default (the
+`terminal.side` setting: right, bottom or left, company-wide or per person —
+see **kb-settings**; a phone opens a terminal as a tab). A person can drag
 any tab — a document, a terminal, an agent chat — beside, above or below any
-other, split with Alt+\ / Alt+Shift+\, maximize a group with Alt+Z, and put
-the dock on the right from the palette. The layout is per browser
-(localStorage), never a file in the knowledgebase.
+other, split with Alt+\ / Alt+Shift+\, and maximize a group with Alt+Z. The
+layout is per browser (localStorage), never a file in the knowledgebase.
 
 The top-right chat button (Alt+C) opens an **agent chat**: Claude Code,
 Codex, Gemini CLI or another ACP agent, running as the person in the

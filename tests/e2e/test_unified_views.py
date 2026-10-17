@@ -4,8 +4,28 @@ and the keys do, what a reload brings back, and what an old session record
 turns into."""
 import json
 
-from conftest import login, open_doc, wait_path, user_menu
-from kbenv import doc
+import httpx
+import pytest
+from conftest import BASE, CREDS, login, open_doc, wait_path, user_menu
+from kbenv import U, doc
+
+SIDE = "terminal.side"
+
+
+def api(user):
+    c = httpx.Client(base_url=BASE, timeout=15)
+    c.post("/login", data={"username": U(user), "password": CREDS[user]})
+    return c
+
+
+@pytest.fixture(autouse=True)
+def _default_side():
+    """The palette's "Terminal panel: …" writes the person's own layer, so it
+    outlives the browser context: every test starts, and leaves, at the
+    shipped default."""
+    api("alice").post("/api/settings", json={"unset": [SIDE]})
+    yield
+    api("alice").post("/api/settings", json={"unset": [SIDE]})
 
 # The drop overlays appear a tick after dragstart (app.js: shown inside it,
 # they broke Chrome's drag-origin hit-test), so wait one before the dragover.
@@ -110,12 +130,8 @@ def test_split_below_maximize_and_dock_side(browser):
     assert page.evaluate("() => [...document.querySelectorAll('#panes .pane')].filter(p => p.offsetParent !== null).length") == 1
     page.keyboard.press("Alt+Z")
     page.wait_for_function("() => !document.body.classList.contains('maximized')")
-    # the dock on the right, through the palette
+    # the dock is a column on the right by default (terminal.side)
     show_terminal(page)
-    page.keyboard.press("Control+Shift+P")
-    page.fill("[data-testid='palette-input']", ">Terminal panel right")   # ">" = commands mode
-    page.wait_for_function("() => [...document.querySelectorAll('.palette-item')].some(e => e.textContent.includes('Terminal panel: right'))")
-    page.click(".palette-item:has-text('Terminal panel: right')")
     page.wait_for_function("() => document.querySelector('.main-col').dataset.dock === 'right'")
     box = page.locator("#terminal-panel").bounding_box()
     editor = page.locator("#panes").bounding_box()
@@ -383,8 +399,34 @@ def test_maximize_with_the_dock_open_and_the_left_dock_handle(browser):
     print("left dock maximized:", mw, tw)
     assert mw > tw - 10, (mw, tw)
     page.click("#term-max")
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Terminal panel: bottom"); page.keyboard.press("Enter")
+    ctx.close()
+
+
+def test_the_terminal_side_is_a_setting_the_palette_writes(browser):
+    me = api("alice")
+    ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = login(ctx, "alice")
+    open_doc(page, doc("overview.md")); wait_path(page, doc("overview.md"))
+    show_terminal(page)
+    assert page.evaluate(LAYOUT_JS)["dockSide"] == "right"
+    # changed anywhere else (the dialog, another browser, an agent editing the
+    # file): applied live, no reload
+    page.evaluate(f"() => window.__kbsettings.set('{SIDE}', 'bottom')")
     page.wait_for_function("() => document.querySelector('.main-col').dataset.dock === 'bottom'")
+    box = page.locator("#terminal-panel").bounding_box()
+    editor = page.locator("#panes").bounding_box()
+    assert box["y"] > editor["y"] + editor["height"] - 5, "the dock is a band at the bottom"
+    # the palette writes the person's own layer ...
+    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Terminal panel: left"); page.keyboard.press("Enter")
+    page.wait_for_function("() => document.querySelector('.main-col').dataset.dock === 'left'")
+    page.wait_for_function(f"() => window.__kbsettings.source('{SIDE}') === 'user' && window.__kbsettings.get('{SIDE}') === 'left'")
+    assert me.get("/api/settings").json()["user"]["values"][SIDE] == "left"
+    # ... so a fresh browser of theirs opens the terminal there too
+    ctx2 = browser.new_context(viewport={"width": 1400, "height": 900})
+    page2 = login(ctx2, "alice")
+    show_terminal(page2)
+    page2.wait_for_function("() => document.querySelector('.main-col').dataset.dock === 'left'")
+    ctx2.close()
     ctx.close()
 
 
@@ -408,6 +450,7 @@ def test_restore_keeps_the_terminal_a_group_showed(browser):
 
 
 def test_a_tall_window_clamps_the_dock_while_dragging_and_a_narrow_mouse_window_keeps_its_record(browser):
+    api("alice").post("/api/settings", json={"set": {SIDE: "bottom"}})   # a band: the drag is vertical
     ctx = browser.new_context(viewport={"width": 1400, "height": 1400})
     page = login(ctx, "alice")
     open_doc(page, doc("overview.md")); wait_path(page, doc("overview.md"))

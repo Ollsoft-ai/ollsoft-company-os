@@ -820,8 +820,8 @@ about the app — see §8.1):
 - **Groups, columns and the dock (one layout for everything)**: the editor
   area is a *workspace* of *columns*, each column a stack of *groups* — a tab
   strip, a host and one visible tab — plus the *dock*: the group that lives
-  outside the workspace as the bottom panel (or a column on the right or left)
-  and holds the terminals by default. A terminal is a tab like a document; so
+  outside the workspace as a column on the right (or the left, or a band at
+  the bottom: the `terminal.side` setting) and holds the terminals by default. A terminal is a tab like a document; so
   is an agent chat. Drag a tab onto a group's left or right edge for a new
   column, its top or bottom edge for a new group above or below, its middle to
   move it in; the dock takes drops but is never split. On a phone or tablet

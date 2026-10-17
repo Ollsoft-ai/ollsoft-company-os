@@ -215,7 +215,8 @@ re-checks the same Unix permission for every row. Undo with `--undo`.
   and becomes searchable. Take it back the same way: right-click any folder →
   *Download as ZIP*.
 - **VS-Code-style shell**: documents and artifacts open as tabs (background
-  artifacts stay live); terminals are tabbed in a docked, resizable bottom panel.
+  artifacts stay live); terminals are tabbed in a docked, resizable panel — on
+  the right by default, or the bottom or left, company-wide or per person.
 - **Cron panel**: every user has their own `crontab`; the UI lists, adds, pauses
   and deletes jobs, which run as the user even while logged out.
 - **Read-only viewing** of files you can see but not edit (live, but the daemon

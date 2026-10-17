@@ -83,6 +83,12 @@ REGISTRY: list[dict] = [
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
      "help": "Colours for the whole app, editor and terminal included. Deep blue is the house look; "
              "Dark and Light follow Notion's greys and paper."},
+    {"key": "terminal.side", "type": "enum", "options": ["right", "bottom", "left"], "default": "right",
+     "labels": {"right": "Right", "bottom": "Bottom", "left": "Left"},
+     "scopes": ("company", "user"), "group": "Terminal", "label": "Where the terminal opens",
+     "help": "The side of the window the terminal panel sits on, on a computer. A phone always "
+             "opens the terminal as a tab of its own. The palette's \"Terminal panel: …\" "
+             "commands change your own choice."},
     # ---- semantic search (docs/semantic-search.md). Read by kb-embedd every
     # minute; every limit here is enforced BEFORE a paid call is made.
     {"key": "search.enabled", "type": "bool", "default": True,
