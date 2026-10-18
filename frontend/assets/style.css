@@ -1330,6 +1330,23 @@ body.touch-drag .pane-drop-ind { transition: none; }
 .keys-or { color: var(--faint); font-size: .66rem; }
 .keys-label { flex: 1 1 auto; color: var(--ink); }
 .keys-hint { display: block; color: var(--faint); font-size: .72rem; }
+/* editing: the keys are a button; tools sit at the end of the row */
+.keys-card .modal-head { gap: .5rem; }
+.keys-card .modal-head b { flex: 1 1 auto; }
+.keys-intro { font-size: .76rem; margin: -.2rem 0 .2rem; }
+.keys-row { align-items: center; }
+.keys-edit { background: transparent; border: 1px dashed transparent; border-radius: var(--r);
+  padding: .15rem .3rem; cursor: pointer; color: inherit; font: inherit; min-height: 1.7rem; }
+.keys-edit:hover, .keys-edit:focus-visible { border-color: var(--border); background: var(--panel2); }
+.keys-edit.capturing, .keys-add.capturing { border: 1px solid var(--accent); color: var(--accent);
+  background: var(--accent-wash); font-size: .74rem; }
+.keys-none { color: var(--faint); }
+.keys-tools { flex: 0 0 auto; display: flex; gap: .2rem; opacity: .35; transition: opacity .12s; }
+.keys-row:hover .keys-tools, .keys-row.changed .keys-tools, .keys-tools:focus-within { opacity: 1; }
+.keys-tools .mini { min-width: 1.7rem; padding: .1rem .35rem; }
+.keys-term { color: var(--faint); }
+.keys-term.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.keys-row.changed .keys-label { color: var(--accent); }
 kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   padding: .1rem .38rem; border-radius: 5px; border: 1px solid var(--border);
   border-bottom-width: 2px; background: var(--panel2); color: var(--muted); white-space: nowrap; }

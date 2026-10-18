@@ -52,6 +52,19 @@ THEME_TOKENS = {
     "content-x": LEN, "content-x-narrow": LEN, "content-y": LEN, "content-max": r"\d{3,6}px", "source-x": LEN,
     "row-y": LEN, "tab-y": LEN, "pad": LEN, "r": r"\d{1,2}px",
 }
+# Keyboard shortcuts (keys.bindings): which keys run which command, per
+# person. The ids are the shortcut sheet's (BINDINGS and EDIT_BINDINGS in
+# frontend/src/app.js — tests/cli/test_settings keeps the two lists in step).
+# A value is up to four combos in the app's grammar ("Mod+Shift+P, Alt+E");
+# "" unbinds the command. Only what differs from the shipped keys is stored.
+KEY_COMBO = r"((Mod|Ctrl|Alt|Shift)\+){0,4}([A-Z0-9?]|F([1-9]|1[0-9]|2[0-4])|[A-Z][A-Za-z]{2,20})"
+KEY_COMBOS = rf"({KEY_COMBO}(, {KEY_COMBO}){{0,3}})?"
+APP_SHORTCUTS = ("palette", "commands", "nexttab", "prevtab", "closetab", "splitright",
+                 "splitdown", "maximize", "focustree", "sidebar", "reveal", "newdoc", "mode",
+                 "find", "history", "blame", "perms", "save", "term", "newterm", "chat",
+                 "dictate", "help")
+EDIT_SHORTCUTS = ("bold", "italic", "strike", "code", "h1", "h2", "h3", "ul", "ol", "task",
+                  "quote", "link", "hr", "table")
 REGISTRY: list[dict] = [
     {"key": "brand.name", "type": "string", "pattern": r"\s*\S.*", "maxlen": 40, "default": "Company OS",
      "scopes": ("company",), "group": "Brand", "label": "Product name",
@@ -89,6 +102,16 @@ REGISTRY: list[dict] = [
      "help": "The side of the window the terminal panel sits on, on a computer. A phone always "
              "opens the terminal as a tab of its own. The palette's \"Terminal panel: …\" "
              "commands change your own choice."},
+    {"key": "keys.bindings", "type": "map",
+     "keys": {k: KEY_COMBOS for k in APP_SHORTCUTS + EDIT_SHORTCUTS}, "default": {},
+     "scopes": ("user",), "group": "Keyboard", "label": "Keyboard shortcuts", "ui": "shortcuts",
+     "help": "Your own keys for any command, edited in the shortcut sheet (? or F1). Only the ones "
+             "you change are stored; an empty value turns a shortcut off."},
+    {"key": "keys.terminal", "type": "map",
+     "keys": {k: "on|off" for k in APP_SHORTCUTS}, "default": {},
+     "scopes": ("user",), "group": "Keyboard", "label": "Shortcuts inside a terminal", "hidden": True,
+     "help": "Which app shortcuts still work while a terminal has focus; every other key goes to "
+             "the shell. Edited in the shortcut sheet."},
     # ---- semantic search (docs/semantic-search.md). Read by kb-embedd every
     # minute; every limit here is enforced BEFORE a paid call is made.
     {"key": "search.enabled", "type": "bool", "default": True,

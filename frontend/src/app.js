@@ -22,7 +22,7 @@ import { init as initRichView, mdHighlight, calibrateListMetrics, tableField,
          VIDEO_EXT, AUDIO_EXT } from "./richview.js";
 // xterm is NOT imported here: it is a quarter of the bundle and lives in its
 // own chunk, loaded by warmTerminal() the first time a terminal is wanted.
-import { initDictation, toggleDictation, dictationReady, retryDictation,
+import { initDictation, toggleDictation, dictationReady, retryDictation, setDictateMatcher,
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
@@ -4755,9 +4755,7 @@ async function mountDoc(t) {
   const extensions = [
     history(),
     keymap.of([
-      { key: "Mod-b", run: () => { tbInline("**"); return true; } },
-      { key: "Mod-i", run: () => { tbInline("*"); return true; } },
-      { key: "Mod-Shift-k", run: () => { tbLink(); return true; } },
+      { any: (v, e) => editKey(e) },     // bold, italic, link… — your keys (EDIT_BINDINGS)
       { key: "Tab", run: (v) => listIndent(v, 1), shift: (v) => listIndent(v, -1) },
       ...searchKeymap, ...defaultKeymap, ...historyKeymap,
     ]),
@@ -5620,7 +5618,27 @@ function openSettings() {
     return el;
   }
 
+  // Shortcuts are edited in their own sheet, where you press the keys.
+  function shortcutsRow(e) {
+    const r = document.createElement("div");
+    r.className = "set-row";
+    r.setAttribute("data-testid", `set-${tid(e.key)}`);
+    const lab = document.createElement("div");
+    lab.innerHTML = '<div class="set-label"></div><span class="set-help"></span>';
+    lab.querySelector(".set-label").textContent = e.label;
+    lab.querySelector(".set-help").textContent = e.help || "";
+    const n = Object.keys(settings.get("keys.bindings") || {}).length
+      + Object.keys(settings.get("keys.terminal") || {}).length;
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "mini";
+    b.setAttribute("data-testid", "set-open-shortcuts");
+    b.textContent = n ? `Edit (${n} changed)` : "Edit";
+    b.addEventListener("click", openShortcuts);
+    r.append(lab, b);
+    return r;
+  }
   function row(e, scope) {
+    if (e.ui === "shortcuts") return shortcutsRow(e);
     const st = settings.state();
     const r = document.createElement("div");
     r.className = "set-row";
@@ -5865,7 +5883,7 @@ function openSettings() {
         card.appendChild(n);
       }
       const scope = tab === "company" ? "company" : "user";
-      const entries = st.schema.filter((e) => e.scopes.includes(scope));
+      const entries = st.schema.filter((e) => e.scopes.includes(scope) && !e.hidden);
       const groups = [];
       for (const e of entries) if (!groups.includes(e.group)) groups.push(e.group);
       if (!entries.length) {
@@ -7122,8 +7140,6 @@ const BINDINGS = [
     run: () => settings.set("editor.blame", !settings.get("editor.blame")) },
   { id: "perms", keys: ["Alt+S"], group: "Documents", when: hasTab,
     label: "Share — who can open this", run: () => { if (active) openPerms(active.path); } },
-  { id: "link", keys: ["Mod+Shift+K"], group: "Documents", when: hasDoc,
-    label: "Insert link", run: tbLink },
   { id: "save", keys: ["Mod+S"], group: "Documents",
     label: "Save (already continuous)", run: saveNow },
 
@@ -7162,6 +7178,53 @@ const BINDINGS = [
   { id: "help", keys: ["?", "F1", "Mod+Slash"], group: "Help",
     label: "Keyboard shortcuts", run: openShortcuts },
 ];
+
+// Formatting, while the cursor is in a document. These run from the editor's
+// own keymap (ahead of CodeMirror's defaults — Mod+I is "select parent syntax"
+// there), so they never fire anywhere else. Most ship without a key: the sheet
+// lets each person give one to the ones they use.
+const EDIT_BINDINGS = [
+  { id: "bold", keys: ["Mod+B"], label: "Bold", run: () => tbInline("**") },
+  { id: "italic", keys: ["Mod+I"], label: "Italic", run: () => tbInline("*") },
+  { id: "strike", keys: [], label: "Strikethrough", run: () => tbInline("~~") },
+  { id: "code", keys: [], label: "Inline code", run: () => tbInline("`") },
+  { id: "h1", keys: [], label: "Heading 1", run: () => tbHeading(1) },
+  { id: "h2", keys: [], label: "Heading 2", run: () => tbHeading(2) },
+  { id: "h3", keys: [], label: "Heading 3", run: () => tbHeading(3) },
+  { id: "ul", keys: [], label: "Bulleted list", run: () => tbListPrefix("- ", /^(\s*)[-*+]\s+(?!\[)/) },
+  { id: "ol", keys: [], label: "Numbered list", run: () => tbListPrefix("1. ", /^(\s*)\d+\.\s+/) },
+  { id: "task", keys: [], label: "To-do", run: () => tbListPrefix("- [ ] ", /^(\s*)[-*+]\s+\[[ xX]\]\s+/) },
+  { id: "quote", keys: [], label: "Quote", run: () => tbListPrefix("> ", /^(\s*)>\s+/) },
+  { id: "link", keys: ["Mod+Shift+K"], label: "Insert link", run: tbLink },
+  { id: "hr", keys: [], label: "Divider", run: tbHr },
+  { id: "table", keys: [], label: "Table", run: tbTable },
+].map((b) => ({ ...b, group: "Editing", edit: true }));
+
+// ---- your own keys (the keys.bindings and keys.terminal settings) ----------
+// The shipped keys above are defaults. A person's overrides live in their own
+// settings layer (users/<you>/.os/settings.json) as {id: "Mod+B, Alt+B"} — ""
+// turns a shortcut off — and {id: "on" | "off"} for whether it still fires
+// while a terminal has focus. Read at every keypress, so a change applies at
+// once, in every open window (settings sync).
+function keysOf(b) {
+  const o = (settings.get("keys.bindings") || {})[b.id];
+  if (typeof o !== "string") return b.keys;
+  return o.split(",").map((k) => k.trim()).filter(Boolean);
+}
+function termOf(b) {
+  const o = (settings.get("keys.terminal") || {})[b.id];
+  return o === "on" ? true : o === "off" ? false : !!b.term;
+}
+// The formatting keys, for the editor's keymap: true when one ran.
+function editKey(e) {
+  if (e.isComposing) return false;
+  for (const b of EDIT_BINDINGS) {
+    if (keysOf(b).some((k) => comboMatches(e, k))) { b.run(); return true; }
+  }
+  return false;
+}
+setDictateMatcher((e) => keysOf(BINDINGS.find((b) => b.id === "dictate"))
+  .some((k) => comboMatches(e, k)));
 
 // Commands that have no key of their own but belong in the palette.
 const EXTRA_COMMANDS = [
@@ -7238,7 +7301,7 @@ function allCommands() {
   for (const b of BINDINGS) {
     if (b.group === null || !b.run) continue;
     if (b.when && !b.when()) continue;
-    cmds.push({ label: b.label, keys: b.labelKeys ? b.labelKeys[0] : b.keys[0], run: b.run });
+    cmds.push({ label: b.label, keys: b.labelKeys ? b.labelKeys[0] : keysOf(b)[0], run: b.run });
   }
   for (const c of EXTRA_COMMANDS.concat(registeredCommands())) {
     if (c.when && !c.when()) continue;
@@ -7262,7 +7325,13 @@ function bindingFor(e, inTerm) {
   // reserves Alt+digit for its own tab switching) — one binding, nine targets
   const i = tabIndexFromEvent(e);
   if (i >= 0) return { id: "gototab", term: true, run: () => gotoTab(i) };
-  for (const b of BINDINGS.concat(registeredCommands().filter((c) => c.keys))) {
+  for (const b of BINDINGS) {
+    if (inTerm && !termOf(b)) continue;
+    if (!keysOf(b).some((k) => comboMatches(e, k))) continue;
+    if (b.when && !b.when()) return null;   // the key is ours, but inert right now
+    return b;
+  }
+  for (const b of registeredCommands().filter((c) => c.keys)) {
     if (inTerm && !b.term) continue;
     if (!b.keys.some((k) => comboMatches(e, k))) continue;
     if (b.when && !b.when()) return null;   // the key is ours, but inert right now
@@ -7918,7 +7987,51 @@ async function openAtLine(path, line) {
 }
 
 // ---- the shortcut sheet ----------------------------------------------------
-// Rendered from BINDINGS, so it cannot drift from what the keys actually do.
+// Rendered from BINDINGS and EDIT_BINDINGS, so it cannot drift from what the
+// keys actually do — and it is where a person changes them: click a key to
+// record a new one, + to add another, ↺ to go back to the shipped key, and
+// the terminal toggle for whether it still works while a terminal has focus.
+// Changes are the person's own settings (keys.bindings / keys.terminal).
+
+// Keys the browser keeps for itself: a page never receives them, so binding
+// one would be a shortcut that silently never fires.
+const RESERVED_COMBOS = new Set(["Mod+W", "Mod+T", "Mod+N", "Mod+Shift+T", "Mod+Shift+N",
+  "Mod+Shift+W", "Mod+Q", "Mod+Tab", "Mod+Shift+Tab", "Mod+L", "Mod+R", "Mod+Shift+R",
+  "F5", "F11", "F12"]);
+const MOD_ONLY = new Set(["Control", "Shift", "Alt", "Meta", "AltGraph", "OS"]);
+
+// The combo a keydown spells, in the BINDINGS grammar — or null for a bare
+// modifier. Mod is ⌘ on a Mac and Ctrl elsewhere, so a binding made on one
+// works on the other.
+function comboFromEvent(e) {
+  if (MOD_ONLY.has(e.key)) return null;
+  const parts = [];
+  if (IS_APPLE ? e.metaKey : e.ctrlKey) parts.push("Mod");
+  if (IS_APPLE && e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  const c = e.code || "";
+  let key = /^Key[A-Z]$/.test(c) ? c.slice(3) : /^(Digit|Numpad)[0-9]$/.test(c) ? c.slice(-1) : c;
+  if (!key) return null;
+  return [...parts, key].join("+");
+}
+
+function bindingsSave(id, keys) {
+  const all = BINDINGS.concat(EDIT_BINDINGS);
+  const b = all.find((x) => x.id === id);
+  const cur = { ...(settings.get("keys.bindings") || {}) };
+  if (keys === null || keys.join(", ") === b.keys.join(", ")) delete cur[id];
+  else cur[id] = keys.join(", ");
+  return Object.keys(cur).length ? settings.set("keys.bindings", cur) : settings.unset("keys.bindings");
+}
+
+function terminalSave(id, on) {
+  const b = BINDINGS.find((x) => x.id === id);
+  const cur = { ...(settings.get("keys.terminal") || {}) };
+  if (on === !!b.term) delete cur[id]; else cur[id] = on ? "on" : "off";
+  return Object.keys(cur).length ? settings.set("keys.terminal", cur) : settings.unset("keys.terminal");
+}
+
 function openShortcuts() {
   if (document.querySelector('[data-testid="shortcuts"]')) return;
   const ov = document.createElement("div");
@@ -7929,72 +8042,230 @@ function openShortcuts() {
   const head = document.createElement("div");
   head.className = "modal-head";
   head.innerHTML = "<b>Keyboard shortcuts</b>";
+  const resetAll = document.createElement("button");
+  resetAll.className = "mini keys-reset-all"; resetAll.type = "button";
+  resetAll.textContent = "Reset all"; resetAll.title = "Back to the shipped keys, everywhere";
+  resetAll.setAttribute("data-testid", "keys-reset-all");
   const x = document.createElement("button");
   x.className = "modal-x"; x.textContent = "×"; x.title = "Close";
-  head.appendChild(x);
+  head.append(resetAll, x);
   card.appendChild(head);
+  const intro = document.createElement("div");
+  intro.className = "muted keys-intro";
+  intro.textContent = "Click a key to change it, + to add another. Yours follow you to every device.";
+  card.appendChild(intro);
+  const body = document.createElement("div");
+  card.appendChild(body);
 
-  const groups = [];
-  for (const b of BINDINGS) {
-    if (!b.group) continue;
-    let g = groups.find((z) => z.name === b.group);
-    if (!g) { g = { name: b.group, rows: [] }; groups.push(g); }
-    g.rows.push({ keys: b.labelKeys || b.keys, label: b.label, hint: b.hint });
-  }
-  groups.push({ name: "In the file tree", rows: [
-    { keys: ["ArrowUp", "ArrowDown"], label: "Move between files" },
-    { keys: ["ArrowRight", "ArrowLeft"], label: "Open / close a folder" },
-    { keys: ["Enter"], label: "Open the file" },
-    { keys: ["F2"], label: "Rename" },
-    { keys: ["Delete"], label: "Delete" },
-    { keys: ["a…z"], label: "Jump to a name", hint: "type the first letters" },
-  ] });
-  groups.push({ name: "Good to know", rows: [
-    { keys: [], label: "Right-click any file for rename, move, copy, download and permissions" },
-    { keys: [], label: "Right-click a folder to download the whole thing as a ZIP" },
-    { keys: [], label: "Drag a file onto a folder to move it; drop files onto a folder to upload" },
-    { keys: [], label: "Drag a file from the tree INTO an open document to link it",
-      hint: "images and video embed; everything else becomes a link you can click" },
-    { keys: [], label: "Drop a whole folder from your computer onto a folder — subfolders and all",
-      hint: "or right-click the folder → Upload folder" },
-    { keys: [], label: "In a terminal, Ctrl shortcuts go to the shell — use " +
-        comboLabel("Alt+BracketRight") + ", " + comboLabel("Alt+W") + " or " +
-        comboLabel("Mod+Backquote") },
-  ] });
+  let capture = null;    // { id, add, el } while recording a key
+  const fail = (r) => { if (r && r.ok === false) kbToast(r.error || "could not save the shortcut", "err"); };
 
-  for (const g of groups) {
-    const h = document.createElement("div");
-    h.className = "keys-group";
-    h.textContent = g.name;
-    card.appendChild(h);
-    for (const r of g.rows) {
-      const row = document.createElement("div");
-      row.className = "keys-row";
-      const kk = document.createElement("span");
-      kk.className = "keys-combo";
-      r.keys.forEach((c, i) => {
-        if (i) { const or = document.createElement("span"); or.className = "keys-or"; or.textContent = "or"; kk.appendChild(or); }
-        const b = document.createElement("kbd");
-        b.textContent = /^[A-Za-z]…[a-z]$/.test(c) ? c : comboLabel(c);
-        kk.appendChild(b);
-      });
-      const lab = document.createElement("span");
-      lab.className = "keys-label";
-      lab.textContent = r.label;
-      if (r.hint) {
-        const hint = document.createElement("span");
-        hint.className = "keys-hint";
-        hint.textContent = r.hint;
-        lab.appendChild(hint);
+  const kbdRow = (keys) => {
+    const kk = document.createElement("span");
+    kk.className = "keys-combo";
+    keys.forEach((c, i) => {
+      if (i) { const or = document.createElement("span"); or.className = "keys-or"; or.textContent = "or"; kk.appendChild(or); }
+      const b = document.createElement("kbd");
+      b.textContent = /^[A-Za-z]…[a-z]$/.test(c) ? c : comboLabel(c);
+      kk.appendChild(b);
+    });
+    return kk;
+  };
+
+  function render() {
+    body.textContent = "";
+    const groups = [];
+    for (const b of BINDINGS.concat(EDIT_BINDINGS)) {
+      if (!b.group) continue;
+      let g = groups.find((z) => z.name === b.group);
+      if (!g) { g = { name: b.group, rows: [] }; groups.push(g); }
+      g.rows.push(b);
+    }
+    for (const g of groups) {
+      const h = document.createElement("div");
+      h.className = "keys-group";
+      h.textContent = g.name + (g.name === "Editing" ? " — in a document" : "");
+      body.appendChild(h);
+      for (const b of g.rows) body.appendChild(editableRow(b));
+    }
+    const fixed = [
+      { name: "In the file tree", rows: [
+        { keys: ["ArrowUp", "ArrowDown"], label: "Move between files" },
+        { keys: ["ArrowRight", "ArrowLeft"], label: "Open / close a folder" },
+        { keys: ["Enter"], label: "Open the file" },
+        { keys: ["F2"], label: "Rename" },
+        { keys: ["Delete"], label: "Delete" },
+        { keys: ["a…z"], label: "Jump to a name", hint: "type the first letters" },
+      ] },
+      { name: "Good to know", rows: [
+        { keys: [], label: "Right-click any file for rename, move, copy, download and permissions" },
+        { keys: [], label: "Right-click a folder to download the whole thing as a ZIP" },
+        { keys: [], label: "Drag a file onto a folder to move it; drop files onto a folder to upload" },
+        { keys: [], label: "Drag a file from the tree INTO an open document to link it",
+          hint: "images and video embed; everything else becomes a link you can click" },
+        { keys: [], label: "Drop a whole folder from your computer onto a folder — subfolders and all",
+          hint: "or right-click the folder → Upload folder" },
+        { keys: [], label: "In a terminal, Ctrl shortcuts go to the shell — the ones marked ⌨ still work there" },
+      ] },
+    ];
+    for (const g of fixed) {
+      const h = document.createElement("div");
+      h.className = "keys-group";
+      h.textContent = g.name;
+      body.appendChild(h);
+      for (const r of g.rows) {
+        const row = document.createElement("div");
+        row.className = "keys-row";
+        row.append(kbdRow(r.keys), label(r.label, r.hint));
+        body.appendChild(row);
       }
-      row.append(kk, lab);
-      card.appendChild(row);
     }
   }
+
+  function label(text, hint) {
+    const lab = document.createElement("span");
+    lab.className = "keys-label";
+    lab.textContent = text;
+    if (hint) {
+      const h = document.createElement("span");
+      h.className = "keys-hint";
+      h.textContent = hint;
+      lab.appendChild(h);
+    }
+    return lab;
+  }
+
+  function editableRow(b) {
+    const row = document.createElement("div");
+    row.className = "keys-row";
+    row.setAttribute("data-testid", "keys-row-" + b.id);
+    const keys = b.labelKeys || keysOf(b);
+    const fixedKey = b.id === "gototab";          // nine targets in one entry: not editable
+    let combo;
+    if (fixedKey) combo = kbdRow(keys);
+    else {
+      combo = document.createElement("button");
+      combo.type = "button";
+      combo.className = "keys-combo keys-edit";
+      combo.setAttribute("data-testid", "keys-edit-" + b.id);
+      combo.title = "Click, then press the new keys";
+      if (capture && capture.id === b.id && !capture.add) {
+        combo.classList.add("capturing");
+        combo.textContent = "Press keys… Esc cancels, ⌫ turns it off";
+      } else if (!keys.length) {
+        const none = document.createElement("span");
+        none.className = "keys-none"; none.textContent = "—";
+        combo.appendChild(none);
+      } else combo.append(...kbdRow(keys).childNodes);
+      combo.addEventListener("click", () => startCapture(b.id, false));
+    }
+    const tools = document.createElement("span");
+    tools.className = "keys-tools";
+    if (!fixedKey) {
+      const add = document.createElement("button");
+      add.type = "button"; add.className = "mini keys-add"; add.textContent = "+";
+      add.title = "Add another key for this";
+      add.setAttribute("data-testid", "keys-add-" + b.id);
+      if (capture && capture.id === b.id && capture.add) {
+        add.classList.add("capturing"); add.textContent = "Press keys…";
+      }
+      add.addEventListener("click", () => startCapture(b.id, true));
+      tools.appendChild(add);
+      if (keysOf(b).join(", ") !== b.keys.join(", ")) {
+        row.classList.add("changed");
+        const rs = document.createElement("button");
+        rs.type = "button"; rs.className = "mini keys-reset"; rs.textContent = "↺";
+        rs.title = "Back to " + (b.keys.length ? b.keys.map(comboLabel).join(" or ") : "no key");
+        rs.setAttribute("data-testid", "keys-reset-" + b.id);
+        rs.addEventListener("click", () => bindingsSave(b.id, null).then(fail));
+        tools.appendChild(rs);
+      }
+    }
+    if (!b.edit) {
+      const t = document.createElement("button");
+      const on = termOf(b);
+      t.type = "button"; t.className = "mini keys-term" + (on ? " on" : "");
+      t.textContent = "⌨";
+      t.title = on ? "Also works while a terminal has focus — click to leave the key to the shell"
+                   : "Goes to the shell while a terminal has focus — click to make it work there too";
+      t.setAttribute("aria-pressed", on ? "true" : "false");
+      t.setAttribute("data-testid", "keys-term-" + b.id);
+      t.addEventListener("click", () => terminalSave(b.id, !on).then(fail));
+      tools.appendChild(t);
+    }
+    row.append(combo, label(b.label, b.hint), tools);
+    return row;
+  }
+
+  function startCapture(id, add) {
+    capture = { id, add };
+    render();
+  }
+
+  async function finishCapture(combo) {
+    const { id, add } = capture;
+    capture = null;
+    const all = BINDINGS.concat(EDIT_BINDINGS);
+    const b = all.find((z) => z.id === id);
+    if (combo === "") { render(); return bindingsSave(id, add ? keysOf(b) : []).then(fail); }
+    const hasMod = /(^|\+)(Mod|Ctrl|Alt)\+/.test(combo) || /^(Shift\+)?F\d+$/.test(combo);
+    if (!hasMod) {
+      kbToast(comboLabel(combo) + " alone would fire while you type — add Ctrl, Alt or ⌘", "err");
+      render(); return;
+    }
+    if (RESERVED_COMBOS.has(combo) || (IS_APPLE && RESERVED_COMBOS.has(combo.replace(/^Ctrl\+/, "Mod+")))) {
+      kbToast("The browser keeps " + comboLabel(combo) + " for itself — pick another", "err");
+      render(); return;
+    }
+    // Same key, different command: the editing keys only fire in a document,
+    // but there they would shadow the app's, so treat any overlap as a clash.
+    const other = all.find((z) => z.id !== id && keysOf(z).includes(combo));
+    if (other) {
+      const move = await kbConfirm(`${comboLabel(combo)} is already “${other.label}”. Move it here?`,
+                                   { title: "Key in use", ok: "Move it" });
+      if (!move) { render(); return; }
+      const r = await bindingsSave(other.id, keysOf(other).filter((k) => k !== combo));
+      if (r && r.ok === false) { fail(r); render(); return; }
+    }
+    const next = add ? [...keysOf(b).filter((k) => k !== combo), combo].slice(-4) : [combo];
+    bindingsSave(id, next).then(fail);
+    render();
+  }
+
+  // Recording: window, capture phase, so nothing else — the dispatcher, the
+  // editor, dictation — sees the keys while one is being recorded.
+  const onRecord = (e) => {
+    if (!capture || document.querySelector(".dlg-overlay")) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (e.key === "Escape") { capture = null; render(); return; }
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+    if (plain && (e.key === "Backspace" || e.key === "Delete")) { finishCapture(""); return; }
+    const c = comboFromEvent(e);
+    if (c) finishCapture(c);
+  };
+  window.addEventListener("keydown", onRecord, true);
+  const unsub = [settings.subscribe("keys.bindings", () => { if (!capture) render(); }),
+                 settings.subscribe("keys.terminal", () => { if (!capture) render(); })];
+  resetAll.addEventListener("click", async () => {
+    if (!await kbConfirm("Put every shortcut back to the shipped keys?", { title: "Reset all", ok: "Reset" })) return;
+    for (const k of ["keys.bindings", "keys.terminal"]) {
+      if (settings.source(k) === "user") fail(await settings.unset(k));
+    }
+  });
+
+  render();
   ov.appendChild(card);
   document.body.appendChild(ov);
-  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey, true); };
-  const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } };
+  const close = () => {
+    ov.remove();
+    document.removeEventListener("keydown", onKey, true);
+    window.removeEventListener("keydown", onRecord, true);
+    unsub.forEach((u) => u());
+  };
+  const onKey = (e) => {
+    if (e.key !== "Escape" || capture || document.querySelector(".dlg-overlay")) return;
+    e.preventDefault(); e.stopPropagation(); close();
+  };
   document.addEventListener("keydown", onKey, true);
   x.addEventListener("click", close);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
