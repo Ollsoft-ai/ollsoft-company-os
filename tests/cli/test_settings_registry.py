@@ -96,3 +96,35 @@ def test_apply_change_and_dumps_round_trip():
     v = s.apply_change({"t.int": 2, "t.enum": "b"}, {"set": {"t.int": 4}, "unset": ["t.enum", "absent"]})
     assert v == {"t.int": 4}
     assert json.loads(s.dumps(v)) == v and s.dumps(v).endswith(b"\n")
+
+
+def test_shortcut_ids_match_the_apps_tables():
+    """keys.bindings may only name commands the app has, and must be able to
+    name every editable one: BINDINGS (minus gototab, nine keys in one entry)
+    and EDIT_BINDINGS in frontend/src/app.js."""
+    import importlib
+    import re
+    from pathlib import Path
+    live = importlib.reload(s)
+    src = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "app.js").read_text()
+
+    def ids(table):
+        body = src[src.index(f"const {table} = ["):]
+        body = body[:body.index("\n];") if table == "BINDINGS" else body.index("\n].map(")]
+        return re.findall(r'\{ id: "([a-z0-9]+)"', body)
+    assert set(live.APP_SHORTCUTS) == set(ids("BINDINGS")) - {"gototab"}
+    assert set(live.EDIT_SHORTCUTS) == set(ids("EDIT_BINDINGS"))
+    assert set(live.BY_KEY["keys.terminal"]["keys"]) == set(live.APP_SHORTCUTS)
+
+
+@pytest.mark.parametrize("value,ok", [
+    ("Mod+B", True), ("Mod+P, Mod+K", True), ("?, F1, Mod+Slash", True), ("", True),
+    ("Ctrl+Shift+Backquote", True), ("Alt+BracketRight", True), ("F9", True),
+    ("Mod+b", False), ("Mod+B,Mod+K", False), ("Mod+B; rm -rf", False),
+    ("Mod+B, Mod+C, Mod+D, Mod+E, Mod+F", False),
+])
+def test_shortcut_values(value, ok):
+    import importlib
+    live = importlib.reload(s)
+    clean, why = live.validate_value("keys.bindings", {"bold": value})
+    assert (why is None) == ok, why

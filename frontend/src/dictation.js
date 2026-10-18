@@ -702,6 +702,7 @@ export function initDictation(h) {
   // sheet, offers it in the palette, and tells xterm to yield it instead of
   // sending \x1b[20~ to the shell.
   window.addEventListener("keydown", (e) => {
+    if (document.querySelector(".keys-card .capturing")) return;  // recording a shortcut
     if (!isDictateKey(e)) return;
     e.preventDefault();
     if (e.repeat || keyDown) return;     // OS auto-repeat, not a new press
@@ -793,7 +794,11 @@ export function initDictation(h) {
 // under a modifier or a Czech/Dvorak layout, and comparing `key` between keydown
 // and keyup is the classic stuck-recording bug.
 export const DICTATE_CODES = ["F9"];
-function isDictateKey(e) {
+function defaultDictateKey(e) {
   if (DICTATE_CODES.includes(e.code)) return !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
   return e.code === "KeyK" && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
 }
+// The keys are editable (the shortcut sheet): app.js hands in a matcher for
+// whatever the person bound "dictate" to.
+let isDictateKey = defaultDictateKey;
+export function setDictateMatcher(fn) { isDictateKey = fn || defaultDictateKey; }
