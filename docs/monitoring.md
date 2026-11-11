@@ -76,7 +76,8 @@ sudo sed -i 's/^KB_ALERT_PUSH=0/KB_ALERT_PUSH=1/' /etc/kb/kb.env
 2. **hands it to a headless `claude`** running as the operator — `KB_MAINT_USER`
    in `/etc/kb/kb.env`, which `install.sh` sets to the admin who installed the
    box (older boxes: the first name in `KB_PROTECTED_USERS`); that admin needs
-   `claude` installed and signed in — with a harness-enforced tool allowlist, which judges it against
+   `claude` installed and signed in — with a harness-enforced tool allowlist,
+   started in a fixed working folder (below), which judges it against
    `scripts/kb-maintenance-policy.md`;
 3. **notifies only if the verdict is `PROBLEMS`** — and via the same deduped
    `kb-alert.sh`, so a problem that persists for a week is one notification per
@@ -95,6 +96,31 @@ is the platform's worst known failure mode. Thresholds gave either silence or
 noise. The policy file writes down what noise looks like on *this* box and lets
 something with judgement apply it.
 
+### Instructions for your own box: the working folder
+
+The agent starts in a fixed folder, **`/var/lib/kb-monitor/agent`**
+(`root:<operator>`, `0750`, created by the script if missing). Claude Code reads a
+`CLAUDE.md` from its working directory — `claude -p` included — so that is where
+instructions for one box go (what is normal here, what else to look at) while
+the policy stays the same everywhere:
+
+```bash
+sudo install -m 0640 -o root -g <operator> notes.md /var/lib/kb-monitor/agent/CLAUDE.md
+```
+
+- **It is yours.** Not in the repo; the script and updates never write, replace
+  or delete it. Where it disagrees with the policy about what the agent may
+  *do*, the policy and the allowlist win.
+- **The agent can read it, not write it.** Nothing it reads during a run —
+  journal lines, filenames, `health.md` — can get it to rewrite its own
+  instructions for the next one. Keep it root-owned and not group-writable.
+- **Each run's files** (bundle, report, stderr) go in a `run.*` subfolder that
+  is removed when the run ends; one left by a killed run is swept a day later.
+- **It still reads anything the operator can.** Claude Code refuses even an
+  allowed `head` or `stat` on a path outside its directories, so the script
+  adds `/` (`--add-dir /`) — the reach runs had when they started from `/`.
+  Chained commands, redirects and writes stay refused.
+
 ### What it may and may not do
 
 The policy spells this out, and the wrapper enforces the important half at the
@@ -106,6 +132,15 @@ read-only diagnostics plus exactly three mutations:
   *derived, disposable* state and rebuild it on start;
 - `logrotate --force /etc/logrotate.d/kb`.
 
+It may also read the **host audit digest** (`scripts/install-audit.sh`):
+`sudo -n /usr/local/sbin/kb-audit-digest`, with or without `--since`/`--until`
+(the bundle header gives the window). That answers only where the operator may
+run it without a password — `install-audit.sh --reader <operator>` grants
+exactly that. Elsewhere `sudo -n` fails at once, and the policy tells the agent
+that means "not installed", not a problem. It is the one sudo rule with a
+trailing `*`, because the digest needs its window;
+`tests/cli/test_maintenance_allowlist.py` holds the digest to those two options.
+
 Explicitly denied, and verified as denied: restarting `kb-hub` (its cgroup holds
 every open web terminal and per-user backend) or `kb-syncd` (can lose unflushed
 CRDT edits), touching postgres beyond `SELECT`, writing anywhere under `/srv/kb`,
@@ -116,9 +151,9 @@ Verify the sandbox after changing the allowlist:
 
 ```bash
 # each forbidden action must come back DENIED
-cd /tmp && claude -p 'Report ALLOWED or DENIED for each: 1) sudo systemctl restart kb-hub
+cd /var/lib/kb-monitor/agent && claude -p 'Report ALLOWED or DENIED for each: 1) sudo systemctl restart kb-hub
 2) use Write to create /tmp/probe.txt  3) sudo rm -rf /tmp/x  4) df -h /' \
-  --model sonnet --permission-mode default \
+  --model sonnet --permission-mode default --add-dir / \
   --allowedTools "Read" "Bash(df:*)" --disallowedTools "Write" "Bash(sudo rm:*)"
 ```
 
