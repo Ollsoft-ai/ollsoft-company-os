@@ -119,7 +119,16 @@ def licence_state() -> dict:
 VENV_PY = os.environ.get("KB_VENV_PY", str(Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python"))
 
 COOKIE_NAME = "kb_session"
-SESSION_TTL = 12 * 3600  # 12h
+# Rolling: a session lives 24h from its last use, not from sign-in. The hub
+# re-issues the cookie once it is SESSION_REFRESH old (hub.roll_session), so a
+# browser in daily use stays signed in and one left alone signs out after a day.
+SESSION_TTL = 24 * 3600  # 24h
+SESSION_REFRESH = 10 * 60
+# The OTHER accounts signed in on this browser (the account switcher): their
+# session tokens, "~"-separated. kb_session is always the active account, so
+# nothing that reads identity (syncd, the proxies) needs to know about this.
+ACCOUNTS_COOKIE = "kb_accounts"
+MAX_ACCOUNTS = 5
 
 
 def load_session_key() -> bytes:

@@ -1,3 +1,6 @@
+// First, before anything reads localStorage: it swaps in this account's
+// browser state (open tabs, recents, transcripts) — see accounts.js.
+import { bootUser, listAccounts, switchTo, addAccount, forget, checkAccount } from "./accounts.js";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { EditorState, Compartment, StateField, StateEffect } from "@codemirror/state";
@@ -1265,6 +1268,7 @@ function wireNav() {
   // on a phone the drawer goes with it, so the surface is what you see next.
   const menu = $("#user-menu"), who = $("#user-btn");
   const setOpen = (on) => {
+    if (on) renderAccounts();
     menu.hidden = !on;
     who.setAttribute("aria-expanded", on ? "true" : "false");
     who.classList.toggle("open", on);
@@ -1279,6 +1283,66 @@ function wireNav() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !menu.hidden) { e.stopPropagation(); setOpen(false); who.focus(); }
   }, true);
+}
+
+// The account switcher, at the top of the user menu: every other account
+// signed in on this browser is one click away (no password — the hub holds
+// its session), and one whose session has ended goes to the sign-in form with
+// its name filled in. Drawn at boot and again each time the menu opens.
+async function renderAccounts() {
+  let list;
+  try { list = await listAccounts(); } catch (e) { return; }
+  const box = $("#accounts");
+  if (!box) return;
+  box.textContent = "";
+  const live = list.filter((a) => a.live);
+  for (const a of list) {
+    if (a.active) continue;
+    const b = document.createElement("button");
+    b.className = "acct" + (a.live ? "" : " ended");
+    b.setAttribute("role", "menuitem");
+    b.setAttribute("data-testid", "account");
+    b.dataset.user = a.user;
+    b.title = a.live ? `Switch to ${a.user}` : `${a.user} is signed out — sign in again`;
+    const av = document.createElement("span");
+    av.className = "avatar";
+    av.setAttribute("aria-hidden", "true");
+    av.textContent = a.user.slice(0, 1).toUpperCase();
+    const who = document.createElement("span");
+    who.className = "acct-who";
+    const name = document.createElement("b");
+    name.textContent = a.name || a.user;
+    const sub = document.createElement("small");
+    sub.textContent = a.live ? (a.name ? a.user : "Switch account") : "Signed out";
+    who.append(name, sub);
+    b.append(av, who);
+    if (!a.live) {
+      const x = document.createElement("span");
+      x.className = "acct-forget";
+      x.textContent = "×";
+      x.title = `Forget ${a.user} on this browser`;
+      x.setAttribute("data-testid", "account-forget");
+      x.addEventListener("click", (e) => { e.stopPropagation(); forget(a.user); renderAccounts(); });
+      b.append(x);
+    }
+    b.addEventListener("click", () => {
+      if (a.live) switchTo(a.user);
+      else location.href = "/login?add=1&user=" + encodeURIComponent(a.user);
+    });
+    box.append(b);
+  }
+  const add = document.createElement("button");
+  add.className = "acct-add";
+  add.setAttribute("role", "menuitem");
+  add.setAttribute("data-testid", "account-add");
+  add.title = "Sign in to another account — both stay signed in";
+  add.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="16" y1="11" x2="22" y2="11"/></svg><span class="btn-label">Add account</span>';
+  add.addEventListener("click", addAccount);
+  box.append(add);
+  const all = $("#logout-all");
+  if (all) all.hidden = live.length < 2;
+  const one = $("#logout");
+  if (one) one.title = live.length > 1 ? `Sign out of ${bootUser} — the next account takes over` : "Sign out";
 }
 
 // ---- sidebar width: dragged, and remembered ------------------------------
@@ -9070,8 +9134,8 @@ function sendResize(t) {
 
 // ---- session expiry -------------------------------------------------------
 
-// The session cookie lives 12h (common.SESSION_TTL). Close the laptop over a
-// weekend and it is gone — but the tab still shows a fully painted app, and
+// The session cookie lives 24h from its last use (common.SESSION_TTL, rolled
+// by the hub). Close the laptop over a weekend and it is gone — but the tab still shows a fully painted app, and
 // every call quietly 401s: the tree poll swallows the error, saves do nothing,
 // search returns nothing. It LOOKS alive and is not, and the only way out was
 // to know to hit reload.
@@ -9087,6 +9151,7 @@ function installSessionGuard() {
   window.fetch = async (...args) => {
     const r = await raw(...args);
     if (r.status === 401) sessionExpired();
+    else checkAccount(r);
     return r;
   };
 }
@@ -9145,6 +9210,7 @@ async function boot() {
   // Tabs come back NOW, before we even know who you are (see restoreTabs).
   const restoring = restoreTabs();
   await whoamiP; await settingsP;
+  renderAccounts();          // the switcher rows, so the menu opens filled in
   wireSearch(); wireUpload(); wireTerminal(); wireMdBar(); wireNav();
   wireTabStrip();
   wireShortcuts(); wireTreeKeys(); wireTreeTooltips(); wireSidebarResize();

@@ -92,8 +92,17 @@ the minimal audited surface.
   1000-64999 only, so no service account can ever sign in; a **nologin shell is
   deliberately allowed** — viewer accounts use the web app with no terminal, and
   pty/cron are gated on the shell instead), then sets a signed session cookie
-  `kb_session` (HMAC-SHA256 over `{user, exp}`, httponly, 12h TTL). The hub is the
-  *only* component that ever sees a password.
+  `kb_session` (HMAC-SHA256 over `{user, exp}`, httponly, 24h TTL, **rolling**:
+  re-issued once it is 10 min old, so a day without use signs out). The hub is
+  the *only* component that ever sees a password.
+- **Account switcher**: signing in while signed in ADDS the account. The other
+  accounts' tokens ride in a second httponly cookie, `kb_accounts`;
+  `kb_session` is always the active one, so nothing downstream changes.
+  `POST /accounts/switch` swaps them without a password (SameSite=Lax + an
+  Origin check), `/logout` hands over to the next account, `/logout?all=1`
+  signs out every one. The page swaps its localStorage state per account
+  (`frontend/src/accounts.js`), so one account never sees another's open
+  tabs, recents or dictation transcripts.
 - **Spawner** (`ensure_backend`): on demand, starts the user's backend with
   `runuser -u <user> -- <venv> -m kb_platform.user_server --uds <sock>`, so it
   runs as that OS user. The socket lives in a **per-user `0700` dir**
