@@ -258,7 +258,9 @@ Only with provider keys installed ([semantic-search.md](semantic-search.md)).
   before exposing it; the app assumes it isn't directly internet-facing.
 - **Stateless logout.** The session cookie is valid until its TTL; logout clears
   the browser cookie but can't revoke a captured token early. Add a server-side
-  session store / token version if you need instant revocation.
+  session store / token version if you need instant revocation. The TTL rolls
+  (24h from last use), and the account switcher keeps up to 5 accounts' tokens
+  in one browser — a stolen cookie jar carries all of them.
 - **Artifacts are author-trusted.** Contained against the system and other users,
   but an artifact you open runs code with *your* authority (read/write within your
   own permissions, folder-scoped). Only open artifacts from people you'd trust

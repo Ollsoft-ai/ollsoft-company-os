@@ -79,6 +79,9 @@
       <div class="sb-foot">
         <nav id="user-menu" class="user-menu" data-testid="user-menu" role="menu" hidden>
           <div class="menu-id"><span id="whoami" data-testid="whoami" title="Everything here runs as your OS account">…</span></div>
+          <!-- the other accounts signed in on this browser (accounts.js); one
+               click switches, no password -->
+          <div id="accounts" class="menu-accounts" data-testid="accounts" role="group" aria-label="Switch account"></div>
           <button id="settings-btn" data-testid="settings-btn" role="menuitem"
                   title="Settings — theme and preferences"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span class="btn-label">Settings</span></button>
           <button id="pins-btn" data-testid="pins-btn" role="menuitem"
@@ -97,7 +100,9 @@
                   title="Dictation history — every transcript from the last 24 hours, kept in this browser, ready to copy"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg><span class="btn-label">Dictation history</span></button>
           <button id="keys-btn" data-testid="keys-btn" role="menuitem"
                   title="Keyboard shortcuts (?)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.6-2.8 2.6"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span class="btn-label">Keyboard shortcuts</span></button>
-          <a href="/logout" class="logout" role="menuitem" title="Sign out"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3.5" y2="12"/></svg><span class="btn-label">Sign out</span></a>
+          <a href="/logout" id="logout" class="logout" data-testid="logout" role="menuitem" title="Sign out"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3.5" y2="12"/></svg><span class="btn-label">Sign out</span></a>
+          <a href="/logout?all=1" id="logout-all" class="logout logout-all" data-testid="logout-all" role="menuitem" hidden
+             title="Sign out of every account on this browser"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3.5" y2="12"/></svg><span class="btn-label">Sign out of all accounts</span></a>
         </nav>
         <button id="user-btn" class="user-btn" data-testid="user-btn" aria-haspopup="menu" aria-expanded="false"
                 aria-controls="user-menu" title="You — settings, tools, sign out">

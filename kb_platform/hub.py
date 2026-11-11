@@ -1487,10 +1487,23 @@ class Hub:
         data = await request.post()
         user = str(data.get("username", "")).strip()
         pw = str(data.get("password", ""))
+        # The page signs in with fetch and gets JSON. A plain form POST (no
+        # script, or a password manager submitting the form itself) navigates,
+        # and must get a page back, not a JSON body: redirect it instead.
+        native = (request.headers.get("Sec-Fetch-Mode") == "navigate"
+                  or "text/html" in request.headers.get("Accept", ""))
+        if native:
+            nxt = str(data.get("next", "/"))
+            nxt = nxt if (nxt.startswith("/") and not nxt.startswith("//")
+                          and "\\" not in nxt) else "/"
+            back = lambda err: web.HTTPSeeOther("/login?" + urllib.parse.urlencode(
+                {"error": err, "user": user, **({"next": nxt} if nxt != "/" else {})}))
         now = time.monotonic()
         keys = _login_keys(request, user)
         wait = self._throttle.retry_after(keys, now)
         if wait:
+            if native:
+                return back("locked")
             # Deliberately the same message whether the account or the source is
             # locked: telling an attacker WHICH one tripped tells them whether
             # the username exists.
@@ -1506,32 +1519,150 @@ class Hub:
             # first LOGIN_MAX_FAILS guesses are free and as fast as the network.
             await asyncio.sleep(LOGIN_FAIL_DELAY)
             _audit("login", user, ok=False, source=_login_source(request))
+            if native:
+                return back("invalid")
             return web.json_response({"error": "invalid credentials"}, status=401)
         self._throttle.clear(keys)
         _audit("login", user, source=_login_source(request))
-        tok = common.make_token(self.key, {"user": user})
-        resp = web.json_response({"ok": True, "user": user})
-        resp.set_cookie(common.COOKIE_NAME, tok, httponly=True, samesite="Lax",
-                        max_age=common.SESSION_TTL, path="/")
+        # Signing in while another account is signed in ADDS this one: the
+        # previous active account moves to the switcher instead of being lost.
+        active, others = self._signed_in(request)
+        keep = [t for u, t in ([active] if active else []) + others if u != user]
+        resp = web.HTTPSeeOther(nxt) if native else web.json_response({"ok": True, "user": user})
+        self._store_sessions(resp, common.make_token(self.key, {"user": user}), keep)
+        return resp
+
+    # --- signed-in accounts (the switcher) ----------------------------------
+    def _signed_in(self, request: web.Request):
+        """(active, others): the active account as (user, token) or None, and
+        every OTHER account still signed in on this browser, newest first.
+        Expired, forged and duplicate entries simply drop out."""
+        active = None
+        tok = request.cookies.get(common.COOKIE_NAME, "")
+        body = common.read_token(self.key, tok) if tok else None
+        if body and body.get("user"):
+            active = (body["user"], tok)
+        seen = {active[0]} if active else set()
+        others = []
+        for t in request.cookies.get(common.ACCOUNTS_COOKIE, "").split("~"):
+            b = common.read_token(self.key, t) if t else None
+            u = b.get("user") if b else None
+            if u and u not in seen:
+                seen.add(u)
+                others.append((u, t))
+        return active, others[:common.MAX_ACCOUNTS - 1]
+
+    def _store_sessions(self, resp: web.StreamResponse, active: str | None,
+                        others: list[str]) -> None:
+        """Write both cookies: the active session, and the others for the switcher."""
+        opts = dict(httponly=True, samesite="Lax", max_age=common.SESSION_TTL, path="/")
+        if active:
+            resp.set_cookie(common.COOKIE_NAME, active, **opts)
+        else:
+            resp.del_cookie(common.COOKIE_NAME, path="/")
+        others = others[:common.MAX_ACCOUNTS - 1]
+        if others:
+            resp.set_cookie(common.ACCOUNTS_COOKIE, "~".join(others), **opts)
+        else:
+            resp.del_cookie(common.ACCOUNTS_COOKIE, path="/")
+
+    def roll_session(self, request: web.Request, resp: web.StreamResponse) -> None:
+        """Rolling expiry: once the active session is SESSION_REFRESH old, issue
+        every signed-in account a fresh SESSION_TTL — so a day without use, not
+        a day since sign-in, is what signs a browser out. Also names the active
+        account on the response, so a tab that was opened as someone else (the
+        account was switched in another tab) notices and reloads."""
+        if resp.prepared or common.COOKIE_NAME in resp.cookies:
+            return
+        active, others = self._signed_in(request)
+        if not active:
+            return
+        resp.headers["X-KB-Account"] = active[0]
+        body = common.read_token(self.key, active[1]) or {}
+        if body.get("exp", 0) - time.time() > common.SESSION_TTL - common.SESSION_REFRESH:
+            return
+        self._store_sessions(resp, common.make_token(self.key, {"user": active[0]}),
+                             [common.make_token(self.key, {"user": u}) for u, _ in others])
+
+    async def accounts_list(self, request: web.Request) -> web.Response:
+        active, others = self._signed_in(request)
+        if not active:
+            return web.json_response({"error": "unauthenticated"}, status=401)
+        profs = _profiles_load()
+
+        def row(u: str, is_active: bool) -> dict:
+            p = profs.get(u) or {}
+            name = f"{p.get('first', '')} {p.get('last', '')}".strip()
+            return {"user": u, "name": name, "active": is_active}
+        return web.json_response({"active": active[0],
+                                  "accounts": [row(active[0], True)]
+                                  + [row(u, False) for u, _ in others]})
+
+    async def accounts_switch(self, request: web.Request) -> web.Response:
+        """Make another signed-in account the active one, no password: it IS
+        signed in on this browser already. SameSite=Lax keeps a cross-site POST
+        from carrying either cookie; the Origin check is the second lock."""
+        origin = request.headers.get("Origin")
+        if origin and urllib.parse.urlsplit(origin).netloc != request.host:
+            return web.json_response({"error": "cross-origin"}, status=403)
+        d = await _body(request)
+        want = str(d.get("user", "")).strip() if isinstance(d, dict) else ""
+        active, others = self._signed_in(request)
+        target = next((t for u, t in others if u == want), None)
+        if not target:
+            return web.json_response({"error": "that account is not signed in here"}, status=404)
+        try:
+            pwd.getpwnam(want)
+        except KeyError:
+            return web.json_response({"error": "no such account"}, status=404)
+        rest = ([active[1]] if active else []) + [t for u, t in others if u != want]
+        _audit("account.switch", active[0] if active else "", target=want)
+        resp = web.json_response({"ok": True, "user": want})
+        self._store_sessions(resp, common.make_token(self.key, {"user": want}), rest)
         return resp
 
     async def do_logout(self, request: web.Request) -> web.Response:
-        resp = web.HTTPFound("/login")
-        resp.del_cookie(common.COOKIE_NAME, path="/")
+        """Sign out the ACTIVE account; another one signed in on this browser
+        takes its place. ?all=1 signs out every account."""
+        active, others = self._signed_in(request)
+        if request.query.get("all") or not others:
+            resp = web.HTTPFound("/login")
+            self._store_sessions(resp, None, [])
+            return resp
+        resp = web.HTTPFound("/")
+        self._store_sessions(resp, common.make_token(self.key, {"user": others[0][0]}),
+                             [t for _, t in others[1:]])
         return resp
 
+    _shell_cache: tuple[float, str] = (0.0, "")
+
+    def _app_shell(self, user: str) -> web.Response:
+        """app.html with the signed-in account named in a <meta>, so the page
+        knows whose browser state to load before its first request answers."""
+        p = STATIC_DIR / "app.html"
+        mtime = p.stat().st_mtime
+        if self._shell_cache[0] != mtime:
+            self._shell_cache = (mtime, p.read_text())
+        esc = user.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+        html = self._shell_cache[1].replace(
+            '<meta charset="utf-8" />',
+            f'<meta charset="utf-8" />\n  <meta name="kb-user" content="{esc}" />', 1)
+        return web.Response(text=html, content_type="text/html", headers=self.NO_STORE)
+
     async def index(self, request: web.Request) -> web.Response:
-        if not self.current_user(request):
+        user = self.current_user(request)
+        if not user:
             raise web.HTTPFound("/login")
-        return web.FileResponse(STATIC_DIR / "app.html", headers=self.NO_STORE)
+        return self._app_shell(user)
 
     async def deep_link(self, request: web.Request) -> web.Response:
         """Repo paths ARE routes: /company/notes.md serves the app, which opens
         that file — so a document's URL can be pasted straight to a colleague.
         Unauthenticated visitors go through login and land on the file after."""
-        if not self.current_user(request):
+        user = self.current_user(request)
+        if not user:
             raise web.HTTPFound("/login?next=" + urllib.parse.quote(request.rel_url.raw_path))
-        return web.FileResponse(STATIC_DIR / "app.html", headers=self.NO_STORE)
+        return self._app_shell(user)
 
     async def abs_deep_link(self, request: web.Request) -> web.Response:
         """The same document, addressed the way an agent writes it.
@@ -3173,6 +3304,16 @@ async def static_cache(request: web.Request, handler):
     return resp
 
 
+@web.middleware
+async def session_roll(request: web.Request, handler):
+    resp = await handler(request)
+    try:
+        request.app["hub"].roll_session(request, resp)
+    except Exception:            # never let the refresh break the answer itself
+        log.exception("session roll failed")
+    return resp
+
+
 def make_app() -> web.Application:
     # client_max_size must match the per-user backend (2 GiB): the hub both
     # accepts /fs/upload directly AND buffers proxied /api/upload bodies, so
@@ -3193,11 +3334,13 @@ def make_app() -> web.Application:
     except OSError:
         pass
     app = web.Application(client_max_size=2 * 1024 * 1024 * 1024,
-                          middlewares=[static_cache])
+                          middlewares=[static_cache, session_roll])
     app["hub"] = hub
     app.router.add_get("/login", hub.login_page)
     app.router.add_post("/login", hub.do_login)
     app.router.add_get("/logout", hub.do_logout)
+    app.router.add_get("/accounts", hub.accounts_list)
+    app.router.add_post("/accounts/switch", hub.accounts_switch)
     app.router.add_get("/", hub.index)
     # Deep links: repo paths serve the app (which opens the file client-side).
     # The pattern is anchored to the three top-level areas, so it can never
