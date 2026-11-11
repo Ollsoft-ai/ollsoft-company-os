@@ -2,6 +2,12 @@
 
 What changed in each release of Ollsoft Company OS, newest first. `scripts/release.sh` writes each section from the commit titles since the previous release (`scripts/changelog.sh`); Settings → About shows this file. Fix a line that reads badly right here — a section is written once and never regenerated.
 
+## 1.4.0 — 2026-11-11
+
+- Switch accounts in one click, stay signed in longer, and sign in with a password manager
+- Change any keyboard shortcut from the shortcut sheet, saved to your own settings
+- Let the daily health check take instructions for your own box and read the audit digest
+
 ## 1.3.0 — 2026-10-18
 
 - Show the running version and every release's changes in Settings → About
