@@ -74,10 +74,29 @@ SINCE=$(cat "$LAST_RUN_STAMP" 2>/dev/null || echo "")
 [ -n "$SINCE" ] || SINCE=$(date -d '24 hours ago' +%s 2>/dev/null || echo 0)
 SINCE_ISO=$(date -d "@$SINCE" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "24 hours ago")
 
-WORK=$(mktemp -d /tmp/kb-maint-XXXXXX)
-# The agent runs as $OPERATOR and must traverse this dir, but the bundle holds
+# The agent's working directory is a FIXED folder, not a fresh temp dir: Claude
+# Code reads CLAUDE.md from its working directory, so this is where an operator
+# puts instructions for their own box (what else to check, what is normal here)
+# while the policy stays the same everywhere. That file is the operator's: not
+# in the repo, and never written, replaced or deleted by this script.
+# root:<operator> 0750 — the agent can read the folder but not write it, so
+# nothing it reads during a run (journal lines, filenames, health.md) can get it
+# to rewrite its own instructions for the next one.
+AGENT_DIR="$STATE_DIR/agent"
+mkdir -p "$AGENT_DIR" 2>/dev/null || true
+chown "root:$OPERATOR" "$AGENT_DIR" 2>/dev/null || true
+chmod 750 "$AGENT_DIR" 2>/dev/null || true
+
+# This run's files (bundle, report, agent.err) go in a subfolder that is removed
+# on exit. The agent runs as $OPERATOR and must traverse it, but the bundle holds
 # journal lines, Postgres output and document text from across the whole box —
 # 755 published all of it to every local account for the length of the run.
+# A run killed too hard for the trap leaves its folder behind; the next run
+# sweeps those once they are a day old.
+find "$AGENT_DIR" -mindepth 1 -maxdepth 1 -type d -name 'run.*' -mmin +1440 \
+  -exec rm -rf {} + 2>/dev/null || true
+WORK=$(mktemp -d "$AGENT_DIR/run.XXXXXX") \
+  || { echo "kb-maintenance: cannot create a run folder in $AGENT_DIR" >&2; exit 1; }
 chown "root:$OPERATOR" "$WORK" 2>/dev/null || true
 chmod 750 "$WORK"
 BUNDLE="$WORK/bundle.md"
@@ -91,6 +110,7 @@ trap 'rm -rf "$WORK"' EXIT
   echo
   echo "Generated: $(date -Is)   Host: $(hostname)"
   echo "Window under review: since $SINCE_ISO"
+  echo "Audit digest window: --since $(date -d "@$SINCE" -Iseconds) --until $(date -Iseconds)"
   echo
   echo "## Services"
   echo '```'
@@ -344,6 +364,19 @@ LOG_READS=()
 for f in alerts maintenance egress stt; do
   LOG_READS+=("Bash(sudo cat $LOG_DIR/$f.log)")
 done
+# The host audit digest (scripts/kb-audit-digest), read-only: who was refused
+# what, who touched someone else's folder or security config. It answers only
+# where the operator may run it without a password (what `install-audit.sh
+# --reader <operator>` grants); elsewhere `sudo -n` fails at once, and the
+# policy says that means "not installed", not a problem.
+# The one sudo rule with a `*`, because the digest needs its window: a fixed,
+# root-owned program whose only options are --since and --until, parsed by
+# argparse and passed to ausearch as a list — no shell, no output file
+# (tests/cli/test_maintenance_allowlist.py holds it to that).
+AUDIT_DIGEST=(
+  "Bash(sudo -n /usr/local/sbin/kb-audit-digest)"
+  "Bash(sudo -n /usr/local/sbin/kb-audit-digest:*)"
+)
 TOOLS=(
   "Read" "Grep" "Glob"
   "Bash(systemctl status:*)" "Bash(systemctl show:*)" "Bash(systemctl is-active:*)"
@@ -358,7 +391,7 @@ TOOLS=(
   # general command-execution primitives, and this agent is fed attacker-writable
   # text (health.md, filenames, journal lines). Read/Grep/Glob cover the same need
   # without a shell. Do not re-add them.
-  "Bash(wc:*)" "Bash(stat:*)" "${LOG_READS[@]}"
+  "Bash(wc:*)" "Bash(stat:*)" "${LOG_READS[@]}" "${AUDIT_DIGEST[@]}"
   # git log/diff/status removed 2026-10-03: both take --output=<file>.
   # curl removed 2026-10-03: a `*` anywhere but at the end of a rule matches
   # whole argument lists, and curl's -w can write files. The bundle carries the
@@ -390,7 +423,7 @@ if [ "$DRY_RUN" = 1 ]; then
   ALLOWED=("Read" "Grep" "Glob" "Bash(systemctl status:*)" "Bash(systemctl show:*)"
            "Bash(systemctl is-active:*)" "Bash(journalctl:*)"
            "Bash(df:*)" "Bash(free:*)" "Bash(ls:*)"
-           "Bash(head:*)" "Bash(tail:*)" "${LOG_READS[@]}")
+           "Bash(head:*)" "Bash(tail:*)" "${LOG_READS[@]}" "${AUDIT_DIGEST[@]}")
 else
   ALLOWED=("${TOOLS[@]}")
 fi
@@ -410,7 +443,15 @@ else
   for g in $(id -Gn "$OPERATOR") $(getent group systemd-journal >/dev/null && echo systemd-journal); do
     SUPP+=(-G "$g")
   done
-  runuser -u "$OPERATOR" -g "$(id -gn "$OPERATOR")" "${SUPP[@]}" -- env \
+  # Started from the fixed folder, so it is the agent's working directory (and
+  # Claude Code's project): that is what loads the operator's CLAUDE.md. A
+  # subshell, so a folder that cannot be entered fails this run loudly (exit 1,
+  # reason in agent.err) instead of quietly starting the agent from /.
+  # --add-dir /: Claude Code refuses even an allowed `head`, `stat` or `wc` on
+  # a path outside its directories. Runs used to start from / (systemd's
+  # default) and could read anything the operator can; this keeps exactly that
+  # reach and nothing more — chains, redirects and writes stay refused.
+  ( cd "$AGENT_DIR" && exec runuser -u "$OPERATOR" -g "$(id -gn "$OPERATOR")" "${SUPP[@]}" -- env \
       HOME="$(getent passwd "$OPERATOR" | cut -d: -f6)" \
       KB_MAINT=1 \
       timeout "$BUDGET" "$CLAUDE_BIN" -p "$PROMPT" \
@@ -418,8 +459,8 @@ else
         --permission-mode default \
         --allowedTools "${ALLOWED[@]}" \
         --disallowedTools "${BANNED[@]}" \
-        --add-dir "$WORK" --add-dir "$SELF_DIR" \
-      > "$REPORT" 2> "$WORK/agent.err"
+        --add-dir /
+  ) > "$REPORT" 2> "$WORK/agent.err"
   rc=$?
 fi
 
