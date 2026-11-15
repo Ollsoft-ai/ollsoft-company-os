@@ -192,7 +192,8 @@ def test_the_ui_moves_to_the_trash_with_an_undo_and_restores_from_the_view(brows
         assert AREA in row.text_content()                             # the folder it sat in
         row.locator('[data-testid="trash-restore"]').click()
         page.wait_for_selector(f'.tree-item[data-path="{doc(name)}"]', timeout=10000)
-        assert row.count() == 0, "the entry leaves the list once it is back"
+        # the list repaints on its own fetch, just after the tree
+        row.wait_for(state="detached", timeout=8000)   # the entry leaves the list once it is back
     finally:
         c.post("/api/fs/delete", json={"path": doc(name), "permanent": True})
         ctx.close()

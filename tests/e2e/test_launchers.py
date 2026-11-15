@@ -220,7 +220,8 @@ def test_an_admin_promotes_a_pin_to_the_whole_company_and_back(browser):
         page.wait_for_selector('[data-testid="ctx-menu"]')
         page.click('.ctx-item:has-text("Pin for everyone")')
         page.wait_for_selector(f'#pins .pin-row.company:has-text("{label}")', timeout=8000)
-        assert page.locator(f'#pins .pin-row.mine:has-text("{label}")').count() == 0
+        # two writes, destination first: the personal row goes with the second
+        page.locator(f'#pins .pin-row.mine:has-text("{label}")').wait_for(state="detached", timeout=8000)
         assert any(b["label"] == label for b in api("bob").get("/api/launchers").json()["company"])
         # …and back again
         page.locator(f'#pins .pin-row.company:has-text("{label}")').click(button="right")

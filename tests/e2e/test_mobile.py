@@ -117,7 +117,7 @@ def test_user_menu_holds_the_actions(browser):
     user_menu(page)
     assert menu.is_visible()
     assert page.locator("#cron-btn").is_visible()
-    assert page.locator(".logout").is_visible()
+    assert page.locator('[data-testid="logout"]').is_visible()   # "sign out of all" is the other .logout
     assert "alice" in page.inner_text("#whoami")          # identity heads the menu
     page.click("#cron-btn")                               # choosing an action closes the menu
     page.wait_for_selector('[data-testid="cron-jobs"]')

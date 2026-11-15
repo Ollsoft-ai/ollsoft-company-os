@@ -278,7 +278,9 @@ def test_plain_external_rewrite_still_syncs(browser, doc):
 # ---- the audience has to survive a flush ------------------------------------
 def _facl(path) -> str:
     import subprocess
-    return subprocess.run(["sudo", "getfacl", "-p", "-c", str(path)],
+    # alice owns the file, so she can read its ACL herself; the suite runs
+    # without sudo in CI, where `sudo getfacl` printed nothing at all
+    return subprocess.run(["getfacl", "-p", "-c", str(path)],
                           capture_output=True, text=True).stdout
 
 

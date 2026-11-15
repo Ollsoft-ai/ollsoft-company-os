@@ -49,9 +49,13 @@ def test_typing_asks_without_final_and_a_pause_asks_once_with_it(browser):
         box = page.locator('[data-testid="palette-input"]')
         # page.wait_for_timeout, not time.sleep: the sync API delivers the
         # request events only while it is pumping its own loop
+        # A typist: keys 120 ms apart, a beat between words — longer than the
+        # 180 ms the palette waits before it searches, well under the 700 ms
+        # pause that asks for the rerank. Keys alone (120 ms plus the press)
+        # came in under 180 ms on a fast runner, so nothing was ever asked.
         for ch in "how this knowledgebase works":
             box.press(ch if ch != " " else "Space")
-            page.wait_for_timeout(120)          # a typist: well under the 700 ms pause
+            page.wait_for_timeout(350 if ch == " " else 120)
         assert not [u for u in asked if "final=1" in u], "a keystroke asked for a rerank"
         assert asked, "typing searched the documents"
         page.wait_for_timeout(1500)             # the pause

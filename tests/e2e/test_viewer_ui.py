@@ -50,6 +50,8 @@ def test_viewer_browser_experience(browser, viewer):
         page.wait_for_selector('#pins .pin-row.company')          # the file pin shows
         assert page.locator('#pins .pin-row.company', has_text="Overview").count() == 1
         assert page.locator('#pins .pin-row.company', has_text="Shell thing").count() == 0
+        page.keyboard.press("Escape")          # the open menu covers the lower part of the tree
+        page.wait_for_selector('[data-testid="user-menu"]', state="hidden")
         # documents still open — and are editable (kb-users group write)
         page.click(f'.tree-item[data-path="{doc("overview.md")}"]')
         wait_path(page, doc("overview.md"))

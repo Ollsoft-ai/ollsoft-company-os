@@ -387,7 +387,7 @@ def test_control_characters_are_stripped_from_a_transcript(page):
     dictation.js strips C0 controls before insertion and term.paste() rewrites any
     that got through to U+241B. This asserts the first layer, because that is the
     one that has to hold."""
-    stub(page, {"ok": True, "text": "ls\u001b[201~; echo pwned"})
+    stub(page, {"ok": True, "text": "ls\u001b[201~; echo pwn$((6*7))"})
     show_terminal(page)
     dictate(page)
     page.wait_for_timeout(3000)
@@ -398,9 +398,9 @@ def test_control_characters_are_stripped_from_a_transcript(page):
     assert "\u001b" not in dump, "an ESC reached the terminal"
     assert "␛" not in dump, "nothing should even have reached term.paste()'s fallback"
     assert "[201~" in dump, "the sanitized text should still arrive, just inert"
-    # Nothing executed: "pwned" may appear inside the un-run command line, never
-    # alone on a line, which is what command output would look like.
-    assert not any(ln.strip() == "pwned" for ln in dump.splitlines()), "the escape broke out"
+    # Nothing executed: run, the echo would print "pwn42", which the un-run
+    # command line (however it wraps) never contains.
+    assert "pwn42" not in dump, "the escape broke out"
 
 
 def test_a_carriage_return_in_a_transcript_does_not_press_enter(page):
@@ -415,7 +415,7 @@ def test_a_carriage_return_in_a_transcript_does_not_press_enter(page):
     what this asserts — the prompt count is the invariant, not the cursor row,
     because a multi-row command line moves the cursor without executing.
     """
-    stub(page, {"ok": True, "text": "echo dictated\rwhoami"})
+    stub(page, {"ok": True, "text": "echo dictated-$((6*7))\rwhoami"})
     show_terminal(page)
     prompts_before = prompt_count(page)
     dictate(page)
@@ -428,9 +428,10 @@ def test_a_carriage_return_in_a_transcript_does_not_press_enter(page):
     dump = term_dump(page)
     assert prompt_count(page) == prompts_before, \
         f"a new prompt appeared, so something executed:\n{dump}"
-    # `echo dictated` never ran, so "dictated" never appears as output on its own
-    # line; and `whoami` never ran either.
-    assert not any(ln.strip() == "dictated" for ln in dump.splitlines()), dump
+    # The echo never ran: it would print "dictated-42", which the command line
+    # itself never contains. (Checking for "dictated" alone on a row was fooled
+    # when an earlier test's leftover text made the command line wrap there.)
+    assert "dictated-42" not in dump, dump
     assert "\u001b" not in dump
 
 
