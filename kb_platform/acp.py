@@ -411,6 +411,7 @@ class AgentProc:
         self.spares: dict[str, tuple[float, dict]] = {}   # cwd → (made at, session/new result)
         self._sparing: set[str] = set()                   # cwds with a spare being made right now
         self._spares_made = 0
+        self._leaked = 0                                  # expired spares an agent without session/close still holds
         self._warming: set[asyncio.Task] = set()          # strong refs: a bare task can be collected
 
     # -- lifecycle --
@@ -479,6 +480,10 @@ class AgentProc:
         cwd = cwd if isinstance(cwd, str) and cwd.startswith("/") else self.cwd
         if not SPARES_ON or not self.alive() or self._spares_made >= SPARE_MAX:
             return
+        # An agent that cannot close a session keeps every expired spare alive
+        # inside it: once a few have leaked that way, make no more.
+        if self._leaked >= SPARE_CWDS:
+            return
         if cwd in self._sparing or self._spare_fresh(cwd):
             return
         if cwd not in self.spares and len(self.spares) >= SPARE_CWDS:
@@ -505,9 +510,42 @@ class AgentProc:
         if ent is None:
             return False
         if time.time() - ent[0] > SPARE_TTL:
+            # Forgetting a spare is not enough: the session is still open inside
+            # the agent (for Claude, a whole subprocess). Left alone they pile up
+            # until the agent stops answering, so close it there too.
             del self.spares[cwd]
+            if self._can_close():
+                self._close_later(ent[1].get("sessionId"))
+            else:
+                self._leaked += 1
             return False
         return True
+
+    def expire_spares(self) -> None:
+        """Close every spare past its TTL — run by the reaper, so a spare nobody
+        asks about is closed on time instead of whenever the next chat opens."""
+        for cwd in list(self.spares):
+            self._spare_fresh(cwd)
+
+    def _can_close(self) -> bool:
+        caps = (self.init or {}).get("agentCapabilities") or {}
+        sc = caps.get("sessionCapabilities") if isinstance(caps, dict) else None
+        return isinstance(sc, dict) and "close" in sc
+
+    def _close_later(self, sid) -> None:
+        if not isinstance(sid, str) or not self.alive():
+            return
+        t = asyncio.create_task(self._close_session(sid))
+        self._warming.add(t)
+        t.add_done_callback(self._warming.discard)
+
+    async def _close_session(self, sid: str) -> None:
+        try:
+            await asyncio.wait_for(self.request("session/close", {"sessionId": sid}), timeout=30)
+        except Exception as e:   # noqa: BLE001 — best effort; the process exit closes it anyway
+            log.info("acp %s: could not close spare session %s (%s)", self.agent["id"], sid, e)
+        self.logs.pop(sid, None)
+        self.meta.pop(sid, None)
 
     def _take_spare(self, params: dict) -> dict | None:
         """A spare answers only a session/new that asks for exactly what the spare
@@ -969,6 +1007,7 @@ async def _reap() -> None:
                 if not p.conns:
                     PROCS.pop(aid, None)
                 continue
+            p.expire_spares()
             if not p.busy() and time.time() - p.last_used > IDLE_SECONDS:
                 log.info("acp %s: idle, stopping", aid)
                 await p.stop()

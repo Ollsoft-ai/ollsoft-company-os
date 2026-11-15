@@ -18,7 +18,7 @@ from kb_platform import acp, settings  # noqa: E402
 pytestmark = pytest.mark.skipif(os.environ.get("KB_TEST_NO_SEED") not in (None, "1", "0", ""), reason="unit")
 
 FAKE_AGENT = textwrap.dedent(r'''
-    import json, sys, time
+    import json, os, sys, time
     def send(obj):
         sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
     req_id = 100
@@ -30,8 +30,11 @@ FAKE_AGENT = textwrap.dedent(r'''
         m = json.loads(line)
         mid, method, params = m.get("id"), m.get("method"), m.get("params") or {}
         if method == "initialize":
+            caps = {"loadSession": True}
+            if os.environ.get("FAKE_CLOSE"):
+                caps["sessionCapabilities"] = {"close": {}}
             send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1,
-                  "agentCapabilities": {"loadSession": True}, "authMethods": [], "agentInfo": {"name": "fake", "version": "0"}}})
+                  "agentCapabilities": caps, "authMethods": [], "agentInfo": {"name": "fake", "version": "0"}}})
             send({"jsonrpc": "2.0", "method": "_auth/status_update", "params": {"authStatus": {"kind": "account", "label": "Fake Plan"}}})
         elif method == "session/new":
             assert params["cwd"].startswith("/"), params
@@ -59,6 +62,10 @@ FAKE_AGENT = textwrap.dedent(r'''
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
         elif method == "session/cancel":
             pass
+        elif method == "session/close" and os.environ.get("FAKE_CLOSE"):
+            with open(os.environ["FAKE_CLOSED"], "a") as f:
+                f.write(params["sessionId"] + "\n")
+            send({"jsonrpc": "2.0", "id": mid, "result": {}})
         else:
             send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found"}})
 ''')
@@ -495,4 +502,47 @@ def test_spares_can_be_turned_off_and_a_refusal_stops_them(fake_agent, monkeypat
         assert proc2._spares_made >= acp.SPARE_MAX, "it gives up instead of poking the agent again"
         await proc2.warm("/tmp")
         await proc2.stop()
+    asyncio.run(run())
+
+
+def test_an_expired_spare_is_closed_inside_the_agent(fake_agent, tmp_path):
+    """Dropping a stale spare from the pool is not enough: the agent still holds
+    the session (for Claude, a whole subprocess) until it is told to close it."""
+    closed = tmp_path / "closed.txt"
+    fake_agent["env"] = {"FAKE_CLOSE": "1", "FAKE_CLOSED": str(closed)}
+
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        await proc.warm("/tmp")
+        made, res = proc.spares["/tmp"]
+        proc.spares["/tmp"] = (made - acp.SPARE_TTL - 1, res)
+        proc.expire_spares()                      # what the reaper does every minute
+        assert "/tmp" not in proc.spares
+        for _ in range(200):
+            if closed.exists() and closed.read_text().split():
+                break
+            await asyncio.sleep(0.02)
+        assert closed.read_text().split() == ["sess-1"], "the agent was told to close the expired spare"
+        await proc.warm("/tmp")
+        assert proc.spares["/tmp"][1]["sessionId"] == "sess-2", "and spares keep coming"
+        await proc.stop()
+    asyncio.run(run())
+
+
+def test_an_agent_that_cannot_close_sessions_stops_getting_spares_once_some_leak(fake_agent):
+    """Without session/close an expired spare stays alive inside the agent, so
+    the pool stops after a few such leaks instead of piling up sessions."""
+    async def run():
+        proc = acp.AgentProc(fake_agent, "/tmp")
+        await proc.start()
+        for _ in range(acp.SPARE_CWDS):
+            await proc.warm("/tmp")
+            made, res = proc.spares["/tmp"]
+            proc.spares["/tmp"] = (made - acp.SPARE_TTL - 1, res)
+            proc.expire_spares()
+        assert proc._leaked == acp.SPARE_CWDS
+        await proc.warm("/tmp")
+        assert not proc.spares, "no more spares once a few have leaked"
+        await proc.stop()
     asyncio.run(run())
