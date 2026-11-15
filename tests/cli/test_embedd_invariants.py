@@ -645,3 +645,27 @@ def test_without_halfvec_the_schema_installs_and_the_worker_says_unsupported(tmp
         assert st["paused"] == "unsupported" and st["chunks"] > 0 and st["embedded"] == 0
     finally:
         sh("dropdb", "--if-exists", "--force", db)
+
+
+def test_a_folder_that_cannot_be_checked_counts_as_not_embedded(tmp_path, monkeypatch):
+    """One folder the embedder may not look into (an owner-only one) must not
+    stop the pass: it counts as opted out, and everything else carries on."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads every folder")
+    monkeypatch.setattr(common, "REPO_ROOT", tmp_path)
+    (tmp_path / "open").mkdir()
+    (tmp_path / "optout").mkdir()
+    (tmp_path / "optout" / ".noembed").write_text("")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o000)
+    try:
+        emb = embedd.Embedder.__new__(embedd.Embedder)
+        emb._noembed, emb._noembed_unreadable = {}, set()
+        assert emb.noembed("locked/secret.md") is True, "an unreadable folder is never sent"
+        assert emb.noembed("locked/deeper/x.md") is True
+        assert emb.noembed("open/a.md") is False, "the rest of the pass carries on"
+        assert emb.noembed("optout/b.md") is True
+        assert emb._noembed_unreadable == {"locked"}, "reported once"
+    finally:
+        locked.chmod(0o755)

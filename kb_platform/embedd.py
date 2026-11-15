@@ -167,6 +167,7 @@ class Embedder:
         self.dims_ok: bool | None = None
         self.has_table = True
         self._noembed: dict[str, tuple[float, bool]] = {}
+        self._noembed_unreadable: set[str] = set()    # folders already reported as unreadable
         self.key_reloaded = False
         self.service: Service | None = None
         self.last_status: dict | None = None
@@ -214,7 +215,19 @@ class Embedder:
             d = "/".join(parts[:i])
             hit = self._noembed.get(d)
             if hit is None or now - hit[0] > 60:
-                hit = (now, (common.REPO_ROOT / d / ".noembed").exists())
+                try:
+                    found = (common.REPO_ROOT / d / ".noembed").exists()
+                except OSError as e:
+                    # A folder this service cannot look into (an owner-only one,
+                    # most likely) cannot say whether it opts out, so it counts as
+                    # opting out: nothing under it is sent. Raising here used to
+                    # abort the whole pass, leaving every later edit un-embedded.
+                    if d not in self._noembed_unreadable:
+                        self._noembed_unreadable.add(d)
+                        log.warning("cannot check %s/.noembed (%s): treating the folder as not embedded",
+                                    d, e.strerror or e)
+                    found = True
+                hit = (now, found)
                 self._noembed[d] = hit
             if hit[1]:
                 return True
