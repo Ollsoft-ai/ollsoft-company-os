@@ -72,6 +72,23 @@ def user_menu(page):
     page.wait_for_selector('[data-testid="user-menu"]', state="visible")
 
 
+def run_command(page, name):
+    """Run a command from the palette (Ctrl+Shift+P) by name. Types only once
+    the palette has focus — keys typed while it was still opening went to
+    whatever had it, a terminal included — and presses Enter only once the
+    command is listed. Two frames first: a tab just clicked hands the focus to
+    its terminal in the next frame, which took it back from a palette opened
+    in between."""
+    page.evaluate("() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    page.keyboard.press("Control+Shift+P")
+    page.wait_for_function(
+        "() => document.activeElement && document.activeElement.matches('[data-testid=\"palette-input\"]')",
+        timeout=10000)
+    page.keyboard.type(name)
+    page.locator('[data-testid="palette-item"]', has_text=name).first.wait_for(timeout=10000)
+    page.keyboard.press("Enter")
+
+
 def dlg_fill(page, text):
     """Fill the app's own prompt dialog (replaced native prompt()) and confirm."""
     page.fill('[data-testid="dlg-input"]', text)

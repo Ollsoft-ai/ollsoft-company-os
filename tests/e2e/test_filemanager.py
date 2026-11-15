@@ -36,20 +36,31 @@ def test_dot_folders_hidden_and_collapsed(browser):
 
 
 def test_collapse_and_expand_all(browser):
+    # A folder of this test's own that holds a file and no folder. The shared
+    # dashboards/ will not do: other tests leave subfolders in it (an upload's
+    # _files/, a placed workspace), and then expand-all rightly opens it.
+    c = httpx.Client(base_url=BASE, timeout=15)
+    c.post("/login", data={"username": U("alice"), "password": CREDS["alice"]})
+    shut = doc(f"foldleaf_{TAG}")
+    assert c.post("/api/fs/mkdir", json={"path": shut}).status_code == 200
+    assert c.post("/api/file", json={"path": shut + "/note.md"}).status_code == 200
     ctx = browser.new_context()
-    page = login(ctx, "alice")
-    inner = f'.tree-item[data-path="{doc("overview.md")}"]'
-    leaf = f'.tree-item[data-path="{doc("dashboards/randoms.html")}"]'
-    assert page.locator(inner).is_visible()               # expanded by default
-    page.click('[data-testid="tree-fold"]')               # collapse all
-    assert not page.locator(inner).is_visible()
-    # …but the top-level area stays open, listing its folders
-    assert page.locator(f'.tree-item[data-path="{AREA}"]').is_visible()
-    page.click('[data-testid="tree-fold"]')               # now it expands all
-    assert page.locator(inner).is_visible()               # the area holds folders: opened
-    assert page.locator(f'.tree-item[data-path="{doc("dashboards")}"]').is_visible()
-    assert not page.locator(leaf).is_visible()            # dashboards/ holds none: stays shut
-    ctx.close()
+    try:
+        page = login(ctx, "alice")
+        inner = f'.tree-item[data-path="{doc("overview.md")}"]'
+        leaf = f'.tree-item[data-path="{shut}/note.md"]'
+        assert page.locator(inner).is_visible()               # expanded by default
+        page.click('[data-testid="tree-fold"]')               # collapse all
+        assert not page.locator(inner).is_visible()
+        # …but the top-level area stays open, listing its folders
+        assert page.locator(f'.tree-item[data-path="{AREA}"]').is_visible()
+        page.click('[data-testid="tree-fold"]')               # now it expands all
+        assert page.locator(inner).is_visible()               # the area holds folders: opened
+        assert page.locator(f'.tree-item[data-path="{shut}"]').is_visible()
+        assert not page.locator(leaf).is_visible()            # it holds no folder: stays shut
+    finally:
+        ctx.close()
+        c.post("/api/fs/delete", json={"path": shut, "permanent": True})
 
 
 def test_access_badge_reflects_permissions(browser):

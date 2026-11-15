@@ -7,7 +7,7 @@ import pathlib
 import tempfile
 import time
 
-from conftest import BASE, CREDS, dlg_fill, dlg_ok, wait_path, user_menu
+from conftest import BASE, CREDS, dlg_fill, dlg_ok, wait_path, user_menu, run_command
 from kbenv import AREA, U, doc
 
 MOBILE = dict(viewport={"width": 390, "height": 844}, is_mobile=True,
@@ -117,7 +117,7 @@ def test_user_menu_holds_the_actions(browser):
     user_menu(page)
     assert menu.is_visible()
     assert page.locator("#cron-btn").is_visible()
-    assert page.locator(".logout").is_visible()
+    assert page.locator('[data-testid="logout"]').is_visible()   # "sign out of all" is the other .logout
     assert "alice" in page.inner_text("#whoami")          # identity heads the menu
     page.click("#cron-btn")                               # choosing an action closes the menu
     page.wait_for_selector('[data-testid="cron-jobs"]')
@@ -804,7 +804,7 @@ def test_a_drawer_over_a_maximized_group_can_be_dismissed(browser):
     page.wait_for_function("() => document.body.classList.contains('nav-open')")
     page.wait_for_timeout(400)
     page.click(f'.tree-item[data-path="{doc("onboarding.md")}"]'); wait_path(page, doc("onboarding.md"))
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Move tab to the group below"); page.keyboard.press("Enter")
+    run_command(page, "Move tab to the group below")
     page.wait_for_function("() => document.querySelectorAll('#panes .pane').length === 2")
     page.click('#panes .pane [data-act="max"] >> nth=0')
     page.wait_for_function("() => document.body.classList.contains('maximized')")
@@ -844,7 +844,7 @@ def test_the_keybar_never_covers_the_terminal(browser):
     page.click(f'.tree-item[data-path="{doc("overview.md")}"]'); wait_path(page, doc("overview.md"))
     page.click("#panes .term-tab")
     page.wait_for_function("() => !!document.querySelector('#panes .tab.current.term-tab')")
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Move tab to the group below"); page.keyboard.press("Enter")
+    run_command(page, "Move tab to the group below")
     page.wait_for_function("() => document.querySelectorAll('#panes .pane').length === 2")
     page.wait_for_timeout(600)
     split = page.evaluate(probe)

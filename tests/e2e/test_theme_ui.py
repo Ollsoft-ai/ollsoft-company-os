@@ -3,6 +3,7 @@ page's colours, the editor's highlight colours and a running terminal — and
 switching back restores deep blue without a reload."""
 import httpx
 import pytest
+from playwright.sync_api import TimeoutError as PWTimeout
 from conftest import BASE, CREDS, login, open_doc, user_menu
 from kbenv import U, doc
 
@@ -81,9 +82,18 @@ def test_overrides_paint_live_and_are_editable_in_the_dialog(browser):
     try:
         page = login(ctx, "bob")
         page.wait_for_function("() => window.__kbsettings.state() !== null")
+        heard = page.evaluate("() => (window.__kbevents || {}).events")
         # from the API: the background token is overridden, the page follows
         assert b.post("/api/settings", json={"set": {K: {"bg": "#123456", "font-size": "18px"}}}).status_code == 200
-        page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)'", timeout=10000)
+        try:
+            page.wait_for_function("() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)'", timeout=10000)
+        except PWTimeout:
+            raise AssertionError(f"the page did not follow (events before the change: {heard}): " + str(page.evaluate(
+                """async () => ({held: window.__kbsettings.get('ui.theme.custom'),
+                  server: (await (await fetch('/api/settings')).json()).effective['ui.theme.custom'],
+                  theme: document.documentElement.dataset.theme, style: document.documentElement.getAttribute('style'),
+                  bg: getComputedStyle(document.body).backgroundColor,
+                  stream: (({mode, opens, failures, events, polls}) => ({mode, opens, failures, events, polls}))(window.__kbevents || {})})""")))
         assert page.evaluate("() => getComputedStyle(document.body).fontSize") == "18px"        # the base size follows
         # from the dialog: pick the accent, the token lands on <html>
         user_menu(page); page.click('[data-testid="settings-btn"]')

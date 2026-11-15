@@ -333,6 +333,16 @@ put in a secret's group or ACL. What `_secrets/` guarantees is unchanged and is
 not about who may open it: never in git, never in the index, never a live CRDT
 session. The panel says exactly that above the people list.
 
+**A `_private/` folder is born owner-only.** One person's sensitive notes kept
+next to the project or topic they belong to. Made in the app — a new folder, a
+new document on a path through it, a folder moved or renamed to `_private` — it
+comes out `0700` with no ACL entries, whatever the folder around it grants; the
+indexer cannot read it, so it is never searched or embedded. Unlike `_secrets/`
+its contents are ordinary documents: live-edited, versioned, and the folder's
+mode alone keeps everyone else out. Only an explicit share widens it. A folder
+made outside the app (`mkdir` in a terminal) is the kernel's business and
+inherits as usual (`common.is_private_root`, `born_closed`).
+
 ## 8. The UI shell — tabs, terminals, cron panel
 
 VS-Code-shaped chrome over the same primitives (vanilla JS, `frontend/src/app.js`;
@@ -889,6 +899,11 @@ about the app — see §8.1):
   and terminals register from `app.js`; the agent chat from its own lazily
   loaded chunk. The shell knows no kind by name. Modules add palette commands
   with `registerCommand` and chrome buttons through a named slot.
+- **Text files** (`.json`, `.yaml`, `.csv`, `.txt`, `.log`, configs, scripts —
+  the list is `frontend/src/textfiles.js`) open in the `text` view: read-only,
+  highlighted, with line numbers, CSV/TSV also as a table and JSON checked as
+  it opens. Read through `/api/attachment` as the viewer; past 5 MB, or binary,
+  it offers the raw file. Every other non-document file still opens raw.
 - **The chrome**: on a desktop the brand row is ☰ · logo · the product's
   name (which gives way only under ~190px of panel); the ☰ is a borderless
   icon that takes a background on hover, while the corner's floating one

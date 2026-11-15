@@ -3,6 +3,8 @@
 Doubles as the worked example referenced from the kb-artifacts skill: this is
 what an agent should copy when it wants to test an artifact it just wrote.
 """
+import shutil
+
 from artifact_harness import open_artifact, place_artifact, watch_console
 from conftest import login
 from kbenv import full
@@ -97,3 +99,4 @@ const here=new URL(location.href).searchParams.get("path").replace(/\\/[^/]*$/,"
         page.wait_for_timeout(250)
     assert "rows=3" in out.inner_text(), f"neighbouring data file was not readable: {out.inner_text()!r}"
     ctx.close()
+    shutil.rmtree(full(path.rsplit("/", 1)[0]), ignore_errors=True)   # leave dashboards/ as it was

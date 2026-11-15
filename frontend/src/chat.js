@@ -15,6 +15,7 @@
 // claude.ai. Someone who lives in the terminal should feel at home at once.
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { formFields, formContent } from "./elicit.js";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import python from "highlight.js/lib/languages/python";
@@ -119,6 +120,7 @@ export function renderMarkdown(text) {
   return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ["target", "data-copy"], FORBID_TAGS: ["style", "form", "textarea", "select"] });
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+let elicitSeq = 0;               // names each question form's radio groups apart
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 const svg = (paths, extra) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra || ""}>${paths}</svg>`;
 const ICON = {
@@ -2185,28 +2187,64 @@ class ChatView {
       const no = el("button", "chat-perm-btn reject", "Cancel"); no.type = "button"; no.addEventListener("click", () => done({ action: "cancel" }));
       row.append(ok, no); box.append(row);
     } else {
-      const schema = (p.requestedSchema && p.requestedSchema.properties) || {};
+      // Each question: its header, the question itself, and its options as a
+      // list to pick from, each with its own explanation (see elicit.js).
+      const fields = formFields(p.requestedSchema);
       const form = el("div", "chat-form");
-      const fields = {};
-      for (const [k, def] of Object.entries(schema)) {
-        const lab = el("label", "chat-field");
-        lab.append(el("span", "", def.title || k));
-        let input;
-        if (def.enum) { input = document.createElement("select"); for (const v of def.enum) { const op = document.createElement("option"); op.value = v; op.textContent = v; input.append(op); } }
-        else if (def.type === "boolean") { input = document.createElement("input"); input.type = "checkbox"; lab.classList.add("check"); }
-        else { input = document.createElement("input"); input.type = def.type === "number" || def.type === "integer" ? "number" : "text"; }
-        fields[k] = { input, def };
-        lab.append(input); form.append(lab);
-      }
+      const read = {};
+      const group = "elicit-" + (++elicitSeq);
+      fields.forEach((f, i) => {
+        const wrap = el("div", "chat-field" + (f.companion ? " companion" : ""));
+        if (!f.companion && f.kind !== "bool") {
+          wrap.append(el("span", "chat-field-title", f.title));
+          if (f.description) wrap.append(el("span", "chat-field-desc", f.description));
+        }
+        if (f.kind === "one" || f.kind === "many") {
+          const list = el("div", "chat-opts");
+          list.setAttribute("role", f.kind === "one" ? "radiogroup" : "group");
+          const preview = el("pre", "chat-opt-preview"); preview.hidden = true;
+          const picks = [];
+          for (const o of f.options) {
+            const lab = el("label", "chat-opt");
+            const inp = document.createElement("input");
+            inp.type = f.kind === "one" ? "radio" : "checkbox";
+            inp.name = group + "-" + i;
+            inp.checked = f.kind === "one" ? f.default === o.value : Array.isArray(f.default) && f.default.includes(o.value);
+            const txt = el("span", "chat-opt-text");
+            txt.append(el("span", "chat-opt-label", o.label));
+            if (o.description) txt.append(el("span", "chat-opt-desc", o.description));
+            lab.append(inp, txt);
+            if (f.kind === "one") inp.addEventListener("change", () => { preview.textContent = o.preview; preview.hidden = !o.preview; });
+            list.append(lab); picks.push([inp, o.value]);
+          }
+          wrap.append(list, preview);
+          read[f.key] = f.kind === "one"
+            ? () => { const hit = picks.find(([x]) => x.checked); return hit ? hit[1] : undefined; }
+            : () => picks.filter(([x]) => x.checked).map(([, v]) => v);
+        } else if (f.kind === "bool") {
+          const lab = el("label", "chat-field check");
+          const inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = f.default === true;
+          lab.append(el("span", "", f.description || f.title), inp);
+          wrap.append(lab);
+          read[f.key] = () => inp.checked;
+        } else {
+          const inp = document.createElement("input");
+          inp.type = f.kind === "number" || f.kind === "integer" ? "number" : "text";
+          if (typeof f.default === "string" || typeof f.default === "number") inp.value = String(f.default);
+          // the "Other" box under a question: one line, its explanation as the placeholder
+          if (f.companion) { inp.placeholder = f.title + (f.description ? " — " + f.description : ""); inp.setAttribute("aria-label", f.title); }
+          wrap.append(inp);
+          read[f.key] = () => inp.value;
+        }
+        form.append(wrap);
+      });
       box.append(form);
       const row = el("div", "chat-perm-row");
       const ok = el("button", "chat-perm-btn allow", "Send"); ok.type = "button";
       ok.addEventListener("click", () => {
-        const content = {};
-        for (const [k, f] of Object.entries(fields)) {
-          content[k] = f.def.type === "boolean" ? f.input.checked : (f.def.type === "number" || f.def.type === "integer") ? Number(f.input.value) : f.input.value;
-        }
-        done({ action: "accept", content });
+        const values = {};
+        for (const [k, get] of Object.entries(read)) values[k] = get();
+        done({ action: "accept", content: formContent(fields, values) });
       });
       const no = el("button", "chat-perm-btn reject", "Decline"); no.type = "button"; no.addEventListener("click", () => done({ action: "decline" }));
       row.append(ok, no); box.append(row);

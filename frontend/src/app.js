@@ -15,6 +15,7 @@ import { Strikethrough, TaskList, Table } from "@lezer/markdown";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { yCollab } from "y-codemirror.next";
+import { notUndoableFromYjs } from "./collabundo.js";
 import { init as initRichView, mdHighlight, calibrateListMetrics, tableField,
          livePreview, spacedLinks,
          listIndent, todoInputRule, mentionHighlight, mentionSource, repaintMentions,
@@ -26,6 +27,7 @@ import { initDictation, toggleDictation, dictationReady, retryDictation, setDict
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
+import { isTextPath } from "./textfiles.js";
 import { blame } from "./blame.js";
 import { externalChanges, watchExternal } from "./extchanges.js";
 import { connectEvents } from "./events.js";
@@ -1817,6 +1819,7 @@ const _movingPaths = new Set();   // paths mid-move, so the tree-prune poll skip
 function kindForPath(p) {
   if (isSecretPath(p)) return "secret";
   if (p.endsWith(".html")) return "artifact";
+  if (isTextPath(p)) return "text";
   return "doc";
 }
 
@@ -2606,6 +2609,7 @@ function updateTreePresence() {
 function openEntry(n) {
   if (isSecretPath(n.path)) openPath(n.path, "secret");
   else if (n.kind === "artifact") openPath(n.path, "artifact");
+  else if (n.kind === "file" && isTextPath(n.path)) openPath(n.path, "text");
   else if (n.kind === "file") window.open("/api/attachment?path=" + encodeURIComponent(n.path), "_blank");
   else openPath(n.path, "doc");
 }
@@ -3776,6 +3780,7 @@ async function openDeepLink(p) {
   if (isSecretPath(p)) await openPath(p, "secret");
   else if (p.endsWith(".html")) await openPath(p, "artifact");
   else if (p.endsWith(".md")) await openPath(p, "doc");
+  else if (isTextPath(p)) await openPath(p, "text");
   else if (baseName(p).includes(".")) {
     // a plain attachment link (image, pdf, docx): open it in its own tab so the
     // app itself is never replaced by the raw file
@@ -4621,6 +4626,30 @@ registerView("secret", {
   isActiveDocument: true,
 });
 
+// ---- text viewer: JSON, YAML, CSV, logs, configs, scripts (textview.js) ----
+// Read-only, loaded the first time one opens. Which files: textfiles.js.
+let _textMod = null;
+const textShell = {
+  loading: (t, label) => showTabLoading(t, label),
+  loaded: (t) => clearTabLoading(t),
+  alive: (t) => tabs.includes(t),
+};
+registerView("text", {
+  label: "Text file",
+  icon: () => I.file,
+  tooltip: (t) => t.path,
+  key: (spec) => (typeof spec.path === "string" ? spec.path : null),
+  restore: (spec) => (typeof spec.path === "string" && isTextPath(spec.path) ? { kind: "text", path: spec.path } : null),
+  serialize: (t) => ({ kind: "text", path: t.path }),
+  open: async (t) => {
+    if (!_textMod) _textMod = import("./textview.js").catch((e) => { _textMod = null; throw e; });
+    const m = await _textMod;
+    await m.mount(t, textShell);
+    refreshTabBadge(t);
+  },
+  isActiveDocument: true,
+});
+
 // ---- secret viewer: masked, reveal/copy/edit — never the collab editor ----
 async function mountSecret(t) {
   showTabLoading(t, "Opening " + baseName(t.path) + "…");
@@ -4754,6 +4783,7 @@ async function mountDoc(t) {
   t.blameComp = new Compartment();
   const extensions = [
     history(),
+    notUndoableFromYjs(ydoc),            // Ctrl+Z steps back your edits, not the load or other people's
     keymap.of([
       { any: (v, e) => editKey(e) },     // bold, italic, link… — your keys (EDIT_BINDINGS)
       { key: "Tab", run: (v) => listIndent(v, 1), shift: (v) => listIndent(v, -1) },
@@ -4971,6 +5001,29 @@ function inArtifactScope(tab, p) {
   return p === dir || p.startsWith(dir + "/");
 }
 
+// kb-open: a link in an artifact (the platform adds the click handler, see
+// kb_platform/artifact_links.js) or its own script asks the app to open a
+// file. It reads nothing back and writes nothing, so the checks are about not
+// being a nuisance or a trick: a knowledgebase path only — never a URL, never
+// a `_secrets/` file put on screen — and only right after a click in the page
+// (transient user activation reaches the app from the frame), one per moment.
+function artifactOpenPath(raw) {
+  if (typeof raw !== "string" || raw.length > 1024) return null;
+  const p = raw.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!/^(company|projects|users)(\/|$)/.test(p)) return null;
+  if (p.split("/").some((s) => s === "" || s === "." || s === ".." || /[\\\0]/.test(s))) return null;
+  return isSecretPath(p) ? null : p;
+}
+let _artifactOpenAt = 0;
+function artifactMayOpen() {
+  const ua = navigator.userActivation;
+  if (ua && !ua.isActive) return false;
+  const now = Date.now();
+  if (now - _artifactOpenAt < 500) return false;
+  _artifactOpenAt = now;
+  return true;
+}
+
 // The bridge: forward an artifact's SQL to the per-user backend, which runs it as
 // the viewer. The message is matched to the open artifact tab it came from —
 // background artifact tabs stay live (dashboards keep refreshing).
@@ -5144,6 +5197,15 @@ window.addEventListener("message", async (ev) => {
           if (result.ok) { kbToast("Saved to " + rel, "ok"); loadTree(true); }
         }
       }
+    } else if (msg.type === "kb-open") {
+      const p = artifactOpenPath(msg.path);
+      const line = Number.isInteger(msg.line) && msg.line > 0 ? msg.line : 0;
+      if (!p) result = { error: "not a knowledgebase file" };
+      else if (!artifactMayOpen()) result = { error: "opens only on a click in the page" };
+      else {
+        if (line && p.endsWith(".md")) openAtLine(p, line); else openDeepLink(p);
+        result = { ok: true };
+      }
     } else if (msg.type === "kb-clipboard") {
       try {
         await navigator.clipboard.writeText(String(msg.text || ""));
@@ -5173,6 +5235,18 @@ async function loadLaunchers() {
   renderLaunchbar();
 }
 
+// What a missed `config` event would have done: settings adopt only what
+// changed, and the pins are redrawn only if they moved.
+async function catchUpConfig() {
+  settings.fetch();
+  let j;
+  try { j = await (await fetch("/api/launchers")).json(); }
+  catch (e) { return; }
+  if (JSON.stringify(j) === JSON.stringify(launchers)) return;
+  launchers = j;
+  renderLaunchbar();
+}
+
 function launcherIcon(b) {
   if (b.kind === "term") return "$";
   if (b.kind === "folder") return I.folder;
@@ -5186,6 +5260,7 @@ function runLauncher(b) {
   if (isSecretPath(p)) openPath(p, "secret");
   else if (p.endsWith(".html")) openPath(p, "artifact");
   else if (p.endsWith(".md")) openPath(p, "doc");
+  else if (isTextPath(p)) openPath(p, "text");
   else window.open("/api/attachment?path=" + encodeURIComponent(p), "_blank");
 }
 
@@ -9635,6 +9710,10 @@ async function boot() {
     hello: (d) => {
       // the catch-up: the stream's first event says where the server is now
       if (_treeEtag && d.etag && d.etag !== _treeEtag) refreshTreeWhenIdle();
+      // …settings and pins included. A change saved while this tab had no
+      // stream (still booting, or reconnecting after a drop) sent its `config`
+      // event to nobody, and the tab kept the old value until a reload.
+      catchUpConfig();
       if (d.presence) {
         _treePresence = d.presence; updateTreePresence();
         if (_presencePoll) { clearInterval(_presencePoll); _presencePoll = null; }

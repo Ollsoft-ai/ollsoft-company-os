@@ -6,7 +6,7 @@ import json
 
 import httpx
 import pytest
-from conftest import BASE, CREDS, login, open_doc, wait_path, user_menu
+from conftest import BASE, CREDS, login, open_doc, wait_path, user_menu, run_command
 from kbenv import U, doc
 
 SIDE = "terminal.side"
@@ -380,7 +380,7 @@ def test_maximize_with_the_dock_open_and_the_left_dock_handle(browser):
     assert h > total - 10, (h, total)
     page.click("#term-max")
     page.wait_for_function("() => !document.body.classList.contains('maximized')")
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Terminal panel: left"); page.keyboard.press("Enter")
+    run_command(page, "Terminal panel: left")
     page.wait_for_function("() => document.querySelector('.main-col').dataset.dock === 'left'")
     w0 = page.evaluate(TP % "width")
     box = page.locator("#term-resizer").bounding_box()
@@ -417,7 +417,7 @@ def test_the_terminal_side_is_a_setting_the_palette_writes(browser):
     editor = page.locator("#panes").bounding_box()
     assert box["y"] > editor["y"] + editor["height"] - 5, "the dock is a band at the bottom"
     # the palette writes the person's own layer ...
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Terminal panel: left"); page.keyboard.press("Enter")
+    run_command(page, "Terminal panel: left")
     page.wait_for_function("() => document.querySelector('.main-col').dataset.dock === 'left'")
     page.wait_for_function(f"() => window.__kbsettings.source('{SIDE}') === 'user' && window.__kbsettings.get('{SIDE}') === 'left'")
     assert me.get("/api/settings").json()["user"]["values"][SIDE] == "left"
@@ -439,7 +439,12 @@ def test_restore_keeps_the_terminal_a_group_showed(browser):
     page.click("#panes > .col:first-child .cm-content >> visible=true")
     page.keyboard.press("Control+Shift+Backquote")
     page.wait_for_selector("#terminal-panel:not([hidden])")
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Move tab to the column on the left"); page.keyboard.press("Enter")
+    # the command moves the focused group's tab: until the new terminal has the
+    # focus, that is still the document's group, and the document would move
+    page.wait_for_function("() => !!(document.querySelector('#terminal-panel .xterm-rows') &&"
+                           " document.activeElement && document.activeElement.closest('#terminal-panel'))",
+                           timeout=15000)
+    run_command(page, "Move tab to the column on the left")
     page.wait_for_selector("#panes .tab-content.term .xterm-rows")
     page.wait_for_function("() => document.querySelector('#panes .tab.current.term-tab')")
     page.reload()
@@ -497,7 +502,7 @@ def test_the_keyboard_never_lands_on_body(browser):
     page.keyboard.press("Alt+KeyW")   # closes the column's only tab, and the column
     page.wait_for_function("() => document.querySelectorAll('#panes > .col').length === 1")
     assert page.evaluate("() => !!document.activeElement.closest('.cm-content')"), "the survivor's document has the caret"
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Maximize"); page.keyboard.press("Enter")
+    run_command(page, "Maximize")
     page.wait_for_function("() => document.body.classList.contains('maximized')")
     page.wait_for_timeout(100)
     assert page.evaluate("() => !!document.activeElement.closest('.cm-content')"), "the palette's maximize keeps the caret"

@@ -108,6 +108,12 @@ Rules worth knowing before you design around them:
 
 Writing a `.md` file that someone is live-editing is safe: the change flows through the sync daemon and merges into their session, just like any external edit. To append to a file rather than replace it, `kbRead` it, concatenate, then `kbWrite` the result.
 
+## Links to files
+
+- **A link to a knowledgebase file opens it in the app**, like a link in a document: `<a href="/company/notes/x.md">`, a relative `<a href="plan.md">` (resolved against the artifact's folder), or `…/x.md#L12` to land on a line. Folders, other artifacts and attachments open the way the tree opens them.
+- **From your own script:** `parent.postMessage({type: "kb-open", path: "company/notes/x.md", line: 12}, "*")` — only inside a click handler: the app opens files only right after the person clicks in the page, one at a time.
+- Nothing comes back to the page, the viewer's own access decides, and a `_secrets/` file never opens this way. External links, `#anchors` and clicks your page handles itself (`preventDefault`) are left alone.
+
 ## File naming convention
 
 - Keep the user-facing `.html` artifact at its normal visible path.
