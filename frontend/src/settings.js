@@ -11,6 +11,7 @@
 const LS_KEY = "kbSettings";
 
 let state = null;            // the last /api/settings payload (GET or POST reply)
+let asked = 0, adopted = 0;  // request order: an answer older than the one adopted is stale
 let cache = {};              // the previous session's effective values, for the first paint
 const subs = new Map();      // key | "*" -> Set<fn>
 
@@ -45,6 +46,15 @@ function adopt(payload) {
   for (const fn of subs.get("*") || []) { try { fn(null); } catch (e) { console.error(e); } }
 }
 
+// Two requests in flight (the boot fetch and a catch-up, say) can answer out of
+// order; the one asked for last wins, or a stale answer would undo a change.
+function adoptIfNewest(n, payload) {
+  if (n < adopted) return false;
+  adopted = n;
+  adopt(payload);
+  return true;
+}
+
 async function post(url, body) {
   const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" },
                                body: JSON.stringify(body) });
@@ -60,9 +70,10 @@ async function change(scope, body) {
     await settings.fetch();              // re-resolve as me: my layer may still win
     return { ok: true };
   }
+  const n = ++asked;
   const r = await post("/api/settings", body);
   if (!r.ok) return r;
-  adopt(r.body);
+  adoptIfNewest(n, r.body);
   return { ok: true };
 }
 
@@ -83,13 +94,13 @@ export const settings = {
   },
   // never throws: an older backend (404) or a network blip keeps the cache
   async fetch() {
+    const n = ++asked;
     try {
       const r = await fetch("/api/settings");
       if (!r.ok) return null;
       const j = await r.json();
       if (!j || !j.schema) return null;
-      adopt(j);
-      return j;
+      return adoptIfNewest(n, j) ? j : state;
     } catch (e) { return null; }
   },
   set(key, value, scope = "user") { return change(scope, { set: { [key]: value } }); },

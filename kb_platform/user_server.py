@@ -477,7 +477,12 @@ async def _fetch_presence():
 async def _events_loop() -> None:
     # Baseline first: the loop's "last seen" must be the tree the first hello
     # announced, or the first turn would report a change that never happened.
-    await _refresh_tree()
+    # So take it as it is: the stream that started this loop has just brought
+    # it up to date. Refreshing again here took in a change saved between that
+    # hello and this line, and then no turn ever reported it — a setting saved
+    # in that moment never reached the tab.
+    if _TREE.body is None:
+        await _refresh_tree()
     last_etag, last_index = _TREE.etag, _TREE.index
     while _EVENTS.subs:
         try:

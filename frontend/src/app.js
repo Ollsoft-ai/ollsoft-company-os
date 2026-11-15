@@ -5235,6 +5235,18 @@ async function loadLaunchers() {
   renderLaunchbar();
 }
 
+// What a missed `config` event would have done: settings adopt only what
+// changed, and the pins are redrawn only if they moved.
+async function catchUpConfig() {
+  settings.fetch();
+  let j;
+  try { j = await (await fetch("/api/launchers")).json(); }
+  catch (e) { return; }
+  if (JSON.stringify(j) === JSON.stringify(launchers)) return;
+  launchers = j;
+  renderLaunchbar();
+}
+
 function launcherIcon(b) {
   if (b.kind === "term") return "$";
   if (b.kind === "folder") return I.folder;
@@ -9698,6 +9710,10 @@ async function boot() {
     hello: (d) => {
       // the catch-up: the stream's first event says where the server is now
       if (_treeEtag && d.etag && d.etag !== _treeEtag) refreshTreeWhenIdle();
+      // …settings and pins included. A change saved while this tab had no
+      // stream (still booting, or reconnecting after a drop) sent its `config`
+      // event to nobody, and the tab kept the old value until a reload.
+      catchUpConfig();
       if (d.presence) {
         _treePresence = d.presence; updateTreePresence();
         if (_presencePoll) { clearInterval(_presencePoll); _presencePoll = null; }
