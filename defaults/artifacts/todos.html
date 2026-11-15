@@ -25,7 +25,8 @@
   .task input { margin: 0; margin-top: .15rem; }
   .task .body { flex: 1; min-width: 0; }
   .task .txt.done { text-decoration: line-through; color: #6d6d84; }
-  .task .loc { color: #6d6d84; font-size: .72rem; font-family: ui-monospace, monospace; }
+  .task .loc { color: #6d6d84; font-size: .72rem; font-family: ui-monospace, monospace; text-decoration: none; }
+  .task a.loc:hover { color: #b7acff; text-decoration: underline; }
   .mention { color: #7ee0b0; font-weight: 600; }
   .mention.me { background: #3ecf8e2a; border-radius: 4px; padding: 0 .2rem; }
   .tag { color: #e0a34a; }
@@ -125,12 +126,15 @@
         cb.addEventListener("change", () => toggle(t, cb));
         const body = document.createElement("div"); body.className = "body";
         body.innerHTML = `<span class="txt ${t.checked ? "done" : ""}">${decorate(t.text)}</span>` +
-          ` <span class="loc">${esc(t.path)}:${t.line}</span>`;
+          ` <a class="loc" href="${fileLink(t)}" title="Open at this line">${esc(t.path)}:${t.line}</a>`;
         row.append(cb, body); g.appendChild(row);
       }
       content.appendChild(g);
     }
   }
+
+  // a link to the to-do's own line: the platform opens it in the app
+  function fileLink(t) { return "/" + t.path.split("/").map(encodeURIComponent).join("/") + "#L" + t.line; }
 
   async function toggle(t, cb) {
     const res = await kbToggle(t.path, t.line);
