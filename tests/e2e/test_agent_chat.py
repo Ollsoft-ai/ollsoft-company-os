@@ -5,7 +5,7 @@ intact, and keep the document header describing the document."""
 import json
 
 import pytest
-from conftest import BASE, dlg_fill, dlg_ok, expand_folder, login, open_doc, wait_path
+from conftest import BASE, dlg_fill, dlg_ok, expand_folder, login, open_doc, wait_path, run_command
 from kbenv import AREA, doc, full
 
 
@@ -258,7 +258,7 @@ def test_the_agent_menu_is_whole_in_the_terminal_panel(browser):
     page.keyboard.press("Control+Backquote")
     page.wait_for_selector("#terminal-panel:not([hidden])")
     page.click(".chat-view")
-    page.keyboard.press("Control+Shift+P"); page.keyboard.type("Move tab into the terminal panel"); page.keyboard.press("Enter")
+    run_command(page, "Move tab into the terminal panel")
     page.wait_for_function("() => !!document.querySelector('#terminal-panel .chat-view')")
     page.click('#terminal-panel [data-testid="chat-agent-chip"]')
     page.wait_for_selector('[data-testid="chat-agent-menu"]')
