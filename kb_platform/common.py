@@ -764,15 +764,35 @@ def set_secrets_shared(target, on: bool) -> None:
 def born_closed(parent, path) -> bool:
     """Must this child be born owner-only, ignoring the folder it lands in?
 
-    Two cases: the `_secrets` folder itself (a folder of credentials never
-    starts out as wide as the project around it), and anything inside a
-    `_secrets` folder that has not been shared. Share the folder and this goes
+    Three cases: the `_secrets` folder itself (a folder of credentials never
+    starts out as wide as the project around it), a `_private` folder (one
+    person's notes, see is_private_root), and anything inside a `_secrets`
+    folder that has not been shared. Share the folder and this goes
     false — which is what makes the share mean anything for keys added later.
     """
     rel = str(path)
-    if is_secret_root(rel):
+    if is_secret_root(rel) or is_private_root(rel):
         return True
     return is_secret_path(rel) and not secrets_folder_shares(parent)
+
+
+def is_private_root(rel: str) -> bool:
+    """True for a `_private` FOLDER: one person's sensitive notes kept next to
+    the project or topic they belong to. Born owner-only wherever it is made —
+    the folder around it may be open to a whole team, and so, unasked, to the
+    search indexer — and opened up only by an explicit share. Its contents need
+    no rule of their own: nobody else can even list the folder."""
+    return os.path.basename(str(rel).rstrip("/")) == "_private"
+
+
+def drop_acl(path) -> None:
+    """Remove a folder's access and default ACL entries — what a new folder
+    inherits from a parent with a default ACL — leaving its mode bits alone."""
+    for attr in (ACL_XATTR, ACL_DEFAULT_XATTR):
+        try:
+            os.removexattr(path, attr, follow_symlinks=False)
+        except OSError:
+            pass
 
 
 def is_secret_root(rel: str) -> bool:
@@ -1201,8 +1221,32 @@ def mkdir_with_mode(path) -> None:
         return
     os.mkdir(path, 0o700)
     os.chmod(path, birth_mode(parent, True, str(path)))
+    if is_private_root(str(path)):
+        # Under a parent with a default ACL the kernel has already copied its
+        # grants onto the new folder — masked off by the chmod, but still there
+        # to come back with the next chmod g+rx, and passed on to everything
+        # created inside. A private folder starts with none.
+        drop_acl(path)
     if carry_mark:
         set_secrets_shared(path, True)
+
+
+def makedirs_with_mode(path) -> None:
+    """`mkdir -p` where every missing folder is born as mkdir_with_mode would
+    make it: the audience of its parent, owner-only for `_private`/`_secrets`."""
+    missing = []
+    d = str(path)
+    while not os.path.lexists(d):
+        missing.append(d)
+        up = os.path.dirname(d)
+        if up == d:
+            break
+        d = up
+    for d in reversed(missing):
+        try:
+            mkdir_with_mode(d)
+        except FileExistsError:
+            pass
 
 
 def reset_to_parent_audience(path, is_dir: bool, *,

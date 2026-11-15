@@ -957,8 +957,9 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
             # "Same as the folder it's in", asked for deliberately — the one
             # thing that may open a `_secrets` folder up to its project, which
             # is exactly what a team that shares credentials wants and could
-            # not have before.
-            common.reset_audience_tree(p, secret_root_follows=common.is_secret_root(rel))
+            # not have before. A `_private` folder is opened the same way.
+            common.reset_audience_tree(p, secret_root_follows=common.is_secret_root(rel)
+                                       or common.is_private_root(rel))
             out["group"] = (grp.getgrgid(os.lstat(p).st_gid).gr_name
                             if _grp_ok(os.lstat(p).st_gid) else "")
             return out
