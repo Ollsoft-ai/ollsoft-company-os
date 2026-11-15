@@ -15,6 +15,7 @@ import { Strikethrough, TaskList, Table } from "@lezer/markdown";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { yCollab } from "y-codemirror.next";
+import { notUndoableFromYjs } from "./collabundo.js";
 import { init as initRichView, mdHighlight, calibrateListMetrics, tableField,
          livePreview, spacedLinks,
          listIndent, todoInputRule, mentionHighlight, mentionSource, repaintMentions,
@@ -4782,6 +4783,7 @@ async function mountDoc(t) {
   t.blameComp = new Compartment();
   const extensions = [
     history(),
+    notUndoableFromYjs(ydoc),            // Ctrl+Z steps back your edits, not the load or other people's
     keymap.of([
       { any: (v, e) => editKey(e) },     // bold, italic, link… — your keys (EDIT_BINDINGS)
       { key: "Tab", run: (v) => listIndent(v, 1), shift: (v) => listIndent(v, -1) },
