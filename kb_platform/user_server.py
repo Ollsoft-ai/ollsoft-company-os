@@ -1799,10 +1799,36 @@ ARTIFACT_CSP = (
 )
 
 
+# Links to knowledgebase files open in the app (artifact_links.js). Inline,
+# because the artifact's CSP allows inline script and nothing else.
+_LINKS_JS = (Path(__file__).resolve().parent / "artifact_links.js").read_text()
+_HEAD_TAG = re.compile(r"<head\b[^>]*>", re.I)
+_HTML_TAG = re.compile(r"<html\b[^>]*>", re.I)
+_DOCTYPE = re.compile(r"\A\ufeff?\s*<!doctype[^>]*>", re.I)
+
+
+def with_link_handler(html: str, rel: str) -> str:
+    """The page with the link handler as the first thing in its <head> — or,
+    when no head or html tag comes before the page's own first script, right
+    after the doctype (the parser still puts it in the head), or in front."""
+    folder = json.dumps(os.path.dirname(rel)).replace("</", "<\\/")
+    tag = "<script>" + _LINKS_JS.replace("__KB_ARTIFACT_DIR__", folder) + "</script>"
+    first_script = html.lower().find("<script")
+    for rx in (_HEAD_TAG, _HTML_TAG):
+        m = rx.search(html)
+        if m and (first_script < 0 or m.start() < first_script):
+            return html[:m.end()] + tag + html[m.end():]
+    m = _DOCTYPE.match(html)
+    if m:
+        return html[:m.end()] + tag + html[m.end():]
+    return tag + html
+
+
 async def artifact_raw(request: web.Request) -> web.StreamResponse:
     """Serve an artifact's HTML with a restrictive CSP header. Loaded into a
     sandboxed (opaque-origin) iframe, so: opaque origin blocks reaching the app;
-    CSP blocks reaching the network. The author controls neither."""
+    CSP blocks reaching the network. The author controls neither. The platform
+    adds one thing to the page: the handler that opens linked files in the app."""
     rel = request.query.get("path", "")
     p = common.resolve_repo_path(rel)
     if p is None or not str(p).endswith(".html"):
@@ -1813,6 +1839,7 @@ async def artifact_raw(request: web.Request) -> web.StreamResponse:
         html = p.read_text(errors="replace")
     except (PermissionError, OSError):
         return web.Response(status=403)
+    html = with_link_handler(html, str(p.relative_to(common.REPO_ROOT.resolve())))
     return web.Response(text=html, content_type="text/html",
                         headers={"Content-Security-Policy": ARTIFACT_CSP,
                                  "X-Content-Type-Options": "nosniff"})

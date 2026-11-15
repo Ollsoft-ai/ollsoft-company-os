@@ -4971,6 +4971,29 @@ function inArtifactScope(tab, p) {
   return p === dir || p.startsWith(dir + "/");
 }
 
+// kb-open: a link in an artifact (the platform adds the click handler, see
+// kb_platform/artifact_links.js) or its own script asks the app to open a
+// file. It reads nothing back and writes nothing, so the checks are about not
+// being a nuisance or a trick: a knowledgebase path only — never a URL, never
+// a `_secrets/` file put on screen — and only right after a click in the page
+// (transient user activation reaches the app from the frame), one per moment.
+function artifactOpenPath(raw) {
+  if (typeof raw !== "string" || raw.length > 1024) return null;
+  const p = raw.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!/^(company|projects|users)(\/|$)/.test(p)) return null;
+  if (p.split("/").some((s) => s === "" || s === "." || s === ".." || /[\\\0]/.test(s))) return null;
+  return isSecretPath(p) ? null : p;
+}
+let _artifactOpenAt = 0;
+function artifactMayOpen() {
+  const ua = navigator.userActivation;
+  if (ua && !ua.isActive) return false;
+  const now = Date.now();
+  if (now - _artifactOpenAt < 500) return false;
+  _artifactOpenAt = now;
+  return true;
+}
+
 // The bridge: forward an artifact's SQL to the per-user backend, which runs it as
 // the viewer. The message is matched to the open artifact tab it came from —
 // background artifact tabs stay live (dashboards keep refreshing).
@@ -5143,6 +5166,15 @@ window.addEventListener("message", async (ev) => {
           result = wr.ok && !wj.error ? { ok: true, path: rel } : { error: wj.error || "could not save" };
           if (result.ok) { kbToast("Saved to " + rel, "ok"); loadTree(true); }
         }
+      }
+    } else if (msg.type === "kb-open") {
+      const p = artifactOpenPath(msg.path);
+      const line = Number.isInteger(msg.line) && msg.line > 0 ? msg.line : 0;
+      if (!p) result = { error: "not a knowledgebase file" };
+      else if (!artifactMayOpen()) result = { error: "opens only on a click in the page" };
+      else {
+        if (line && p.endsWith(".md")) openAtLine(p, line); else openDeepLink(p);
+        result = { ok: true };
       }
     } else if (msg.type === "kb-clipboard") {
       try {
