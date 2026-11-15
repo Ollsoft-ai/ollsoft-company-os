@@ -583,7 +583,7 @@ async def create_file(request: web.Request) -> web.Response:
     if p is None:
         return web.json_response({"error": "bad path"}, status=400)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
+        common.makedirs_with_mode(p.parent)          # a missing `_private` on the way is born closed
         if p.exists():
             return web.json_response({"error": "exists"}, status=409)
         common.create_with_mode(p, exclusive=True)   # audience of its folder

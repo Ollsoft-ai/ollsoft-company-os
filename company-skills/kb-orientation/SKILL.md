@@ -48,7 +48,7 @@ kb-search --status                                # coverage, state, today's spe
 - It runs **as you**: every hit is a file you could `cat`. Hidden sidecars of Office/PDF files are included.
 - `rg` is still the tool for exact strings, regexes and code (`--hidden` to include sidecars).
 - Each reranked search costs the company ~$0.003 and counts against your daily cap (200). In a loop or a script, pass `--no-rerank`.
-- Never embedded, so never found by meaning: `_secrets/`, private (0600) files, folders holding a `.noembed` file, and — if an admin chose it — `users/`. Credentials inside documents are redacted before anything is sent. docs/semantic-search.md has the whole design.
+- Never embedded, so never found by meaning: `_secrets/`, `_private/` folders (made in the app, they are owner-only), private (0600) files, folders holding a `.noembed` file, and — if an admin chose it — `users/`. Credentials inside documents are redacted before anything is sent. docs/semantic-search.md has the whole design.
 
 # Editing documents
 
