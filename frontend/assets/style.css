@@ -2285,6 +2285,21 @@ button.chat-tool-sum:hover { color: var(--ink); }
 .chat-field input, .chat-field select { font: inherit; padding: .3rem .45rem; background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: var(--r); }
 .chat-field.check { flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: .5rem; }
 .chat-field.check input { width: 1rem; height: 1rem; padding: 0; accent-color: var(--accent); }
+/* question forms: header, the question, then options to pick from */
+.chat-elicit .chat-form { gap: .75rem; }
+.chat-field-title { font-size: .76rem; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); }
+.chat-field-desc { font-size: .88rem; color: var(--ink); }
+.chat-opts { display: flex; flex-direction: column; gap: .25rem; margin-top: .2rem; }
+.chat-opt { display: flex; align-items: flex-start; gap: .55rem; padding: .4rem .55rem; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); cursor: pointer; }
+.chat-opt:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.chat-opt:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.chat-field .chat-opt input { flex: none; width: 1rem; height: 1rem; margin: .15rem 0 0; padding: 0; accent-color: var(--accent); }
+.chat-opt-text { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.chat-opt-label { color: var(--ink); font-size: .88rem; }
+.chat-opt-desc { color: var(--muted); font-size: .8rem; }
+.chat-opt-preview { margin: .25rem 0 0; padding: .45rem .55rem; background: var(--panel2); border-radius: var(--r); font-size: .78rem; white-space: pre-wrap; max-height: 16rem; overflow: auto; }
+.chat-field.companion { margin-top: -.45rem; }
+.chat-perm.done .chat-opt { cursor: default; }
 /* the plan: Claude Code's todo list, under the transcript */
 .chat-plan { flex: 0 0 auto; border-top: 1px solid var(--border); padding: .4rem 1rem .45rem; background: var(--chassis); font-size: .84rem; max-height: 30%; overflow: auto; }
 .chat-plan summary { cursor: pointer; color: var(--muted); font-family: var(--mono); font-size: .72rem; letter-spacing: .03em; user-select: none; }
