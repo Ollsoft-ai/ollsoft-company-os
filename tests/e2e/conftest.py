@@ -76,7 +76,10 @@ def run_command(page, name):
     """Run a command from the palette (Ctrl+Shift+P) by name. Types only once
     the palette has focus — keys typed while it was still opening went to
     whatever had it, a terminal included — and presses Enter only once the
-    command is listed."""
+    command is listed. Two frames first: a tab just clicked hands the focus to
+    its terminal in the next frame, which took it back from a palette opened
+    in between."""
+    page.evaluate("() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))")
     page.keyboard.press("Control+Shift+P")
     page.wait_for_function(
         "() => document.activeElement && document.activeElement.matches('[data-testid=\"palette-input\"]')",
