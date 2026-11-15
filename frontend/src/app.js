@@ -26,6 +26,7 @@ import { initDictation, toggleDictation, dictationReady, retryDictation, setDict
          releaseMicNow, listRecordings, recordingBlob, deleteRecording,
          transcribeRecording } from "./dictation.js";
 import { settings } from "./settings.js";
+import { isTextPath } from "./textfiles.js";
 import { blame } from "./blame.js";
 import { externalChanges, watchExternal } from "./extchanges.js";
 import { connectEvents } from "./events.js";
@@ -1817,6 +1818,7 @@ const _movingPaths = new Set();   // paths mid-move, so the tree-prune poll skip
 function kindForPath(p) {
   if (isSecretPath(p)) return "secret";
   if (p.endsWith(".html")) return "artifact";
+  if (isTextPath(p)) return "text";
   return "doc";
 }
 
@@ -2606,6 +2608,7 @@ function updateTreePresence() {
 function openEntry(n) {
   if (isSecretPath(n.path)) openPath(n.path, "secret");
   else if (n.kind === "artifact") openPath(n.path, "artifact");
+  else if (n.kind === "file" && isTextPath(n.path)) openPath(n.path, "text");
   else if (n.kind === "file") window.open("/api/attachment?path=" + encodeURIComponent(n.path), "_blank");
   else openPath(n.path, "doc");
 }
@@ -3776,6 +3779,7 @@ async function openDeepLink(p) {
   if (isSecretPath(p)) await openPath(p, "secret");
   else if (p.endsWith(".html")) await openPath(p, "artifact");
   else if (p.endsWith(".md")) await openPath(p, "doc");
+  else if (isTextPath(p)) await openPath(p, "text");
   else if (baseName(p).includes(".")) {
     // a plain attachment link (image, pdf, docx): open it in its own tab so the
     // app itself is never replaced by the raw file
@@ -4621,6 +4625,30 @@ registerView("secret", {
   isActiveDocument: true,
 });
 
+// ---- text viewer: JSON, YAML, CSV, logs, configs, scripts (textview.js) ----
+// Read-only, loaded the first time one opens. Which files: textfiles.js.
+let _textMod = null;
+const textShell = {
+  loading: (t, label) => showTabLoading(t, label),
+  loaded: (t) => clearTabLoading(t),
+  alive: (t) => tabs.includes(t),
+};
+registerView("text", {
+  label: "Text file",
+  icon: () => I.file,
+  tooltip: (t) => t.path,
+  key: (spec) => (typeof spec.path === "string" ? spec.path : null),
+  restore: (spec) => (typeof spec.path === "string" && isTextPath(spec.path) ? { kind: "text", path: spec.path } : null),
+  serialize: (t) => ({ kind: "text", path: t.path }),
+  open: async (t) => {
+    if (!_textMod) _textMod = import("./textview.js").catch((e) => { _textMod = null; throw e; });
+    const m = await _textMod;
+    await m.mount(t, textShell);
+    refreshTabBadge(t);
+  },
+  isActiveDocument: true,
+});
+
 // ---- secret viewer: masked, reveal/copy/edit — never the collab editor ----
 async function mountSecret(t) {
   showTabLoading(t, "Opening " + baseName(t.path) + "…");
@@ -5186,6 +5214,7 @@ function runLauncher(b) {
   if (isSecretPath(p)) openPath(p, "secret");
   else if (p.endsWith(".html")) openPath(p, "artifact");
   else if (p.endsWith(".md")) openPath(p, "doc");
+  else if (isTextPath(p)) openPath(p, "text");
   else window.open("/api/attachment?path=" + encodeURIComponent(p), "_blank");
 }
 
