@@ -899,6 +899,11 @@ about the app — see §8.1):
   and terminals register from `app.js`; the agent chat from its own lazily
   loaded chunk. The shell knows no kind by name. Modules add palette commands
   with `registerCommand` and chrome buttons through a named slot.
+- **Text files** (`.json`, `.yaml`, `.csv`, `.txt`, `.log`, configs, scripts —
+  the list is `frontend/src/textfiles.js`) open in the `text` view: read-only,
+  highlighted, with line numbers, CSV/TSV also as a table and JSON checked as
+  it opens. Read through `/api/attachment` as the viewer; past 5 MB, or binary,
+  it offers the raw file. Every other non-document file still opens raw.
 - **The chrome**: on a desktop the brand row is ☰ · logo · the product's
   name (which gives way only under ~190px of panel); the ☰ is a borderless
   icon that takes a background on hover, while the corner's floating one
