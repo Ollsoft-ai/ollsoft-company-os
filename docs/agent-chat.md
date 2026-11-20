@@ -151,6 +151,14 @@ sign-in command alike. The system's Node is not touched. Nothing else
 changes on the box: the platform works without any agent installed — the
 picker just says so.
 
+**Every update refreshes them.** The catalogue in `kb_platform/acp.py` pins
+each agent's npm version, and `kb-update.sh` runs `install-agents.sh
+--refresh` before it deploys: every agent already installed here moves to the
+version the new release pins, and the private Node to the newest of its major
+(22). Agents nobody installed stay uninstalled. It is best effort — a failed
+refresh is noted and the update goes on with the agents it had. Pins are bumped
+in the release that ships them, to versions at least a week old.
+
 ### Extra environment per agent (admins)
 
 An admin can give an agent extra environment variables, for everyone who uses

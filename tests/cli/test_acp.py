@@ -573,3 +573,23 @@ def test_extra_environment_is_checked_and_merged_in_order(tmp_path, monkeypatch)
     f.write_text("not json")
     assert acp.read_agent_env() == {}, "a broken file starts agents without extras, never fails them"
 
+
+def test_an_update_refreshes_exactly_the_agents_installed_here(tmp_path, monkeypatch):
+    """install-agents.sh --refresh re-installs the release's pins for the
+    agents already in the shared prefix — never one nobody installed."""
+    nm = tmp_path / "node_modules"
+    (nm / "@agentclientprotocol" / "claude-agent-acp").mkdir(parents=True)
+    (nm / "opencode-ai").mkdir()
+    monkeypatch.setattr(acp, "AGENTS_PREFIX", tmp_path)
+    assert acp.installed_pins() == acp.BY_ID["claude"]["npm"] + acp.BY_ID["opencode"]["npm"]
+    assert acp._npm_name("@agentclientprotocol/claude-agent-acp@0.107.0") == "@agentclientprotocol/claude-agent-acp"
+    assert acp._npm_name("opencode-ai@1.19.5") == "opencode-ai" and acp._npm_name("@deepseek-ai/dsh") == "@deepseek-ai/dsh"
+    for a in acp.CATALOGUE:
+        for spec in a.get("npm") or []:
+            assert spec == "@deepseek-ai/dsh" or "@" in spec[1:], f"{spec}: every npm package is pinned"
+
+
+def test_the_installer_default_matches_the_catalogue_pin():
+    src = (Path(__file__).resolve().parents[2] / "scripts" / "install-agents.sh").read_text()
+    for aid in ("claude", "codex", "gemini"):
+        assert acp.BY_ID[aid]["npm"][0] in src, f"install-agents.sh installs another {aid} than the chat pins"

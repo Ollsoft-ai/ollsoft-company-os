@@ -125,6 +125,13 @@ healthy() {
   case "$code" in 200|302) return 0 ;; *) note "hub answered HTTP $code"; return 1 ;; esac
 }
 
+# The chat's agents (Claude Code's adapter, OpenCode, … and their Node) move
+# with the release: every agent installed here goes to the version this release
+# pins. Before the deploy, whose restart is what makes running chats pick them
+# up; best effort, because an agent a step behind is no reason to stay behind.
+bash "$SRC/scripts/install-agents.sh" --refresh 2>&1 | sed 's/^/kb-update: /' \
+  || note "agents: refresh failed — the chat keeps the agents it had"
+
 if deploy && healthy; then
   NEWV="$(. /etc/kb/kb.env; echo "${KB_VERSION:-?}")"
   note "updated to $NEWV"

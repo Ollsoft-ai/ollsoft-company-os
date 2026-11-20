@@ -118,7 +118,7 @@ _SID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 CATALOGUE: list[dict] = [
     {"id": "claude", "name": "Claude Code", "vendor": "Anthropic",
      "bin": "claude-agent-acp", "args": [], "env": {"NO_BROWSER": "1", "CLAUDE_CODE_REMOTE": "1"},
-     "npm": ["@agentclientprotocol/claude-agent-acp@0.81.2"],
+     "npm": ["@agentclientprotocol/claude-agent-acp@0.107.0"],
      "keys": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
      "cred": ["~/.claude/.credentials.json", "~/.claude/credentials.json"],
      "login": {"how": "terminal", "cmd": ["claude-agent-acp", "--cli", "auth", "login", "--claudeai"],
@@ -162,7 +162,7 @@ CATALOGUE: list[dict] = [
                                      "set OPENAI_BASE_URL and OPENAI_MODEL in ~/.qwen/.env."}},
     {"id": "opencode", "name": "OpenCode", "vendor": "SST",
      "bin": "opencode", "args": ["acp"], "env": {},
-     "npm": ["opencode-ai@1.18.31"],
+     "npm": ["opencode-ai@1.19.5"],
      "keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
      "cred": ["~/.local/share/opencode/auth.json", "~/.config/opencode/auth.json"],
      "login": {"how": "terminal", "cmd": ["opencode", "auth", "login"],
@@ -207,6 +207,25 @@ def bin_path(agent: dict) -> str | None:
     # the same PATH the agent itself would get, so an agent in the person's
     # own home counts as installed for them
     return shutil.which(agent["bin"], path=agent_path())
+
+
+def _npm_name(spec: str) -> str:
+    """"@scope/pkg@1.2.3" -> "@scope/pkg", "pkg@1.2.3" -> "pkg"."""
+    at = spec.find("@", 1)
+    return spec if at < 0 else spec[:at]
+
+
+def installed_pins() -> list[str]:
+    """The catalogue's npm packages for every agent already installed in the
+    shared prefix — what an update re-installs (scripts/install-agents.sh
+    --refresh), so the chat's agents move with each release instead of staying
+    on whatever was current the day an admin pressed Install."""
+    out: list[str] = []
+    for a in CATALOGUE:
+        npm = a.get("npm") or []
+        if npm and all((AGENTS_PREFIX / "node_modules" / _npm_name(x)).is_dir() for x in npm):
+            out += npm
+    return out
 
 
 def _home() -> Path:
@@ -1289,3 +1308,10 @@ def add_routes(app: web.Application) -> None:
         await shutdown()
     app.on_shutdown.append(_bye)
 
+
+if __name__ == "__main__":   # `python -m kb_platform.acp installed-pins` (install-agents.sh --refresh)
+    import sys
+    if sys.argv[1:] == ["installed-pins"]:
+        print("\n".join(installed_pins()))
+    else:
+        sys.exit("usage: python -m kb_platform.acp installed-pins")
