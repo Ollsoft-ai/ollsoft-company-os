@@ -302,7 +302,7 @@ to check.
 ## 7. Sharing & the permission UI
 
 The ⚙ panel speaks **people**, not octal. `/fs/share` takes a scope — *same as the
-folder it's in* / *everyone at Ollsoft* / *specific people* / *only me* — and
+folder it's in* / *everyone with an account* / *specific people* / *only me* — and
 hub.py picks the mechanism per object, so the everyday action (adding or removing
 one person) is a `gpasswd` on the owning group and touches no files at all. The
 O(files) ACL walk happens once, when a viewer group is first bound to a folder.

@@ -6409,7 +6409,7 @@ async function openHistory(path, rev) {
 
 const SH_SCOPES = [
   ["inherit", "Same as the folder it's in"],
-  ["everyone", "Everyone at Ollsoft"],
+  ["everyone", "Everyone with an account"],
   ["people", "Specific people"],
   ["private", "Only me"],
 ];
@@ -6421,7 +6421,7 @@ function shInitials(s) {
 
 function shWho(a) {
   if (!a) return "someone";
-  if (a.scope === "everyone") return "everyone at Ollsoft";
+  if (a.scope === "everyone") return "everyone with an account";
   if (a.scope === "private") return "its owner only";
   return (a.group || "its group") + (a.people ? ` (${a.people} ${a.people === 1 ? "person" : "people"})` : "");
 }
@@ -6627,7 +6627,7 @@ function showShareModal(s, principals) {
   function renderHint() {
     const t = {
       inherit: `Follows <b>${escapeHtml(s.parent || "")}</b>. Change it there and this follows along.`,
-      everyone: "Anyone with an Ollsoft account can open and edit this.",
+      everyone: "Anyone with an account here can open and edit this.",
       people: s.is_dir
         ? "Only the people below. Adding or removing someone later is instant — no re-processing of the files inside."
         : "Only the people below, regardless of who can see the folder it sits in.",
@@ -6640,7 +6640,7 @@ function showShareModal(s, principals) {
     peopleHost.innerHTML = "";
     const rows = [{ user: owner.user, name: owner.name, role: "owner" }];
     if (scope === "everyone" || (scope === "inherit" && inherited === "everyone")) {
-      rows.push({ user: "*", name: "Everyone at Ollsoft", role: "everyone" });
+      rows.push({ user: "*", name: "Everyone with an account", role: "everyone" });
     } else if (scope === "inherit") {
       rows.push(...(Array.isArray(inherited) ? inherited : []).filter((q) => q.user !== owner.user));
     } else if (scope !== "private") {
