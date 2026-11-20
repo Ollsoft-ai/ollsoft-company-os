@@ -114,6 +114,11 @@ def test_sign_in_form_is_one_a_password_manager_can_find_and_submit(browser):
                pass: !!p && !!document.querySelector('label[for="' + p.id + '"]') };
     }""")
     assert form == {"method": "post", "action": "/login", "user": True, "pass": True}
+    # one submit button, no autocomplete="off" anywhere, and the name focused
+    # only once the page has loaded (a manager's extension hooks it first)
+    assert page.evaluate("""() => document.querySelectorAll('form button[type="submit"]').length === 1
+      && !document.querySelector('[autocomplete="off"]') && !document.querySelector('[autofocus]')""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'username'", timeout=5000)
     page.fill("#username", U("alice"))
     page.fill("#password", CREDS["alice"])
     page.evaluate("() => document.querySelector('form').submit()")
