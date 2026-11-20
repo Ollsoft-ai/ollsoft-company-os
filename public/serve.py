@@ -77,7 +77,7 @@ def editor_available() -> bool:
 # file gets re-checked here.
 _TOKEN = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 _VALUE = re.compile(r"^[#A-Za-z0-9 ,.'\"_()%-]{1,120}$")
-_THEMES = {"deep-blue", "dark", "light"}
+_THEMES = {"deep-blue", "dark", "light", "solarized-light"}
 
 
 def look_of(conf: dict) -> tuple[str, str]:

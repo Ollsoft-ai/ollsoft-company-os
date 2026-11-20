@@ -81,9 +81,27 @@ def test_registry_themes_exist_in_the_stylesheet():
     css = CSS.read_text()
     entry = s.BY_KEY["ui.theme"]
     for opt in entry["options"]:
-        if opt == entry["default"]:
-            continue                                   # the default is :root itself
+        if opt in (entry["default"], "system"):
+            continue                                   # the default is :root itself; System picks one of the others
         assert f':root[data-theme="{opt}"]' in css, f"no theme block for {opt}"
+    # System's two choices are real themes, each in its own mode
+    blocks = dict(_blocks(re.sub(r"/\*.*?\*/", "", css, flags=re.S)))
+    for key, mode in (("ui.theme.light", "light"), ("ui.theme.dark", "dark")):
+        for opt in s.BY_KEY[key]["options"]:
+            assert opt in entry["options"] and opt != "system", f"{key}: {opt} is not a theme"
+            body = blocks.get(f':root[data-theme="{opt}"]', blocks[":root"])
+            m = re.search(r"color-scheme:\s*(\w+)", body)
+            got = m.group(1) if m else "dark"          # a theme that names none keeps :root's dark
+            assert got == mode, f"{key}: {opt} is not a {mode} theme"
+
+
+def test_the_public_page_knows_every_theme():
+    """A public link wears the company's theme (public/serve.py checks the name
+    against its own list): a theme missing there silently falls back to deep blue."""
+    from kb_platform import settings as s
+    src = (Path(__file__).resolve().parents[2] / "public" / "serve.py").read_text()
+    names = set(re.findall(r'"([a-z-]+)"', re.search(r"_THEMES = \{([^}]*)\}", src).group(1)))
+    assert names == set(s.BY_KEY["ui.theme"]["options"]) - {"system"}, names
 
 
 def test_customisable_tokens_exist_and_match_their_patterns():

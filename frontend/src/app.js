@@ -1386,11 +1386,20 @@ restoreSidebarWidth();
 
 // The theme is a setting (kb_platform/settings.py: ui.theme), applied at module
 // eval from the cached value so the first paint is already in the right colours,
-// then kept in step with the server. One theme today; the attribute is the hook
-// the theme step fills with CSS.
-function applyTheme(t) { document.documentElement.dataset.theme = t || "deep-blue"; }
-applyTheme(settings.get("ui.theme"));
-settings.subscribe("ui.theme", (t) => { applyTheme(t); retintTerminals(); sendArtifactThemeAll(); });
+// then kept in step with the server. "system" follows the device's light or
+// dark mode, live, wearing the two themes chosen for it (ui.theme.light and
+// ui.theme.dark); <html data-theme> always names the theme actually worn.
+const _darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+function wornTheme(t) {
+  if (t !== "system") return t || "deep-blue";
+  return _darkMq && _darkMq.matches ? settings.get("ui.theme.dark") || "deep-blue"
+    : settings.get("ui.theme.light") || "light";
+}
+function applyTheme() { document.documentElement.dataset.theme = wornTheme(settings.get("ui.theme")); }
+function themeChanged() { applyTheme(); retintTerminals(); sendArtifactThemeAll(); }
+applyTheme();
+for (const k of ["ui.theme", "ui.theme.light", "ui.theme.dark"]) settings.subscribe(k, themeChanged);
+if (_darkMq) _darkMq.addEventListener("change", () => { if (settings.get("ui.theme") === "system") themeChanged(); });
 
 // Per-token overrides on top of the chosen theme (ui.theme.custom): inline
 // custom properties on <html>, before first paint from the cache and live

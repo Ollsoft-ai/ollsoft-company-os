@@ -91,6 +91,10 @@ def company_look() -> dict:
         return {}
     look = {}
     theme = layer.get("ui.theme")
+    if theme == "system":
+        # The device's mode is the reader's, and a public page is the
+        # company's: it wears the company's light choice for System.
+        theme = layer.get("ui.theme.light") or kbsettings.BY_KEY["ui.theme.light"]["default"]
     if isinstance(theme, str) and theme:
         look["theme"] = theme
     custom = layer.get("ui.theme.custom")

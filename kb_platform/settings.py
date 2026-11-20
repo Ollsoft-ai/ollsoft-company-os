@@ -91,11 +91,23 @@ REGISTRY: list[dict] = [
      "help": "A thin stripe beside every line: you, a colleague, or a machine (an agent, a script "
              "or a sync — anything that changed the file outside the editor). Click it for who, "
              "when and the change. Colours: blame-me, blame-other, blame-machine in the theme."},
-    {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light"], "default": "deep-blue",
-     "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light"},
+    {"key": "ui.theme", "type": "enum", "options": ["deep-blue", "dark", "light", "solarized-light", "system"],
+     "default": "deep-blue",
+     "labels": {"deep-blue": "Deep blue", "dark": "Dark", "light": "Light",
+                "solarized-light": "Solarized light", "system": "System (light or dark)"},
      "scopes": ("company", "user"), "group": "Appearance", "label": "Theme",
      "help": "Colours for the whole app, editor and terminal included. Deep blue is the house look; "
-             "Dark and Light follow Notion's greys and paper."},
+             "Dark and Light follow Notion's greys and paper; Solarized light is Solarized's paper "
+             "and accents. System follows the device's light or dark mode, live, with the two "
+             "themes chosen below."},
+    {"key": "ui.theme.light", "type": "enum", "options": ["light", "solarized-light"], "default": "light",
+     "labels": {"light": "Light", "solarized-light": "Solarized light"},
+     "scopes": ("company", "user"), "group": "Appearance", "label": "Light theme for System",
+     "help": "The theme worn while the device is in light mode, when Theme is System."},
+    {"key": "ui.theme.dark", "type": "enum", "options": ["deep-blue", "dark"], "default": "deep-blue",
+     "labels": {"deep-blue": "Deep blue", "dark": "Dark"},
+     "scopes": ("company", "user"), "group": "Appearance", "label": "Dark theme for System",
+     "help": "The theme worn while the device is in dark mode, when Theme is System."},
     {"key": "terminal.side", "type": "enum", "options": ["right", "bottom", "left"], "default": "right",
      "labels": {"right": "Right", "bottom": "Bottom", "left": "Left"},
      "scopes": ("company", "user"), "group": "Terminal", "label": "Where the terminal opens",
