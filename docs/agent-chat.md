@@ -151,6 +151,25 @@ sign-in command alike. The system's Node is not touched. Nothing else
 changes on the box: the platform works without any agent installed — the
 picker just says so.
 
+### Extra environment per agent (admins)
+
+An admin can give an agent extra environment variables, for everyone who uses
+it: the **Environment** button on the agent in the picker (`GET`/`POST
+/admin/agent-env`). Typical use is a switch, such as `OPENCODE_ENABLE_EXA=1`
+for OpenCode's web search.
+
+- **Stored outside the knowledgebase,** never in its git history:
+  `/etc/kb/agent-env.json`, `root:kb-users 0640`, written by the hub, read by
+  each person's backend when it starts an agent.
+- **The app shows the names, never a value.** But every person's agent runs
+  with them, so this is for switches and shared settings, not someone's own key
+  (that is the per-person key dialog, which wins over an admin value).
+- **Refused names:** anything that would run code as every person who opens a
+  chat or that the platform sets itself — `PATH`, `HOME`, `NODE_OPTIONS`,
+  `LD_*`, `PYTHONPATH`, `KB_*` and the like (`acp.env_name_problem`).
+- **Takes effect on the agent's next start;** a chat already running keeps its
+  environment until then.
+
 ## How it works
 
 ```

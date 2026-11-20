@@ -238,6 +238,72 @@ def write_keys(d: dict) -> None:
     common.write_user_config(_me(), KEYS_FILE, json.dumps(d, indent=1).encode())
 
 
+# Extra environment per agent, set by an admin (Settings → the chat's agent
+# list → Environment): e.g. OPENCODE_ENABLE_EXA=1 to give OpenCode web search.
+# One file the hub (root) writes, outside the knowledgebase and so never in its
+# git history: root:<everyone> 0640, read by each person's backend when it
+# starts an agent. The app shows the NAMES only, never a value — but every
+# person's agent runs with them, so this is for switches and shared settings,
+# not anyone's own key (that is the chat's key dialog, per person).
+AGENT_ENV_FILE = common.ETC_DIR / "agent-env.json"
+AGENT_ENV_MAX = 32                      # variables per agent
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+# Names that would hand an admin code execution as every person who opens a
+# chat (a preload, a module to require, a startup file), or that the platform
+# itself sets: refused.
+_ENV_DENY = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "NODE_OPTIONS", "NODE_PATH",
+             "BASH_ENV", "ENV", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PERL5OPT", "PERL5LIB",
+             "RUBYOPT", "RUBYLIB", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "PROMPT_COMMAND", "IFS"}
+_ENV_DENY_PREFIX = ("LD_", "DYLD_", "KB_", "BASH_FUNC_")
+
+
+def env_name_problem(name) -> str | None:
+    """Why `name` can't be an extra variable, or None when it can."""
+    if not isinstance(name, str) or not _ENV_NAME_RE.match(name):
+        return "a name is letters, digits and _, not starting with a digit"
+    if name.upper() in _ENV_DENY or name.upper().startswith(_ENV_DENY_PREFIX):
+        return f"{name} can't be set here"
+    return None
+
+
+def env_value_problem(value) -> str | None:
+    if not isinstance(value, str) or len(value) > 4096 or any(c in value for c in "\r\n\x00"):
+        return "a value is one line of text, up to 4096 characters"
+    return None
+
+
+def read_agent_env() -> dict:
+    """{agent id: {NAME: value}} — only valid entries, whatever the file says."""
+    try:
+        with open(AGENT_ENV_FILE, "rb") as f:
+            d = json.loads(f.read(1024 * 1024))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for aid, env in (d.items() if isinstance(d, dict) else ()):
+        if aid in BY_ID and isinstance(env, dict):
+            ok = {k: v for k, v in env.items() if not env_name_problem(k) and not env_value_problem(v)}
+            if ok:
+                out[aid] = dict(list(ok.items())[:AGENT_ENV_MAX])
+    return out
+
+
+def agent_env(agent: dict) -> dict:
+    """The environment an agent starts with: this backend's, the agents' PATH,
+    the catalogue's switches, the admin's extra variables, then the person's
+    own key (theirs wins)."""
+    env = dict(os.environ)
+    env["PATH"] = agent_path()
+    env.update(agent.get("env", {}))
+    env.update(read_agent_env().get(agent["id"], {}))
+    key = read_keys().get(agent["id"])
+    if key and agent["keys"]:
+        env[agent["keys"][0]] = key
+    env.setdefault("HOME", str(_home()))
+    env.pop("KB_BACKEND_UDS", None)
+    return env
+
+
 def read_chats() -> list[dict]:
     d = _read_user_json(CHATS_FILE, [])
     return [c for c in d if isinstance(c, dict) and isinstance(c.get("id"), str)] if isinstance(d, list) else []
@@ -424,15 +490,7 @@ class AgentProc:
                 self.init_error = f"{self.agent['name']} is not installed on this server"
                 self._started.set()
                 return
-            env = dict(os.environ)
-            env["PATH"] = agent_path()
-            env.update(self.agent.get("env", {}))
-            keys = read_keys()
-            key = keys.get(self.agent["id"])
-            if key and self.agent["keys"]:
-                env[self.agent["keys"][0]] = key
-            env.setdefault("HOME", str(_home()))
-            env.pop("KB_BACKEND_UDS", None)
+            env = agent_env(self.agent)
             try:
                 self.proc = await asyncio.create_subprocess_exec(
                     exe, *self.agent.get("args", []), cwd=self.cwd, env=env,
@@ -1230,3 +1288,4 @@ def add_routes(app: web.Application) -> None:
     async def _bye(app):
         await shutdown()
     app.on_shutdown.append(_bye)
+

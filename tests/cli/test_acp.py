@@ -546,3 +546,30 @@ def test_an_agent_that_cannot_close_sessions_stops_getting_spares_once_some_leak
         assert not proc.spares, "no more spares once a few have leaked"
         await proc.stop()
     asyncio.run(run())
+
+
+def test_extra_environment_is_checked_and_merged_in_order(tmp_path, monkeypatch):
+    """An admin's extra variables per agent: switches like OPENCODE_ENABLE_EXA
+    reach the agent; names that would run code as every person who opens a
+    chat are refused, and a person's own key still wins."""
+    assert acp.env_name_problem("OPENCODE_ENABLE_EXA") is None
+    for bad in ("PATH", "LD_PRELOAD", "NODE_OPTIONS", "KB_ANYTHING", "1X", "A-B", "", None, "ld_preload"):
+        assert acp.env_name_problem(bad), bad
+    assert acp.env_value_problem("1") is None
+    assert acp.env_value_problem("a\nb") and acp.env_value_problem(5)
+    f = tmp_path / "agent-env.json"
+    f.write_text(json.dumps({"opencode": {"OPENCODE_ENABLE_EXA": "1", "LD_PRELOAD": "/x.so", "OK2": "a\nb"},
+                             "claude": {"ANTHROPIC_API_KEY": "admin"}, "nope": {"X": "1"}}))
+    monkeypatch.setattr(acp, "AGENT_ENV_FILE", f)
+    assert acp.read_agent_env() == {"opencode": {"OPENCODE_ENABLE_EXA": "1"},
+                                    "claude": {"ANTHROPIC_API_KEY": "admin"}}
+    monkeypatch.setattr(acp, "read_keys", lambda: {"claude": "mine"})
+    oc = acp.agent_env(acp.BY_ID["opencode"])
+    assert oc["OPENCODE_ENABLE_EXA"] == "1"
+    assert oc.get("LD_PRELOAD") == os.environ.get("LD_PRELOAD"), "a refused name never comes from the file"
+    cl = acp.agent_env(acp.BY_ID["claude"])
+    assert cl["ANTHROPIC_API_KEY"] == "mine", "the person's own key wins over an admin default"
+    assert cl["NO_BROWSER"] == "1" and "KB_BACKEND_UDS" not in cl
+    f.write_text("not json")
+    assert acp.read_agent_env() == {}, "a broken file starts agents without extras, never fails them"
+

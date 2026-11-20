@@ -933,6 +933,13 @@ class ChatView {
             b.addEventListener("click", () => this.pasteKey(a));
             acts.append(b);
           }
+          if (isAdmin) {
+            const b = el("button", "", "Environment");
+            b.type = "button"; b.setAttribute("data-testid", "chat-env-" + a.id);
+            b.title = "Extra environment variables " + a.name + " starts with, for everyone (admins only)";
+            b.addEventListener("click", () => this.editEnv(a));
+            acts.append(b);
+          }
         } else if (!a.npm) {
           // not an npm package an admin installs for everyone: it lives in
           // the person's own home, so the person installs it themselves
@@ -1138,6 +1145,27 @@ class ChatView {
     shell.toast(key.trim() ? "Key saved" : "Key removed", "ok");
     if (this.conn && this.conn.agentId === a.id) { this.conn.close(); this.conn = null; }
     await this.showPicker({ keep: !!this.sessionId });
+  }
+  // Extra environment for an agent, for everyone (an admin setting): the names
+  // are listed, a value is never shown back — set one again to change it.
+  async editEnv(a) {
+    const get = await fetch("/admin/agent-env").then((x) => x.json()).catch(() => null);
+    if (!get || !get.agents) { shell.toast((get && get.error) || "could not read the settings", "err"); return; }
+    const have = get.agents[a.id] || [];
+    const name = await shell.prompt(
+      (have.length ? "Set for " + a.name + ": " + have.join(", ") + ". " : "Nothing extra is set for " + a.name + ". ") +
+      "Name a variable to add or change it (e.g. OPENCODE_ENABLE_EXA); every person's " + a.name +
+      " starts with it. Values are never shown again.", "", { title: a.name + " environment", ok: "Next" });
+    if (!name || !name.trim()) return;
+    const n = name.trim();
+    const value = await shell.prompt("Value for " + n + " — leave it empty to remove " + n + ".", "",
+      { title: a.name + " · " + n, ok: "Save", password: true });
+    if (value === null || value === undefined) return;
+    const body = value === "" ? { agent: a.id, unset: [n] } : { agent: a.id, set: { [n]: value } };
+    const r = await fetch("/admin/agent-env", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { shell.toast(j.error || "could not save", "err"); return; }
+    shell.toast((value === "" ? n + " removed" : n + " saved") + " — new chats start with it", "ok");
   }
   async install(a, btn) {
     btn.disabled = true; btn.textContent = "Installing…";

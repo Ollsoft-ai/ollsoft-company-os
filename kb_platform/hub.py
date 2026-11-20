@@ -1821,6 +1821,66 @@ class Hub:
             "job": job,
         })
 
+    async def admin_agent_env(self, request: web.Request) -> web.Response:
+        """Extra environment per chat agent (acp.AGENT_ENV_FILE). GET lists the
+        NAMES per agent — a value is never sent back. POST {"agent", "set":
+        {NAME: value}, "unset": [NAME]} changes one agent's; a chat already
+        running keeps its environment until its agent next starts."""
+        admin = self._require_admin(request)
+        if not admin:
+            return web.json_response({"error": "admin only"}, status=403)
+        names = lambda env: {aid: sorted(v) for aid, v in env.items()}   # noqa: E731
+        if request.method == "GET":
+            return web.json_response({"agents": names(kbacp.read_agent_env())})
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.json_response({"error": "bad json"}, status=400)
+        if not isinstance(body, dict) or body.get("agent") not in kbacp.BY_ID:
+            return web.json_response({"error": "unknown agent"}, status=400)
+        aid = body["agent"]
+        sets, unsets = body.get("set") or {}, body.get("unset") or []
+        if not isinstance(sets, dict) or not isinstance(unsets, list):
+            return web.json_response({"error": "set is {NAME: value}, unset is [NAME]"}, status=400)
+        for k, v in sets.items():
+            why = kbacp.env_name_problem(k) or kbacp.env_value_problem(v)
+            if why:
+                return web.json_response({"error": why}, status=400)
+        allenv = kbacp.read_agent_env()
+        env = dict(allenv.get(aid, {}))
+        for k in unsets:
+            env.pop(k, None) if isinstance(k, str) else None
+        env.update(sets)
+        if len(env) > kbacp.AGENT_ENV_MAX:
+            return web.json_response({"error": f"{kbacp.AGENT_ENV_MAX} variables per agent at most"}, status=400)
+        if env:
+            allenv[aid] = env
+        else:
+            allenv.pop(aid, None)
+        try:
+            target = kbacp.AGENT_ENV_FILE
+            tmp = target.with_name(f".{target.name}.{os.urandom(6).hex()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(allenv, f, indent=1)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # every person's backend reads it as them: the everyone group, read-only
+                os.chown(tmp, 0, grp.getgrnam(EVERYONE_GROUP).gr_gid)
+                os.chmod(tmp, 0o640)
+                os.replace(tmp, target)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except (OSError, KeyError) as e:
+            return web.json_response({"error": f"could not save: {e}"}, status=500)
+        _audit("agents.env", admin, agent=aid, set=sorted(sets), unset=sorted(k for k in unsets if isinstance(k, str)))
+        return web.json_response({"ok": True, "agents": names(allenv)})
+
     async def admin_agents_install(self, request: web.Request) -> web.Response:
         admin = self._require_admin(request)
         if not admin:
@@ -3400,6 +3460,8 @@ def make_app() -> web.Application:
     app.router.add_post("/admin/settings", hub.admin_settings)
     app.router.add_get("/admin/agents", hub.admin_agents)
     app.router.add_post("/admin/agents/install", hub.admin_agents_install)
+    app.router.add_get("/admin/agent-env", hub.admin_agent_env)
+    app.router.add_post("/admin/agent-env", hub.admin_agent_env)
     app.router.add_post("/admin/brand/logo", hub.admin_brand_logo)
     app.router.add_post("/admin/search/retry", hub.admin_search_retry)
     app.router.add_get("/brand/logo", hub.brand_logo)
