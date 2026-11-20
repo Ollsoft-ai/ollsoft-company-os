@@ -785,6 +785,13 @@ def is_private_root(rel: str) -> bool:
     return os.path.basename(str(rel).rstrip("/")) == "_private"
 
 
+def is_private_path(rel: str) -> bool:
+    """True for a `_private` folder or anything inside one. Never indexed: the
+    share panel's "Only me" grants the search indexer nothing here (as for
+    `_secrets`), where elsewhere it keeps the owner's own search complete."""
+    return "_private" in str(rel).strip("/").split("/")
+
+
 def drop_acl(path) -> None:
     """Remove a folder's access and default ACL entries — what a new folder
     inherits from a parent with a default ACL — leaving its mode bits alone."""

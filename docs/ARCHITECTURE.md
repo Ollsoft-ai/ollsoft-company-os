@@ -341,7 +341,11 @@ indexer cannot read it, so it is never searched or embedded. Unlike `_secrets/`
 its contents are ordinary documents: live-edited, versioned, and the folder's
 mode alone keeps everyone else out. Only an explicit share widens it. A folder
 made outside the app (`mkdir` in a terminal) is the kernel's business and
-inherits as usual (`common.is_private_root`, `born_closed`).
+inherits as usual (`common.is_private_root`, `born_closed`). The share panel's
+**Only me** keeps it that way: elsewhere it grants the search indexer read (so a
+private note stays in its owner's search), but on a `_private` folder or
+anything in one it grants nothing and takes an earlier grant off what is inside
+(`common.is_private_path`), and the panel says it is never searched.
 
 ## 8. The UI shell — tabs, terminals, cron panel
 

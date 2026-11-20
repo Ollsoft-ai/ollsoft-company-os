@@ -6631,7 +6631,11 @@ function showShareModal(s, principals) {
       people: s.is_dir
         ? "Only the people below. Adding or removing someone later is instant — no re-processing of the files inside."
         : "Only the people below, regardless of who can see the folder it sits in.",
-      private: "Only you. It stays in your own search — the indexer keeps read access, and nobody else's search can reach it.",
+      // A `_private` or `_secrets` folder (and what is in it) is never indexed:
+      // "Only me" there grants the search indexer nothing (hub.py fs_share_set).
+      private: s.secret || s.private
+        ? "Only you. Never searched or embedded — not even in your own search."
+        : "Only you. It stays in your own search — the indexer keeps read access, and nobody else's search can reach it.",
     }[scope] || "";
     hintHost.innerHTML = t;
   }
