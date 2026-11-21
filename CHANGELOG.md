@@ -2,6 +2,17 @@
 
 What changed in each release of Ollsoft Company OS, newest first. `scripts/release.sh` writes each section from the commit titles since the previous release (`scripts/changelog.sh`); Settings → About shows this file. Fix a line that reads badly right here — a section is written once and never regenerated.
 
+## 1.6.0 — 2026-11-21
+
+- The share dialog says everyone with an account instead of a fixed company name
+- Only me on a _private folder keeps it out of search, as the share dialog now says
+- Artifacts open at a #place in them, wear the app's theme, remember each viewer's view, and copy outside links
+- Solarized light theme, and a System theme that follows the device's light or dark mode
+- Admins can give a chat agent extra environment variables, such as OpenCode's web search switch
+- The chat's agents move with every update: Claude Code's adapter 0.107.0, OpenCode 1.19.5 and the newest Node 22
+- The sign-in page focuses the name field after it loads, so a password manager's extension can offer to fill it
+- A setting saved twice within one second still reaches every open tab
+
 ## 1.5.0 — 2026-11-15
 
 - Agent chat no longer piles up unused sessions until it stops answering
