@@ -452,6 +452,29 @@ def _config_touched(paths: list) -> bool:
                for p in paths)
 
 
+def _config_sig() -> tuple:
+    """The config files as they are now, to the nanosecond and the byte. The
+    tree carries whole seconds and no size, so a setting saved twice within one
+    second (a reset, then a change) moved nothing the tree shows and never
+    reached the tab. The company's and this person's .os/*.json, a page's
+    per-viewer state excepted."""
+    out = []
+    for d in (common.COMPANY_CONFIG_DIR, common.REPO_ROOT / "users" / ME / common.CONFIG_DIRNAME):
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    if not e.name.endswith(".json") or e.name == ARTIFACT_STATE_FILE:
+                        continue
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    out.append((e.path, st.st_ino, st.st_size, st.st_mtime_ns))
+        except OSError:
+            pass
+    return tuple(sorted(out))
+
+
 def _events_broadcast(event: str, data: dict) -> None:
     msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
     for q in list(_EVENTS.subs):
@@ -487,6 +510,7 @@ async def _events_loop() -> None:
     if _TREE.body is None:
         await _refresh_tree()
     last_etag, last_index = _TREE.etag, _TREE.index
+    last_cfg = _config_sig()      # a tab catches up on config at every hello
     while _EVENTS.subs:
         try:
             await asyncio.wait_for(_EVENTS.kick.wait(), EVENTS_TREE_PERIOD)
@@ -497,13 +521,18 @@ async def _events_loop() -> None:
             break
         try:
             await _refresh_tree()
+            config = False
             if _TREE.etag != last_etag:
                 delta = _tree_delta(last_index, _TREE.index)
                 last_etag, last_index = _TREE.etag, _TREE.index
                 delta["etag"] = _TREE.etag
                 _events_broadcast("tree", delta)
-                if _config_touched(delta.get("paths", [])):
-                    _events_broadcast("config", {"paths": delta["paths"]})
+                config = _config_touched(delta.get("paths", []))
+            cfg = _config_sig()
+            if cfg != last_cfg:
+                last_cfg, config = cfg, True
+            if config:
+                _events_broadcast("config", {"paths": [os.path.relpath(p, common.REPO_ROOT) for p, *_ in cfg]})
             now = time.monotonic()
             if now - _EVENTS.presence_at >= EVENTS_PRESENCE_PERIOD:
                 _EVENTS.presence_at = now
