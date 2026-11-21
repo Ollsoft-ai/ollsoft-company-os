@@ -1386,11 +1386,20 @@ restoreSidebarWidth();
 
 // The theme is a setting (kb_platform/settings.py: ui.theme), applied at module
 // eval from the cached value so the first paint is already in the right colours,
-// then kept in step with the server. One theme today; the attribute is the hook
-// the theme step fills with CSS.
-function applyTheme(t) { document.documentElement.dataset.theme = t || "deep-blue"; }
-applyTheme(settings.get("ui.theme"));
-settings.subscribe("ui.theme", (t) => { applyTheme(t); retintTerminals(); });
+// then kept in step with the server. "system" follows the device's light or
+// dark mode, live, wearing the two themes chosen for it (ui.theme.light and
+// ui.theme.dark); <html data-theme> always names the theme actually worn.
+const _darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+function wornTheme(t) {
+  if (t !== "system") return t || "deep-blue";
+  return _darkMq && _darkMq.matches ? settings.get("ui.theme.dark") || "deep-blue"
+    : settings.get("ui.theme.light") || "light";
+}
+function applyTheme() { document.documentElement.dataset.theme = wornTheme(settings.get("ui.theme")); }
+function themeChanged() { applyTheme(); retintTerminals(); sendArtifactThemeAll(); }
+applyTheme();
+for (const k of ["ui.theme", "ui.theme.light", "ui.theme.dark"]) settings.subscribe(k, themeChanged);
+if (_darkMq) _darkMq.addEventListener("change", () => { if (settings.get("ui.theme") === "system") themeChanged(); });
 
 // Per-token overrides on top of the chosen theme (ui.theme.custom): inline
 // custom properties on <html>, before first paint from the cache and live
@@ -1404,7 +1413,34 @@ function applyThemeOverrides(map) {
   for (const [k, v] of Object.entries(map || {})) { root.setProperty("--" + k, v); _overrideKeys.push(k); }
 }
 applyThemeOverrides(settings.get("ui.theme.custom"));
-settings.subscribe("ui.theme.custom", (m) => { applyThemeOverrides(m); retintTerminals(); });
+settings.subscribe("ui.theme.custom", (m) => { applyThemeOverrides(m); retintTerminals(); sendArtifactThemeAll(); });
+
+// What an artifact is told about the look (artifact_links.js wears it as
+// --kb-<token> custom properties and data-kb-theme / data-kb-mode on its
+// <html>): read from what <html> computes, so a ui.theme.custom override
+// travels too. Sent when the page asks (kb-theme-get, as it starts), when its
+// frame loads, and to every open artifact whenever the theme changes.
+const ARTIFACT_THEME_TOKENS = ["bg", "chassis", "panel", "panel2", "pop", "border", "border-hover", "ink",
+  "muted", "faint", "heading", "accent", "accent-deep", "accent-wash", "on-accent", "link", "selection", "ok",
+  "warn", "danger", "code-bg", "code-ink", "sans", "mono", "font-size", "r", "r-lg"];
+function artifactTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const tokens = {};
+  for (const k of ARTIFACT_THEME_TOKENS) {
+    const v = cs.getPropertyValue("--" + k).trim();
+    if (v) tokens[k] = v;
+  }
+  const mode = /\blight\b/.test(cs.getPropertyValue("color-scheme")) ? "light" : "dark";
+  return { type: "kb-theme", theme: document.documentElement.dataset.theme || "deep-blue", mode, tokens };
+}
+function sendArtifactTheme(t) {
+  try { if (t.frame && t.frame.contentWindow) t.frame.contentWindow.postMessage(artifactTheme(), "*"); }
+  catch (e) { /* a frame mid-teardown */ }
+}
+function sendArtifactThemeAll() {
+  try { for (const t of tabs) if (t.kind === "artifact") sendArtifactTheme(t); }
+  catch (e) { /* before the tab list exists */ }
+}
 
 // The brand is a company setting too: the product name next to the mark (and
 // the tab's title), and the logo — /brand/logo serves the uploaded file or the
@@ -3770,15 +3806,39 @@ function syncUrl(replace) {
   } catch (e) { /* about:blank in tests */ }
 }
 
-async function openDeepLink(p) {
+// An artifact's address can name a place in it: `…/console.html#ITEM-3`. The
+// #fragment is handed to the page (its frame's URL) and never to the server;
+// plain characters only. The page reads location.hash, and gets a hashchange
+// when a later link names another place in a page already open.
+const ARTIFACT_FRAG_RE = /^#[A-Za-z0-9._~-]{1,128}$/;
+const _artifactFrags = new Map();   // path -> fragment for the mount that comes next
+function artifactFragment(h) { return typeof h === "string" && ARTIFACT_FRAG_RE.test(h) ? h : ""; }
+function artifactSrc(path) { return "/api/artifact/raw?path=" + encodeURIComponent(path); }
+
+async function openDeepLink(p, frag) {
   const existing = tabs.find((t) => t.path === p);
+  frag = p.endsWith(".html") ? artifactFragment(frag) : "";
   // Already open (e.g. restored): don't navigate away. Already the active
   // document: leave its group showing what it showed — a reload's URL names
   // the document the app itself wrote there, and its group may rightly be
   // showing a terminal in front of it.
-  if (existing) { if (existing !== active) activateTab(existing); return; }
+  if (existing) {
+    const mounted = !!existing.frame;
+    if (frag && !mounted) _artifactFrags.set(p, frag);
+    if (existing !== active) activateTab(existing);
+    // same document, new fragment: the frame scrolls and fires hashchange, no
+    // reload — unless it is still loading that very address (a restored tab)
+    const want = artifactSrc(p) + frag;
+    if (frag && mounted && existing.frame
+        && (existing.frameLoaded || existing.frame.getAttribute("src") !== want)) existing.frame.src = want;
+    _artifactFrags.delete(p);
+    return;
+  }
   if (isSecretPath(p)) await openPath(p, "secret");
-  else if (p.endsWith(".html")) await openPath(p, "artifact");
+  else if (p.endsWith(".html")) {
+    if (frag) _artifactFrags.set(p, frag);
+    try { await openPath(p, "artifact"); } finally { _artifactFrags.delete(p); }
+  }
   else if (p.endsWith(".md")) await openPath(p, "doc");
   else if (isTextPath(p)) await openPath(p, "text");
   else if (baseName(p).includes(".")) {
@@ -4965,14 +5025,16 @@ function mountArtifact(t) {
   frame.className = "artifact-frame";
   // 'load' fires for error responses too, which is what we want: either way
   // the frame is showing its own content now and the spinner would be a lie.
-  frame.addEventListener("load", () => clearTabLoading(t));
+  frame.addEventListener("load", () => { t.frameLoaded = true; clearTabLoading(t); sendArtifactTheme(t); });
   // Two independent walls: (1) sandbox="allow-scripts" WITHOUT allow-same-origin
   // gives the artifact an opaque origin — it cannot touch the app's DOM, cookies,
   // or session. (2) The /api/artifact/raw response carries a strict CSP
   // (connect-src 'none', etc.) so the artifact cannot reach the network to
   // exfiltrate data. Its only capability is the postMessage query bridge.
   frame.setAttribute("sandbox", "allow-scripts");
-  frame.src = "/api/artifact/raw?path=" + encodeURIComponent(t.path);
+  const frag = _artifactFrags.get(t.path) || "";
+  _artifactFrags.delete(t.path);
+  frame.src = artifactSrc(t.path) + frag;
   t.el.appendChild(frame);
   t.frame = frame;
   refreshTabBadge(t);
@@ -5034,6 +5096,7 @@ window.addEventListener("message", async (ev) => {
   let result;
   // The file verbs carry `artifact: tab.path` (from the TAB, never the frame):
   // the backend keeps them inside that page's folder on the file it opened.
+  if (msg.type === "kb-theme-get") { sendArtifactTheme(tab); return; }
   try {
     if (msg.type === "kb-query") {
       const r = await fetch("/api/artifact/query", {
@@ -5203,15 +5266,26 @@ window.addEventListener("message", async (ev) => {
       if (!p) result = { error: "not a knowledgebase file" };
       else if (!artifactMayOpen()) result = { error: "opens only on a click in the page" };
       else {
-        if (line && p.endsWith(".md")) openAtLine(p, line); else openDeepLink(p);
+        if (line && p.endsWith(".md")) openAtLine(p, line); else openDeepLink(p, msg.frag);
         result = { ok: true };
       }
     } else if (msg.type === "kb-clipboard") {
       try {
         await navigator.clipboard.writeText(String(msg.text || ""));
         result = { ok: true };
-        kbToast("Copied to clipboard", "ok");
+        // an outside link clicked in the page (artifact_links.js): copied, never opened
+        kbToast(msg.link ? "Link copied to clipboard" : "Copied to clipboard", "ok");
       } catch (e) { result = { error: "clipboard unavailable" }; }
+    } else if (msg.type === "kb-state-get" || msg.type === "kb-state-set") {
+      // The page's own memory for this viewer — a tab, filters, a scroll —
+      // kept by the viewer's backend, keyed by the TAB's path (never the
+      // frame's say), so one artifact can never read another's.
+      const body = { artifact: tab.path };
+      if (msg.type === "kb-state-set") body.state = msg.state === undefined ? null : msg.state;
+      const r = await fetch("/api/artifact/state", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      result = await r.json().catch(() => ({ error: "state unavailable" }));
     } else {
       return;
     }
@@ -6409,7 +6483,7 @@ async function openHistory(path, rev) {
 
 const SH_SCOPES = [
   ["inherit", "Same as the folder it's in"],
-  ["everyone", "Everyone at Ollsoft"],
+  ["everyone", "Everyone with an account"],
   ["people", "Specific people"],
   ["private", "Only me"],
 ];
@@ -6421,7 +6495,7 @@ function shInitials(s) {
 
 function shWho(a) {
   if (!a) return "someone";
-  if (a.scope === "everyone") return "everyone at Ollsoft";
+  if (a.scope === "everyone") return "everyone with an account";
   if (a.scope === "private") return "its owner only";
   return (a.group || "its group") + (a.people ? ` (${a.people} ${a.people === 1 ? "person" : "people"})` : "");
 }
@@ -6627,11 +6701,15 @@ function showShareModal(s, principals) {
   function renderHint() {
     const t = {
       inherit: `Follows <b>${escapeHtml(s.parent || "")}</b>. Change it there and this follows along.`,
-      everyone: "Anyone with an Ollsoft account can open and edit this.",
+      everyone: "Anyone with an account here can open and edit this.",
       people: s.is_dir
         ? "Only the people below. Adding or removing someone later is instant — no re-processing of the files inside."
         : "Only the people below, regardless of who can see the folder it sits in.",
-      private: "Only you. It stays in your own search — the indexer keeps read access, and nobody else's search can reach it.",
+      // A `_private` or `_secrets` folder (and what is in it) is never indexed:
+      // "Only me" there grants the search indexer nothing (hub.py fs_share_set).
+      private: s.secret || s.private
+        ? "Only you. Never searched or embedded — not even in your own search."
+        : "Only you. It stays in your own search — the indexer keeps read access, and nobody else's search can reach it.",
     }[scope] || "";
     hintHost.innerHTML = t;
   }
@@ -6640,7 +6718,7 @@ function showShareModal(s, principals) {
     peopleHost.innerHTML = "";
     const rows = [{ user: owner.user, name: owner.name, role: "owner" }];
     if (scope === "everyone" || (scope === "inherit" && inherited === "everyone")) {
-      rows.push({ user: "*", name: "Everyone at Ollsoft", role: "everyone" });
+      rows.push({ user: "*", name: "Everyone with an account", role: "everyone" });
     } else if (scope === "inherit") {
       rows.push(...(Array.isArray(inherited) ? inherited : []).filter((q) => q.user !== owner.user));
     } else if (scope !== "private") {
@@ -9553,6 +9631,8 @@ async function boot() {
   // link someone sent you. That is what made a shared link land on whatever
   // document happened to be open last time.
   const deep = pathFromUrl();
+  // an artifact restored at that address loads with its #fragment the first time
+  if (deep && deep.endsWith(".html") && artifactFragment(location.hash)) _artifactFrags.set(deep, location.hash);
   // Tabs come back NOW, before we even know who you are (see restoreTabs).
   const restoring = restoreTabs();
   await whoamiP; await settingsP;
@@ -9672,7 +9752,8 @@ async function boot() {
     revealActiveInTree(false);
   _deepLinksOk = await deepLinksP;   // long resolved; awaited only where it matters
   // deep link: a shared /company/….md URL wins over the restored active tab
-  if (deep) await openDeepLink(deep);
+  // (an artifact's #fragment travels with it)
+  if (deep) await openDeepLink(deep, location.hash);
   // On a phone the file list is the home screen — but only when there is no
   // home to come back to. Restoring a document or a terminal means the drawer
   // would open ON TOP of it, which is decided here, after the restore, rather
@@ -9683,7 +9764,12 @@ async function boot() {
   _settling = false;
   window.addEventListener("popstate", () => {
     const p = pathFromUrl();
-    if (p) openDeepLink(p);
+    if (p) openDeepLink(p, location.hash);
+  });
+  // a new #fragment typed or linked on the open artifact's address
+  window.addEventListener("hashchange", () => {
+    const p = pathFromUrl();
+    if (p && p.endsWith(".html") && artifactFragment(location.hash)) openDeepLink(p, location.hash);
   });
   // the context menu follows the pointer, and dies with it
   document.addEventListener("click", closeCtxMenu);

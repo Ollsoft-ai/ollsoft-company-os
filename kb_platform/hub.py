@@ -762,6 +762,8 @@ def _share_state(p: Path, rel: str, user: str) -> dict:
         "audience_root": _audience_root(rel, group) if _is_shared_group(group) else True,
         "viewer_group": vg if vg in {g for g in named_g} else None,
         "secret": common.is_secret_path(rel),
+        # in or at a `_private` folder: "Only me" there means unsearched too
+        "private": common.is_private_path(rel),
         "people": people,
         # A secret is its owner's alone to widen — an admin is not the owner
         # here (see fs_share_set), so the panel must not offer them a Save the
@@ -792,7 +794,8 @@ def _grant_indexer(tfd: int, is_dir: bool) -> None:
 
 
 def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
-                 file_bits: int, indexer: bool = False, every: bool = False) -> int:
+                 file_bits: int, indexer: bool = False, every: bool = False,
+                 closed: bool = False) -> int:
     """Bring the descendants that were FOLLOWING this folder along to its new
     audience.
 
@@ -807,6 +810,9 @@ def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
     would mean sharing a secrets folder left the keys already in it invisible —
     which is the whole complaint. Sharing a folder of credentials shares the
     credentials in it.
+
+    `closed` takes the search indexer's grant OFF what it walks (a `_private`
+    folder made "Only me": nothing in it is ever indexed).
 
     Both halves matter, and the second one is easy to miss: without the chgrp
     the new people can enter the folder and read nothing in it, and without
@@ -838,6 +844,8 @@ def _rehome_tree(root: Path, old_gid: int, new_gid: int, dir_bits: int,
                 args = _base_args(target)
                 if indexer:
                     args += ["-m", f"u:{INDEXER_USER}:{'rx' if is_dir else 'r'}"]
+                elif closed:
+                    args += ["-x", f"u:{INDEXER_USER}"]
                 _acl_apply_fd(fd, is_dir, args)
             n += 1
         except (OSError, subprocess.SubprocessError):
@@ -973,11 +981,17 @@ def _share_apply(p: Path, rel: str, data: dict, caller: str = "") -> dict:
                 except OSError:
                     pass
             os.fchmod(tfd, 0o700 if is_dir else 0o600)
-            if not secret:
+            # "Only me" keeps a note in its owner's search (the indexer reads
+            # it, RLS hides it from everyone else) — except where nothing is
+            # ever indexed: a `_secrets` folder, and a `_private` one, which
+            # exists precisely so its contents are never searched or embedded.
+            closed = secret or common.is_private_path(rel)
+            if not closed:
                 _grant_indexer(tfd, is_dir)
             if is_dir:
                 out["regrouped"] = _rehome_tree(p, old_gid, old_gid, 0o2000, 0o000,
-                                                indexer=not secret, every=secret)
+                                                indexer=not closed, every=secret,
+                                                closed=closed and not secret)
             return out
 
         if scope == "everyone":
@@ -1807,6 +1821,66 @@ class Hub:
             "job": job,
         })
 
+    async def admin_agent_env(self, request: web.Request) -> web.Response:
+        """Extra environment per chat agent (acp.AGENT_ENV_FILE). GET lists the
+        NAMES per agent — a value is never sent back. POST {"agent", "set":
+        {NAME: value}, "unset": [NAME]} changes one agent's; a chat already
+        running keeps its environment until its agent next starts."""
+        admin = self._require_admin(request)
+        if not admin:
+            return web.json_response({"error": "admin only"}, status=403)
+        names = lambda env: {aid: sorted(v) for aid, v in env.items()}   # noqa: E731
+        if request.method == "GET":
+            return web.json_response({"agents": names(kbacp.read_agent_env())})
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.json_response({"error": "bad json"}, status=400)
+        if not isinstance(body, dict) or body.get("agent") not in kbacp.BY_ID:
+            return web.json_response({"error": "unknown agent"}, status=400)
+        aid = body["agent"]
+        sets, unsets = body.get("set") or {}, body.get("unset") or []
+        if not isinstance(sets, dict) or not isinstance(unsets, list):
+            return web.json_response({"error": "set is {NAME: value}, unset is [NAME]"}, status=400)
+        for k, v in sets.items():
+            why = kbacp.env_name_problem(k) or kbacp.env_value_problem(v)
+            if why:
+                return web.json_response({"error": why}, status=400)
+        allenv = kbacp.read_agent_env()
+        env = dict(allenv.get(aid, {}))
+        for k in unsets:
+            env.pop(k, None) if isinstance(k, str) else None
+        env.update(sets)
+        if len(env) > kbacp.AGENT_ENV_MAX:
+            return web.json_response({"error": f"{kbacp.AGENT_ENV_MAX} variables per agent at most"}, status=400)
+        if env:
+            allenv[aid] = env
+        else:
+            allenv.pop(aid, None)
+        try:
+            target = kbacp.AGENT_ENV_FILE
+            tmp = target.with_name(f".{target.name}.{os.urandom(6).hex()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(allenv, f, indent=1)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # every person's backend reads it as them: the everyone group, read-only
+                os.chown(tmp, 0, grp.getgrnam(EVERYONE_GROUP).gr_gid)
+                os.chmod(tmp, 0o640)
+                os.replace(tmp, target)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except (OSError, KeyError) as e:
+            return web.json_response({"error": f"could not save: {e}"}, status=500)
+        _audit("agents.env", admin, agent=aid, set=sorted(sets), unset=sorted(k for k in unsets if isinstance(k, str)))
+        return web.json_response({"ok": True, "agents": names(allenv)})
+
     async def admin_agents_install(self, request: web.Request) -> web.Response:
         admin = self._require_admin(request)
         if not admin:
@@ -2335,7 +2409,8 @@ class Hub:
                 # so making a note private used to drop it out of search for its
                 # own owner. RLS still decides who may see those rows, so this
                 # grant widens nothing — it only keeps the index complete.
-                if vis == "private" and not common.is_secret_path(rel):
+                if (vis == "private" and not common.is_secret_path(rel)
+                        and not common.is_private_path(rel)):
                     _grant_indexer(tfd, is_dir)
             shared_with = []   # (flag, name) grantees to make the path reachable for
             for a in data.get("acl_add", []):
@@ -3385,6 +3460,8 @@ def make_app() -> web.Application:
     app.router.add_post("/admin/settings", hub.admin_settings)
     app.router.add_get("/admin/agents", hub.admin_agents)
     app.router.add_post("/admin/agents/install", hub.admin_agents_install)
+    app.router.add_get("/admin/agent-env", hub.admin_agent_env)
+    app.router.add_post("/admin/agent-env", hub.admin_agent_env)
     app.router.add_post("/admin/brand/logo", hub.admin_brand_logo)
     app.router.add_post("/admin/search/retry", hub.admin_search_retry)
     app.router.add_get("/brand/logo", hub.brand_logo)

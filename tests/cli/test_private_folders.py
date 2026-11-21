@@ -89,3 +89,14 @@ def test_only_an_explicit_share_opens_it_to_the_folder_around_it(team):
     common.mkdir_with_mode(team / "_private")
     common.reset_audience_tree(team / "_private", secret_root_follows=True)   # the share panel's "Same as the folder it's in"
     assert has_acl(team / "_private"), "asked for deliberately, it follows the folder it is in"
+
+
+def test_private_path_means_the_folder_and_everything_in_it():
+    """What the share panel treats as never-indexed: "Only me" grants the
+    search indexer nothing on these (hub.fs_share_set)."""
+    assert common.is_private_path("company/notes/health/_private")
+    assert common.is_private_path("company/notes/health/_private/sleep.md")
+    assert common.is_private_path("/projects/x/_private/a/b/")
+    assert not common.is_private_path("company/notes/health")
+    assert not common.is_private_path("company/notes/_privateish/x.md")
+    assert not common.is_private_path("users/alice/private/x.md")

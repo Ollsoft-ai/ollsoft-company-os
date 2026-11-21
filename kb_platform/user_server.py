@@ -92,7 +92,8 @@ _LEAD_ICON_RE = re.compile(r"^\W+", re.UNICODE)
 # restating it, so the two cannot drift the way MIN_V=20 drifted from v=23.
 # Bump whenever backend behaviour changes, so a stale backend cannot report
 # itself current and be silently skipped by a bounce.
-BACKEND_V = 37   # kb-read/kb-write/bytes/upload/delete checked on the opened fd, /api/artifact/bytes
+BACKEND_V = 38   # /api/artifact/state: a page's own per-viewer memory
+# 37: kb-read/kb-write/bytes/upload/delete checked on the opened fd, /api/artifact/bytes
 
 
 def _name_key(name: str):
@@ -446,7 +447,32 @@ def _tree_delta(old: dict | None, new: dict) -> dict:
 
 def _config_touched(paths: list) -> bool:
     mine = f"users/{ME}/.os/"
-    return any(p.startswith(common.CONFIG_DIRNAME + "/") or p.startswith(mine) for p in paths)
+    state = mine + ARTIFACT_STATE_FILE      # a page's memory is not config: no refetch storm
+    return any(p.startswith(common.CONFIG_DIRNAME + "/") or (p.startswith(mine) and p != state)
+               for p in paths)
+
+
+def _config_sig() -> tuple:
+    """The config files as they are now, to the nanosecond and the byte. The
+    tree carries whole seconds and no size, so a setting saved twice within one
+    second (a reset, then a change) moved nothing the tree shows and never
+    reached the tab. The company's and this person's .os/*.json, a page's
+    per-viewer state excepted."""
+    out = []
+    for d in (common.COMPANY_CONFIG_DIR, common.REPO_ROOT / "users" / ME / common.CONFIG_DIRNAME):
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    if not e.name.endswith(".json") or e.name == ARTIFACT_STATE_FILE:
+                        continue
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    out.append((e.path, st.st_ino, st.st_size, st.st_mtime_ns))
+        except OSError:
+            pass
+    return tuple(sorted(out))
 
 
 def _events_broadcast(event: str, data: dict) -> None:
@@ -484,6 +510,7 @@ async def _events_loop() -> None:
     if _TREE.body is None:
         await _refresh_tree()
     last_etag, last_index = _TREE.etag, _TREE.index
+    last_cfg = _config_sig()      # a tab catches up on config at every hello
     while _EVENTS.subs:
         try:
             await asyncio.wait_for(_EVENTS.kick.wait(), EVENTS_TREE_PERIOD)
@@ -494,13 +521,18 @@ async def _events_loop() -> None:
             break
         try:
             await _refresh_tree()
+            config = False
             if _TREE.etag != last_etag:
                 delta = _tree_delta(last_index, _TREE.index)
                 last_etag, last_index = _TREE.etag, _TREE.index
                 delta["etag"] = _TREE.etag
                 _events_broadcast("tree", delta)
-                if _config_touched(delta.get("paths", [])):
-                    _events_broadcast("config", {"paths": delta["paths"]})
+                config = _config_touched(delta.get("paths", []))
+            cfg = _config_sig()
+            if cfg != last_cfg:
+                last_cfg, config = cfg, True
+            if config:
+                _events_broadcast("config", {"paths": [os.path.relpath(p, common.REPO_ROOT) for p, *_ in cfg]})
             now = time.monotonic()
             if now - _EVENTS.presence_at >= EVENTS_PRESENCE_PERIOD:
                 _EVENTS.presence_at = now
@@ -1881,6 +1913,79 @@ async def artifact_read(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "content": content})
 
 
+# --- a page's own memory, per viewer ------------------------------------------
+# Which tab was open, the filters, a scroll position: small JSON an artifact
+# keeps for THIS viewer, so it comes back the way they left it, on any device.
+# One file in the viewer's own .os/ (0600), keyed by the artifact path the APP
+# names (the tab's, never the frame's) — not the artifact's folder, so viewers
+# never see each other's state and a read-only viewer can still be remembered.
+ARTIFACT_STATE_FILE = "artifact-state.json"
+ARTIFACT_STATE_MAX = 16 * 1024          # bytes of JSON per artifact
+ARTIFACT_STATE_PAGES = 200              # artifacts remembered; the least recent go
+
+
+def _artifact_state_load() -> dict:
+    try:
+        with open(common.REPO_ROOT / "users" / ME / common.CONFIG_DIRNAME / ARTIFACT_STATE_FILE, "rb") as f:
+            d = json.loads(f.read(8 * 1024 * 1024))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _artifact_state_key(rel) -> str | None:
+    if not isinstance(rel, str):
+        return None
+    rel = rel.strip("/")
+    if not rel or len(rel) > 1024 or not rel.lower().endswith(".html") or "\0" in rel:
+        return None
+    if any(seg in ("", ".", "..") for seg in rel.split("/")):
+        return None
+    return rel
+
+
+async def artifact_state(request: web.Request) -> web.Response:
+    """{"artifact": path} reads this viewer's state for that page; with
+    "state": <json> it replaces it, and "state": null forgets it."""
+    try:
+        data = await request.json()
+    except ValueError:
+        return web.json_response({"error": "expected JSON"}, status=400)
+    key = _artifact_state_key(data.get("artifact") if isinstance(data, dict) else None)
+    if key is None:
+        return web.json_response({"error": "artifact must be an .html path"}, status=400)
+    pages = _artifact_state_load()
+    if "state" not in data:
+        row = pages.get(key)
+        return web.json_response({"ok": True, "state": row.get("v") if isinstance(row, dict) else None})
+    value = data["state"]
+    if value is None:
+        if key not in pages:
+            return web.json_response({"ok": True})
+        pages.pop(key, None)
+    else:
+        try:
+            size = len(json.dumps(value, separators=(",", ":")).encode())
+        except (TypeError, ValueError, RecursionError):
+            return web.json_response({"error": "state must be plain JSON"}, status=400)
+        if size > ARTIFACT_STATE_MAX:
+            return web.json_response({"error": f"state is too large ({size} bytes; "
+                                               f"{ARTIFACT_STATE_MAX // 1024} KB at most)"}, status=413)
+        pages[key] = {"v": value, "at": int(time.time())}
+        if len(pages) > ARTIFACT_STATE_PAGES:
+            at = lambda k: pages[k].get("at", 0) if isinstance(pages[k], dict) else 0   # noqa: E731
+            for old in sorted(pages, key=at)[:len(pages) - ARTIFACT_STATE_PAGES]:
+                pages.pop(old, None)
+    try:
+        common.write_user_config(ME, ARTIFACT_STATE_FILE,
+                                 json.dumps(pages, separators=(",", ":")).encode())
+    except PermissionError:
+        return web.json_response({"error": "forbidden"}, status=403)
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"ok": True})
+
+
 async def artifact_write(request: web.Request) -> web.Response:
     """Write a file for an artifact, AS THIS USER. The write happens with the
     viewer's kernel identity, so it can only land where the viewer can write —
@@ -2823,6 +2928,7 @@ def make_app() -> web.Application:
     app.router.add_post("/api/artifact/mkdir", artifact_mkdir)
     app.router.add_post("/api/artifact/delete", artifact_delete)
     app.router.add_get("/api/artifact/bytes", artifact_bytes)
+    app.router.add_post("/api/artifact/state", artifact_state)
     app.router.add_post("/api/fs/move-preview", fs_move_preview)
     app.router.add_get("/api/principals", principals)
     app.router.add_get("/api/launchers", launchers_get)

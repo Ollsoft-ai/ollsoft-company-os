@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Ollsoft Company OS · Sign in</title>
+  <title>Company OS · Sign in</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1784984673475" />
   <link rel="stylesheet" href="/static/style.css?v=1784984673475" />
 </head>
@@ -19,7 +19,7 @@
     <p id="login-sub" class="muted">Sign in with your OS account — everything here runs as you.</p>
     <label class="sr-only" for="username">Username</label>
     <input id="username" name="username" type="text" placeholder="username" autocomplete="username"
-           autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus />
+           autocapitalize="none" autocorrect="off" spellcheck="false" required />
     <label class="sr-only" for="password">Password</label>
     <input id="password" name="password" type="password" placeholder="password"
            autocomplete="current-password" required />
@@ -46,10 +46,14 @@
         "Add an account — the one you are signed in to stays signed in.";
       document.getElementById("login-cancel").hidden = false;
     }
-    if (q.get("user")) {
-      document.getElementById("username").value = q.get("user");
-      document.getElementById("password").focus();
-    }
+    if (q.get("user")) document.getElementById("username").value = q.get("user");
+    // Focus once the page has loaded, not with `autofocus`: a password manager's
+    // extension hooks the fields as the page settles, and a field that already
+    // had focus before then may never show its fill menu. A click first wins.
+    addEventListener("load", () => setTimeout(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;
+      document.getElementById(q.get("user") ? "password" : "username").focus();
+    }, 50));
     const errs = { invalid: "invalid credentials", locked: "too many failed sign-ins \u2014 try again later" };
     if (errs[q.get("error")]) document.getElementById("err").textContent = errs[q.get("error")];
     f.addEventListener("submit", async (e) => {

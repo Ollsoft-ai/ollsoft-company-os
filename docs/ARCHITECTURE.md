@@ -285,7 +285,10 @@ each executed **as the viewer**:
 | `kb-fetch`    | `/egress` (hub)       | HTTPS to an **allowlisted domain only**, per artifact, with `secret:` refs injected server-side so the artifact never holds the credential |
 | `kb-upload`   | `/api/upload`         | binary into the artifact's own `_files/`, as the viewer |
 | `kb-save-as`  | `/api/file` + `/api/artifact/write` | writes **outside** the folder scope — allowed only because the destination is chosen by the user in trusted chrome, not by the artifact |
-| `kb-clipboard`| (host page)           | copy text to the viewer's clipboard |
+| `kb-clipboard`| (host page)           | copy text to the viewer's clipboard — also what a plain click on an outside `http(s)` link does (the platform's link handler): copied, never opened |
+| `kb-open`     | (host page)           | open a knowledgebase file (a `#fragment` passes on to another artifact) — only right after a click in the page, never a URL, never a `_secrets/` file |
+| `kb-state-get` / `kb-state-set` | `/api/artifact/state` | the page's own small JSON (≤ 16 KB) for **this viewer**, kept in their `users/<me>/.os/artifact-state.json`, keyed by the tab's path |
+| `kb-theme-get`| (host page)           | the app answers with `kb-theme` (theme name, light/dark, colour and type tokens), and sends it again on every theme change; the link handler sets them as `--kb-*` properties on the page's `<html>` |
 
 The default **To-dos** view (`company/todos.html`) and the demo dashboards are
 themselves artifacts — the platform dogfoods its own runtime. Artifacts are
@@ -302,7 +305,7 @@ to check.
 ## 7. Sharing & the permission UI
 
 The ⚙ panel speaks **people**, not octal. `/fs/share` takes a scope — *same as the
-folder it's in* / *everyone at Ollsoft* / *specific people* / *only me* — and
+folder it's in* / *everyone with an account* / *specific people* / *only me* — and
 hub.py picks the mechanism per object, so the everyday action (adding or removing
 one person) is a `gpasswd` on the owning group and touches no files at all. The
 O(files) ACL walk happens once, when a viewer group is first bound to a folder.
@@ -341,7 +344,11 @@ indexer cannot read it, so it is never searched or embedded. Unlike `_secrets/`
 its contents are ordinary documents: live-edited, versioned, and the folder's
 mode alone keeps everyone else out. Only an explicit share widens it. A folder
 made outside the app (`mkdir` in a terminal) is the kernel's business and
-inherits as usual (`common.is_private_root`, `born_closed`).
+inherits as usual (`common.is_private_root`, `born_closed`). The share panel's
+**Only me** keeps it that way: elsewhere it grants the search indexer read (so a
+private note stays in its owner's search), but on a `_private` folder or
+anything in one it grants nothing and takes an earlier grant off what is inside
+(`common.is_private_path`), and the panel says it is never searched.
 
 ## 8. The UI shell — tabs, terminals, cron panel
 

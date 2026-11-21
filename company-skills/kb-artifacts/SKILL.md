@@ -5,7 +5,7 @@ description: Use when the user wants an interactive view, dashboard, chart, or s
 
 # Building an artifact
 
-An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, list a folder, make a subfolder, delete a file or subfolder, read a neighbouring file's raw bytes (`kb-read-bytes`, for showing a video/image/PDF; 512 MB cap), toggle a task, upload, save-as through a prompt the *user* answers, copy to clipboard, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
+An **artifact** is a single self-contained `.html` file placed in the repo. When someone opens it in the web app, it renders inside a **sandboxed iframe**: no cookies, no access to the app around it, and `connect-src 'none'` so it cannot open a socket of its own. Its only capability is a message **bridge** to the host page, which exposes a few narrow, scoped actions — query the database, read/write a file, list a folder, make a subfolder, delete a file or subfolder, read a neighbouring file's raw bytes (`kb-read-bytes`, for showing a video/image/PDF; 512 MB cap), toggle a task, upload, save-as through a prompt the *user* answers, copy to clipboard, remember small per-viewer state, and **`kb-fetch`: HTTPS to domains an admin has allowlisted for this specific artifact** — **each executed as the person viewing the artifact**.
 
 Create one by writing an `.html` file, e.g. `company/dashboards/mychart.html` (shared) or `users/<you>/scratch.html` (private).
 
@@ -38,6 +38,9 @@ Drop this SDK into every artifact — it gives you `kbQuery`, `kbRead`, `kbWrite
   const kbMkdir = (path)          => _send({ type: "kb-mkdir", path });
   // delete a file or subfolder -> { ok, deleted, was_dir, error? }
   const kbDelete= (path, recursive = false) => _send({ type: "kb-delete", path, recursive });
+  // this page's own memory for the person viewing it (tab, filters, scroll) -> { ok, state }
+  const kbStateGet = ()      => _send({ type: "kb-state-get" });
+  const kbStateSet = (state) => _send({ type: "kb-state-set", state });
 </script>
 ```
 
@@ -111,8 +114,23 @@ Writing a `.md` file that someone is live-editing is safe: the change flows thro
 ## Links to files
 
 - **A link to a knowledgebase file opens it in the app**, like a link in a document: `<a href="/company/notes/x.md">`, a relative `<a href="plan.md">` (resolved against the artifact's folder), or `…/x.md#L12` to land on a line. Folders, other artifacts and attachments open the way the tree opens them.
-- **From your own script:** `parent.postMessage({type: "kb-open", path: "company/notes/x.md", line: 12}, "*")` — only inside a click handler: the app opens files only right after the person clicks in the page, one at a time.
-- Nothing comes back to the page, the viewer's own access decides, and a `_secrets/` file never opens this way. External links, `#anchors` and clicks your page handles itself (`preventDefault`) are left alone.
+- **A link to a place in another artifact** keeps its `#fragment`: `<a href="board.html#TICKET-4">` opens `board.html` with `location.hash` = `#TICKET-4` (letters, digits and `._~-`, up to 128). The app's own address works the same way: `/company/dash/board.html#TICKET-4`, e.g. from a notification. Read `location.hash` at start and listen for `hashchange`: a second link to the open page changes the fragment without a reload.
+- **An outside address (`http`, `https`) is copied, never opened:** a plain click copies the link and the app says "Link copied to clipboard"; the viewer pastes it where they choose. Write outside links as ordinary `<a href>` — no `target` needed.
+- **From your own script:** `parent.postMessage({type: "kb-open", path: "company/notes/x.md", line: 12}, "*")` (or `frag: "#id"` for an artifact) — only inside a click handler: the app opens files only right after the person clicks in the page, one at a time.
+- Nothing comes back to the page, the viewer's own access decides, and a `_secrets/` file never opens this way. In-page `#anchors`, other schemes (`mailto:`), modified clicks and clicks your page handles itself (`preventDefault`) are left alone.
+
+## Matching the app's theme
+
+- **The app tells every artifact its look**, at start and live whenever the person changes theme: `--kb-<token>` custom properties on `<html>` and two attributes, `data-kb-theme` (e.g. `deep-blue`, `light`, `solarized-light`) and `data-kb-mode` (`light` or `dark`).
+- **Tokens:** `bg`, `chassis`, `panel`, `panel2`, `pop`, `border`, `border-hover`, `ink`, `muted`, `faint`, `heading`, `accent`, `accent-deep`, `accent-wash`, `on-accent`, `link`, `selection`, `ok`, `warn`, `danger`, `code-bg`, `code-ink`, `sans`, `mono`, `font-size`, `r`, `r-lg` — the person's own colour overrides included.
+- **Use them with a fallback**, so the page still looks right opened on its own: `body { background: var(--kb-bg, #fff); color: var(--kb-ink, #222); font-family: var(--kb-sans, system-ui); }`, `[data-kb-mode="dark"] .chart { … }`.
+- A page that ignores them looks exactly as before. The raw message (`{type: "kb-theme", theme, mode, tokens}`) also reaches your own `message` listener.
+
+## Remembering things per viewer
+
+- **`kbStateSet(state)` keeps small JSON for this page and this viewer** — which tab was open, the filters, a scroll position — and `kbStateGet()` gives it back (`{ok, state}`, `state` null the first time). It follows the person to any device.
+- **Each viewer has their own;** nobody sees another's, and it needs no write access to the artifact's folder. Up to **16 KB** per page; `kbStateSet(null)` forgets it. The app keeps the last 200 pages a person used.
+- **Not for shared data:** what everyone should see goes in a file (`kbWrite`) or a table (`kbQuery`).
 
 ## File naming convention
 

@@ -132,6 +132,27 @@ def test_private_locks_out_but_stays_in_owner_search(k, folder):
     assert "user:kbindexer:r-x" in out, out
 
 
+def test_only_me_on_a_private_folder_keeps_the_indexer_out(k, folder):
+    """A `_private` folder is never searched or embedded. "Only me" elsewhere
+    grants the indexer read (the owner's own search); here it must not — on the
+    folder or on what is inside it — and the panel says so."""
+    name, _ = folder
+    priv = f"{name}/_private"
+    assert k.post("/api/fs/mkdir", json={"path": priv}).status_code == 200
+    note = f"{priv}/note.md"
+    assert k.post("/api/file", json={"path": note}).status_code == 200
+    assert share(k, priv, "people", [("bob", "view")]).status_code == 200
+    assert share(k, priv, "private").status_code == 200
+    assert not can_open("bob", note)
+    st = state(k, priv)
+    assert st["private"] is True and st["scope"] == "private", st
+    for path in (priv, note):
+        out = subprocess.run(["getfacl", "-cpE", "--", f"/srv/kb/{path}"],
+                             capture_output=True, text=True).stdout
+        assert "kbindexer" not in out, f"{path}: {out}"
+    assert state(k, name)["private"] is False, "an ordinary folder is not private"
+
+
 def test_everyone(k, folder):
     name, doc = folder
     assert share(k, name, "everyone").status_code == 200

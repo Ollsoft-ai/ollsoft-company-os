@@ -328,6 +328,100 @@
   --quote-bg: transparent;
 }
 
+/* ── Theme: Solarized light ─────────────────────────────────────────────────
+   Ethan Schoonover's Solarized (base3 paper #fdf6e3, base2 #eee8d5, the eight
+   accents) on the Light theme's type and rhythm. Body text is base01 #586e75,
+   not the usual base00 #657b83: base00 on base3 is about 4.1:1, under the 4.5:1
+   body text needs, so base00 is kept for secondary text. The terminal uses the
+   canonical Solarized ANSI map (the brights are the base tones). */
+:root[data-theme="solarized-light"] {
+  --av-claude: #C2603F; --av-codex: #0B7F63; --av-gemini: #2A6FE0; --av-copilot: #6E3FC4; --av-grok: #3F4654;
+  --av-qwen: #5B32A8; --av-deepseek: #3557E8; --av-opencode: #0A7FB8; --av-echo: #557089; --av-other: #5A6472;
+  color-scheme: light;
+  --chassis: #EEE8D5;
+  --bg: #FDF6E3;
+  --panel: #F6EFDC;
+  --panel2: #EEE8D5;
+  --pop: #FDF6E3;
+  --border: #E2DBC6;
+  --border-hover: #D3CBB2;
+  --ink: #586E75;
+  --muted: #657B83;
+  --faint: #93A1A1;
+  --heading: #073642;
+  --ink-inverse: #FDF6E3;
+  --on-accent: #FFFFFF;
+  --accent: #268BD2;
+  --accent-deep: #1D6FA5;
+  --accent-deeper: #175A87;
+  --ok: #859900;
+  --warn: #B58900;
+  --danger: #DC322F;
+  --danger-deep: #B52A27;
+  --danger-hover: #C72E2B;
+  --company: #268BD2;
+  --personal: #6C71C4;
+  --personal-deep: #5A5FB0;
+  --mention: #6C71C4;
+  --mention-me: #B58900;
+  --blame-me: #268BD2;
+  --blame-other: #6C71C4;
+  --blame-machine: #2AA198;
+  --code-bg: #EEE8D5;
+  --code-ink: #586E75;
+  --diff-add: #859900;
+  --diff-del: #DC322F;
+  --shadow: rgba(7, 54, 66, .35);
+  --overlay: #002B36;
+  --login-glow: #EEE8D5;
+  --logo-filter: invert(1) opacity(.7);
+  --scroll-thumb: #D3CBB2;
+  --term-bg: #FDF6E3;
+  --term-fg: #586E75;
+  --term-cursor: #586E75;
+  --term-black: #073642;   --term-red: #DC322F;     --term-green: #859900;   --term-yellow: #B58900;
+  --term-blue: #268BD2;    --term-magenta: #D33682; --term-cyan: #2AA198;   --term-white: #EEE8D5;
+  --term-bblack: #002B36;  --term-bred: #CB4B16;    --term-bgreen: #586E75;  --term-byellow: #657B83;
+  --term-bblue: #839496;   --term-bmagenta: #6C71C4; --term-bcyan: #93A1A1; --term-bwhite: #FDF6E3;
+  --md-heading: #073642;
+  --md-url: #268BD2;
+  --md-code: #2AA198;
+  /* the Light theme's type and rhythm */
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  --mono: SFMono-Regular, Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace;
+  --font-size: 16px;
+  --editor-size: 1rem;
+  --editor-lh: 1.5;
+  --rich-lh: 1.5;
+  --line-y: 3px;
+  --block-pad: 1rem;
+  --block-pad-y: .6rem;
+  --cell-pad: .45rem .65rem;
+  --content-x: 6rem;
+  --content-x-narrow: 1.5rem;
+  --content-y: 2rem;
+  --content-max: 708px;
+  --source-x: 6rem;
+  --h1: 1.875rem; --h2: 1.5rem; --h3: 1.25rem;
+  --h-weight: 700;
+  --h1-top: 1.6rem; --h2-top: 1.2rem; --h3-top: .9rem;
+  --row-y: .32rem; --row-x: .5rem;
+  --tab-y: .5rem; --strip-h: 44px;
+  --pad: .5rem;
+  --r: 6px; --r-lg: 10px;
+  --label-font: var(--sans);
+  --label-size: .75rem;
+  --label-weight: 500;
+  --label-case: none;
+  --label-tracking: 0;
+  --crumb-font: var(--sans);
+  --search-bg: transparent;
+  --search-border: transparent;
+  --link: var(--accent);
+  --quote-border: var(--faint);
+  --quote-bg: transparent;
+}
+
 * { box-sizing: border-box; }
 /* An author display: rule (e.g. display:flex) silently overrides the UA's
    [hidden] -> display:none. Make [hidden] always win, whatever the display. */
@@ -756,7 +850,8 @@ body.mdbar-on .cm-scroller { padding-bottom: 3.4rem; }
      Notion themes' gutter is 96px+, so there the block aligns with the
      written column. Derived from --gutter, so it lives here, not on :root. */
   --block-inset: 0px; }
-:root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor { --block-inset: var(--gutter); }
+:root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor,
+:root[data-theme="solarized-light"] .cm-editor { --block-inset: var(--gutter); }
 .cm-rich .cm-content { padding: var(--content-y) 0 40vh; }
 .cm-rich .cm-line { padding: var(--line-y) var(--gutter); }
 .cm-rich .cm-h { font-weight: var(--h-weight); color: var(--heading); line-height: 1.3; }
@@ -1812,7 +1907,8 @@ kbd, .pi-keys { font-family: var(--mono); font-size: .68rem; line-height: 1.5;
   .cm-editor { --gutter: var(--content-x-narrow); }
   /* …and no room to inset a code block at all: its tint runs edge to edge
      and its padding alone keeps the code under the prose */
-  .cm-editor, :root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor { --block-inset: 0px; }
+  .cm-editor, :root[data-theme="dark"] .cm-editor, :root[data-theme="light"] .cm-editor,
+  :root[data-theme="solarized-light"] .cm-editor { --block-inset: 0px; }
 
   /* The tabs are the top of the screen on a phone too. The topbar shrinks to
      its ☰, fixed in the corner the first strip leaves free for it, the same

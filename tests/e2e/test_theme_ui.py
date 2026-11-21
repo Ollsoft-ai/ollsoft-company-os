@@ -18,10 +18,11 @@ def api(user):
 
 @pytest.fixture(autouse=True)
 def _reset():
-    api("alice").post("/admin/settings", json={"unset": [KEY, "ui.theme.custom"]})
-    api("bob").post("/api/settings", json={"unset": [KEY, "ui.theme.custom"]})
+    every = [KEY, "ui.theme.custom", "ui.theme.light", "ui.theme.dark"]
+    api("alice").post("/admin/settings", json={"unset": every})
+    api("bob").post("/api/settings", json={"unset": every})
     yield
-    api("bob").post("/api/settings", json={"unset": [KEY, "ui.theme.custom"]})
+    api("bob").post("/api/settings", json={"unset": every})
 
 
 def bg(page):
@@ -167,4 +168,27 @@ def test_company_default_theme_applies_to_everyone(browser):
         assert ["light", "Light"] in labels and ["deep-blue", "Deep blue"] in labels
     finally:
         api("alice").post("/admin/settings", json={"unset": [KEY]})
+        ctx.close()
+
+
+def test_system_follows_the_device_live(browser):
+    """System wears the light choice in light mode and the dark one in dark,
+    and follows the device without a reload."""
+    b = api("bob")
+    r = b.post("/api/settings", json={"set": {KEY: "system", "ui.theme.light": "solarized-light",
+                                              "ui.theme.dark": "dark"}})
+    assert r.status_code == 200, r.text
+    ctx = browser.new_context(color_scheme="light")
+    try:
+        page = login(ctx, "bob")
+        page.wait_for_function("() => document.documentElement.dataset.theme === 'solarized-light'", timeout=15000)
+        assert bg(page) == "rgb(253, 246, 227)", bg(page)                  # Solarized base3
+        assert token(page, "--ink").lower() == "#586e75"
+        page.emulate_media(color_scheme="dark")
+        page.wait_for_function("() => document.documentElement.dataset.theme === 'dark'", timeout=10000)
+        page.evaluate("() => window.__kbsettings.set('ui.theme.dark', 'deep-blue')")
+        page.wait_for_function("() => document.documentElement.dataset.theme === 'deep-blue'", timeout=10000)
+        page.evaluate("() => window.__kbsettings.set('ui.theme', 'light')")      # a fixed theme ignores the device
+        page.wait_for_function("() => document.documentElement.dataset.theme === 'light'", timeout=10000)
+    finally:
         ctx.close()
